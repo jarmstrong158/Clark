@@ -1,0 +1,1 @@
+"""Standard task type definitions."""
