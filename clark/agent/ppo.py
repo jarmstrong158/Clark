@@ -33,7 +33,7 @@ if TYPE_CHECKING:
 # ── Hyperparameter defaults ───────────────────────────────────────────────────
 
 PPO_DEFAULTS: dict = {
-    "lr": 3e-4,
+    "lr": 5e-5,
     "gamma": 0.99,
     "gae_lambda": 0.95,
     "clip_epsilon": 0.2,

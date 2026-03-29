@@ -31,7 +31,7 @@ def pretrain(
     output_path: str = "clark/data/checkpoints/clark_foundation.pt",
     log_dir: str = "clark/data/logs/pretrain",
     years_per_config: int = 5,
-    save_interval: int = 100,
+    save_interval: int = 50,
     log_interval: int = 10,
     device: str = "cpu",
 ) -> None:
