@@ -78,6 +78,12 @@ def pretrain(
     print(f"  Output: {output_path}")
     print(f"  Logs:   {log_dir}")
     print()
+    print(
+        f"  {'Grade':<6} {'Episode':<14} {'Stage':<7} {'Config':<20} "
+        f"{'Size':<10} {'R/W':>8} {'Win':>6} {'OT':>6} {'Ord✓':>6} "
+        f"{'P-loss':>8} {'V-loss':>8} {'Entr':>6} {'Clip':>6} {'Time':>7}"
+    )
+    print("  " + "-" * 130)
 
     configs_seen: int = 0
     years_on_current_config: int = 0
@@ -85,7 +91,19 @@ def pretrain(
     current_stage: int = 1
 
     start_time = time.time()
-    episode_rewards: list[float] = []
+
+    # Per-episode tracking (raw, for window math)
+    episode_rewards: list[float] = []           # raw reward
+    episode_reward_per_worker: list[float] = [] # reward / num_workers
+    episode_grades: list[str] = []
+    episode_ot_flags: list[bool] = []
+    episode_ord_pct: list[float] = []           # orders_completed / total_orders
+
+    # Per-window loss accumulation (reset every log_interval)
+    loss_accum: dict[str, float] = {
+        "policy_loss": 0.0, "value_loss": 0.0,
+        "entropy": 0.0, "clip_fraction": 0.0, "n": 0,
+    }
 
     for ep in range(1, n_episodes + 1):
         # Rotate to a new config every `years_per_config` years
@@ -134,19 +152,45 @@ def pretrain(
             # Update on new day or end of year — mirrors Jack's daily update cadence
             if info.get("new_day") or done:
                 if len(agent.buffer) > 0:
-                    agent.update()
+                    metrics = agent.update()
+                    loss_accum["policy_loss"] += metrics["policy_loss"]
+                    loss_accum["value_loss"]  += metrics["value_loss"]
+                    loss_accum["entropy"]     += metrics["entropy"]
+                    loss_accum["clip_fraction"] += metrics["clip_fraction"]
+                    loss_accum["n"] += 1
                 # Snapshot hidden for next day's rollout
                 agent.buffer.set_entry_hidden(agent.hidden)
 
+        # ── Episode stats ──────────────────────────────────────────────────────
         episode_rewards.append(episode_reward)
+        episode_reward_per_worker.append(episode_reward / max(1, current_config.num_workers))
 
-        # Log last day's summary for this episode (lightweight in pretrain mode)
+        # Pull grade + completion stats from last day's summary
+        last_grade = "?"
+        last_ord_pct = 0.0
+        had_ot = False
         if env.daily_summaries:
             last_summary = env.daily_summaries[-1]
-            logger.log_episode(last_summary, ep, facility_config=current_config,
-                               write=(ep % log_interval == 0))
+            footer = last_summary.get("footer", {})
+            last_grade = footer.get("grade", "?")
+            total_orders = last_summary.get("header", {}).get("total_orders", 1) or 1
+            orders_remaining = footer.get("orders_remaining", 0)
+            last_ord_pct = max(0.0, (total_orders - orders_remaining) / total_orders)
+            had_ot = footer.get("ot_hours", 0.0) > 0.0
 
-        # Write year snapshot at the end of each year
+        episode_grades.append(last_grade)
+        episode_ot_flags.append(had_ot)
+        episode_ord_pct.append(last_ord_pct)
+
+        # Log last day's summary (lightweight in pretrain mode)
+        if env.daily_summaries:
+            logger.log_episode(
+                env.daily_summaries[-1], ep,
+                facility_config=current_config,
+                write=(ep % log_interval == 0),
+            )
+
+        # Write year snapshot at checkpoint intervals
         if ep % save_interval == 0:
             year_summary = env._get_year_summary()
             logger.write_year_snapshot(
@@ -155,19 +199,63 @@ def pretrain(
                 facility_config=current_config,
             )
 
+        # ── Progress line ──────────────────────────────────────────────────────
         if ep % log_interval == 0:
-            recent = episode_rewards[-log_interval:]
-            avg_reward = sum(recent) / len(recent)
+            w = log_interval  # window size
+
+            recent_rw   = episode_reward_per_worker[-w:]
+            prev_rw     = episode_reward_per_worker[-2*w:-w]
+            avg_rw      = sum(recent_rw) / len(recent_rw)
+
+            # Trend arrow: compare this window to the previous one
+            if prev_rw:
+                prev_avg = sum(prev_rw) / len(prev_rw)
+                delta_pct = (avg_rw - prev_avg) / (abs(prev_avg) + 1e-8) * 100
+                if delta_pct > 2.0:
+                    trend = "↑"
+                elif delta_pct < -2.0:
+                    trend = "↓"
+                else:
+                    trend = "→"
+            else:
+                trend = " "
+
+            recent_grades = episode_grades[-w:]
+            win_rate = sum(1 for g in recent_grades if g in ("A", "B")) / max(1, len(recent_grades))
+
+            ot_rate  = sum(episode_ot_flags[-w:]) / w
+            ord_pct  = sum(episode_ord_pct[-w:]) / w
+
+            # Loss averages over the window (reset for next window)
+            n_upd = max(1, loss_accum["n"])
+            pl   = loss_accum["policy_loss"]   / n_upd
+            vl   = loss_accum["value_loss"]    / n_upd
+            ent  = loss_accum["entropy"]       / n_upd
+            clip = loss_accum["clip_fraction"] / n_upd
+            loss_accum = {"policy_loss": 0.0, "value_loss": 0.0,
+                          "entropy": 0.0, "clip_fraction": 0.0, "n": 0}
+
             elapsed = time.time() - start_time
             n_workers = current_config.num_workers
-            n_tasks = current_config.num_tasks
+            n_tasks   = current_config.num_tasks
+
+            # Grade badge — last episode's grade
+            grade_badge = f"[{last_grade}]"
+
+            cfg_str = f"{configs_seen:4d}/{total_configs} (yr {years_on_current_config}/{years_per_config})"
+            size_str = f"N={n_workers:2d} M={n_tasks:2d}"
+
             print(
-                f"  Ep {ep:6d}/{n_episodes} | "
-                f"Stage {current_stage} | "
-                f"Cfg {configs_seen:5d}/{total_configs} "
-                f"(yr {years_on_current_config}/{years_per_config}) | "
-                f"N={n_workers:2d} M={n_tasks:2d} | "
-                f"AvgReward: {avg_reward:8.1f} | "
+                f"  {grade_badge:<6} "
+                f"Ep {ep:6d}/{n_episodes} | "
+                f"Stg {current_stage} | "
+                f"Cfg {cfg_str:<20} | "
+                f"{size_str:<10} | "
+                f"R/W {avg_rw:7.1f}{trend} | "
+                f"Win {win_rate:4.0%} | "
+                f"OT {ot_rate:4.0%} | "
+                f"Ord✓ {ord_pct:4.0%} | "
+                f"P:{pl:.3f} V:{vl:.3f} H:{ent:.3f} Clip:{clip:.0%} | "
                 f"{elapsed:6.0f}s"
             )
 

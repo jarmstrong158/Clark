@@ -247,7 +247,13 @@ class ClarkAgent:
         chunk_size = self.hparams["tbptt_chunk_size"]
         epochs = self.hparams["epochs_per_update"]
 
-        metrics = {"policy_loss": 0.0, "value_loss": 0.0, "entropy": 0.0, "n_updates": 0}
+        metrics = {
+            "policy_loss": 0.0,
+            "value_loss": 0.0,
+            "entropy": 0.0,
+            "clip_fraction": 0.0,
+            "n_updates": 0,
+        }
 
         for _ in range(epochs):
             log_probs, values, entropies = self._evaluate_sequence(
@@ -263,6 +269,10 @@ class ClarkAgent:
             surr1 = ratio * advantages_t
             surr2 = torch.clamp(ratio, 1.0 - clip_eps, 1.0 + clip_eps) * advantages_t
             policy_loss = -torch.min(surr1, surr2).mean()
+
+            # Fraction of steps where the ratio hit the clip boundary.
+            # Healthy range ≈ 5–20%. Below 5% = updates too timid; above 20% = steps too large.
+            clip_fraction = ((ratio - 1.0).abs() > clip_eps).float().mean().item()
 
             # Normalize returns to keep value_loss scale stable regardless of reward scale
             ret_mean = returns_t.mean()
@@ -286,10 +296,11 @@ class ClarkAgent:
             metrics["policy_loss"] += policy_loss.item()
             metrics["value_loss"] += value_loss.item()
             metrics["entropy"] += -entropy_loss.item()
+            metrics["clip_fraction"] += clip_fraction
             metrics["n_updates"] += 1
 
         n = max(1, metrics["n_updates"])
-        for k in ("policy_loss", "value_loss", "entropy"):
+        for k in ("policy_loss", "value_loss", "entropy", "clip_fraction"):
             metrics[k] /= n
 
         self.buffer.clear()
