@@ -22,7 +22,7 @@ from clark.agent.actions import get_action_mask
 from clark.agent.ppo import ClarkAgent
 from clark.agent.state import StateBuilder
 from clark.env.year_env import YearEnv
-from clark.training.synthetic_gen import generate_random_facility
+from clark.training.synthetic_gen import generate_random_facility, CURRICULUM_STAGES
 from clark.sim_logging.episode_logger import EpisodeLogger
 
 
@@ -30,6 +30,7 @@ def pretrain(
     n_episodes: int = 10000,
     output_path: str = "clark/data/checkpoints/clark_foundation.pt",
     log_dir: str = "clark/data/logs/pretrain",
+    years_per_config: int = 5,
     save_interval: int = 100,
     log_interval: int = 10,
     device: str = "cpu",
@@ -38,14 +39,28 @@ def pretrain(
     Pre-train the Clark foundation model on randomized facility configs.
 
     Args:
-        n_episodes:    Total number of year-episodes to train.
-        output_path:   Where to save the foundation checkpoint.
-        save_interval: Save checkpoint every N episodes.
-        log_interval:  Print progress every N episodes.
-        device:        Torch device ("cpu" or "cuda"). Model stays on CPU by
-                       default since env ops are CPU-bound anyway.
+        n_episodes:      Total number of year-episodes to train.
+        output_path:     Where to save the foundation checkpoint.
+        log_dir:         Directory for training logs.
+        years_per_config: Train this many years on each facility config before
+                         sampling a new one.
+        save_interval:   Save checkpoint every N episodes.
+        log_interval:    Print progress every N episodes.
+        device:          Torch device ("cpu" or "cuda"). Model stays on CPU by
+                         default since env ops are CPU-bound anyway.
     """
     os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+
+    total_configs = max(1, n_episodes // years_per_config)
+    stage1_end = max(1, int(total_configs * 0.15))   # first 15%
+    stage2_end = max(1, int(total_configs * 0.45))   # first 45%
+
+    def _get_stage(configs_seen: int) -> int:
+        if configs_seen < stage1_end:
+            return 1
+        if configs_seen < stage2_end:
+            return 2
+        return 3
 
     # One foundation agent, no config dependency in the model weights.
     agent = ClarkAgent()
@@ -53,18 +68,37 @@ def pretrain(
     # Lightweight logger — pretrain mode strips step data to control log size
     logger = EpisodeLogger(log_dir=log_dir, mode="pretrain")
 
-    print(f"Pre-training Clark foundation model for {n_episodes} episodes.")
-    print(f"Output:  {output_path}")
-    print(f"Logs:    {log_dir}")
+    print(f"Pre-training Clark foundation model")
+    print(f"  Episodes (years): {n_episodes}")
+    print(f"  Years per config: {years_per_config}")
+    print(f"  Total configs:    {total_configs}")
+    print(f"  Stage 1 ends at config: {stage1_end} (simple: 2-10 workers, 3-5 tasks)")
+    print(f"  Stage 2 ends at config: {stage2_end} (intermediate: 5-25 workers, 3-10 tasks)")
+    print(f"  Stage 3 starts:         configs {stage2_end+1}+ (full complexity)")
+    print(f"  Output: {output_path}")
+    print(f"  Logs:   {log_dir}")
     print()
+
+    configs_seen: int = 0
+    years_on_current_config: int = 0
+    current_config = None
+    current_stage: int = 1
 
     start_time = time.time()
     episode_rewards: list[float] = []
 
     for ep in range(1, n_episodes + 1):
-        config = generate_random_facility()
-        env = YearEnv(config)
-        builder = StateBuilder(config)
+        # Rotate to a new config every `years_per_config` years
+        if years_on_current_config == 0 or years_on_current_config >= years_per_config:
+            current_stage = _get_stage(configs_seen)
+            current_config = generate_random_facility(stage=current_stage)
+            configs_seen += 1
+            years_on_current_config = 0
+
+        years_on_current_config += 1
+
+        env = YearEnv(current_config)
+        builder = StateBuilder(current_config)
 
         env.reset()
         agent.reset_hidden()
@@ -85,7 +119,7 @@ def pretrain(
             # Build action list: (worker_id, task_idx, hustle_bool)
             actions = [
                 (i, task_actions[i], bool(hustle_actions[i]))
-                for i in range(config.num_workers)
+                for i in range(current_config.num_workers)
             ]
 
             _, reward, done, info = env.step(actions)
@@ -109,7 +143,7 @@ def pretrain(
         # Log last day's summary for this episode (lightweight in pretrain mode)
         if env.daily_summaries:
             last_summary = env.daily_summaries[-1]
-            logger.log_episode(last_summary, ep, facility_config=config,
+            logger.log_episode(last_summary, ep, facility_config=current_config,
                                write=(ep % log_interval == 0))
 
         # Write year snapshot at the end of each year
@@ -118,25 +152,27 @@ def pretrain(
             logger.write_year_snapshot(
                 n_days=env.total_work_days,
                 year_summary=year_summary,
-                facility_config=config,
+                facility_config=current_config,
             )
 
         if ep % log_interval == 0:
             recent = episode_rewards[-log_interval:]
             avg_reward = sum(recent) / len(recent)
             elapsed = time.time() - start_time
-            n_workers = config.num_workers
-            n_tasks = config.num_tasks
+            n_workers = current_config.num_workers
+            n_tasks = current_config.num_tasks
             print(
                 f"  Ep {ep:6d}/{n_episodes} | "
-                f"AvgReward: {avg_reward:8.1f} | "
+                f"Stage {current_stage} | "
+                f"Cfg {configs_seen:5d}/{total_configs} "
+                f"(yr {years_on_current_config}/{years_per_config}) | "
                 f"N={n_workers:2d} M={n_tasks:2d} | "
-                f"Steps: {steps:4d} | "
+                f"AvgReward: {avg_reward:8.1f} | "
                 f"{elapsed:6.0f}s"
             )
 
         if ep % save_interval == 0:
-            agent.save(output_path, ep, config)
+            agent.save(output_path, ep, current_config)
             print(f"  [Checkpoint saved → {output_path}]")
 
     # Final save
@@ -151,6 +187,8 @@ def main():
     parser.add_argument("--episodes", type=int, default=10000)
     parser.add_argument("--output", type=str,
                         default="clark/data/checkpoints/clark_foundation.pt")
+    parser.add_argument("--years-per-config", type=int, default=5,
+                        help="Years to train on each facility config before sampling a new one.")
     parser.add_argument("--save-interval", type=int, default=100)
     parser.add_argument("--log-interval", type=int, default=10)
     parser.add_argument("--log-dir", type=str, default="clark/data/logs/pretrain")
@@ -161,6 +199,7 @@ def main():
         n_episodes=args.episodes,
         output_path=args.output,
         log_dir=args.log_dir,
+        years_per_config=args.years_per_config,
         save_interval=args.save_interval,
         log_interval=args.log_interval,
         device=args.device,

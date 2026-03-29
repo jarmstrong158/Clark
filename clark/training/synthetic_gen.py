@@ -8,6 +8,7 @@ so the foundation model generalizes across real-world facility deployments.
 from __future__ import annotations
 
 import random
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -25,6 +26,57 @@ from clark.config.schema import (
 )
 from clark.config.task_vocab import STANDARD_VOCAB, CORE_TASK_IDS
 from clark.config.bounds import BOUNDS
+
+
+# ── Curriculum Learning ────────────────────────────────────────────────────────
+
+@dataclass
+class CurriculumStage:
+    stage_num: int
+    min_workers: int
+    max_workers: int
+    max_tasks: int
+    carryover_prob: float
+    peak_staffing_prob: float
+    max_complexity_tiers: int
+    saturday_prob: float
+    # Operational choices — intentionally NOT here.
+    # Picker strategy, breaks, carrier deadline, restock availability, and
+    # late order exceptions are always sampled at full probability regardless
+    # of stage. The model must learn all operational strategies from day one.
+
+
+STAGE_1 = CurriculumStage(
+    stage_num=1,
+    min_workers=2, max_workers=10,
+    max_tasks=5,
+    carryover_prob=0.0,
+    peak_staffing_prob=0.0,
+    max_complexity_tiers=1,
+    saturday_prob=0.0,
+)
+
+STAGE_2 = CurriculumStage(
+    stage_num=2,
+    min_workers=5, max_workers=25,
+    max_tasks=10,
+    carryover_prob=0.30,
+    peak_staffing_prob=0.30,
+    max_complexity_tiers=2,
+    saturday_prob=0.15,
+)
+
+STAGE_3 = CurriculumStage(
+    stage_num=3,
+    min_workers=5, max_workers=50,
+    max_tasks=15,
+    carryover_prob=0.40,
+    peak_staffing_prob=0.50,
+    max_complexity_tiers=3,
+    saturday_prob=0.25,
+)
+
+CURRICULUM_STAGES: dict[int, CurriculumStage] = {1: STAGE_1, 2: STAGE_2, 3: STAGE_3}
 
 
 # ── Constants ──────────────────────────────────────────────────────────────────
@@ -60,27 +112,33 @@ def _sample_oph() -> float:
     return _clamp(random.gauss(16.0, 2.5), max(lo, 8.0), min(hi, 28.0))
 
 
-def generate_random_facility() -> FacilityConfig:
+def generate_random_facility(stage: int = 3) -> FacilityConfig:
     """
     Generate a random but valid FacilityConfig for pre-training.
+
+    Args:
+        stage: Curriculum stage (1, 2, or 3). Defaults to 3 (full complexity)
+               so all existing callers that don't pass a stage continue to work.
 
     Returns a fully valid config — FacilityConfig.validate() will pass with
     no errors (warnings may appear for edge cases like no manager with
     management task).
     """
-    n_workers = random.randint(*BOUNDS["n_workers"])
-    workers = _generate_workers(n_workers)
+    cs = CURRICULUM_STAGES.get(stage, STAGE_3)
 
-    tasks = _generate_tasks()
+    n_workers = random.randint(cs.min_workers, cs.max_workers)
+    workers = _generate_workers(n_workers, cs)
+
+    tasks = _generate_tasks(cs)
     volume = _generate_volume()
-    rules = _generate_rules()
-    complexity = _sample_random_complexity()
+    rules = _generate_rules(cs)
+    complexity = _sample_random_complexity(cs)
 
     # Generate break schedule and peak staffing
     day_start = rules.day_start_hour
     eod = rules.eod_hour
     breaks = _generate_breaks(day_start, eod)
-    peak_staffing = _generate_peak_staffing()
+    peak_staffing = _generate_peak_staffing(cs)
 
     return FacilityConfig(
         name=f"synthetic_{random.randint(1000, 9999)}",
@@ -98,7 +156,7 @@ def generate_random_facility() -> FacilityConfig:
 
 # ── Sub-generators ─────────────────────────────────────────────────────────────
 
-def _generate_workers(n_workers: int) -> list[WorkerConfig]:
+def _generate_workers(n_workers: int, cs: CurriculumStage) -> list[WorkerConfig]:
     """
     Assign roles: exactly 1 manager, 0-2 assistant managers, remaining
     warehouse/lead. Shuffle so manager isn't always worker 0.
@@ -190,7 +248,7 @@ def _sample_task_oph_overrides(exclude: list[str] = []) -> dict[str, float]:
     return {t: round(random.uniform(lo, min(hi, 50.0)), 1) for t in chosen}
 
 
-def _generate_tasks() -> TasksConfig:
+def _generate_tasks(cs: CurriculumStage) -> TasksConfig:
     """
     Always include pick/pack/idle (core). Sample n_tasks-3 additional tasks
     from standard vocab. Always include management to enable business-rule
@@ -198,8 +256,8 @@ def _generate_tasks() -> TasksConfig:
     """
     # n_tasks = how many total tasks (including core 3)
     max_optional = len(_OPTIONAL_TASK_IDS)
-    # At minimum just core tasks; at most 15 or vocab size
-    n_tasks = random.randint(3, min(15, 3 + max_optional))
+    # Stage constrains max total tasks
+    n_tasks = random.randint(3, min(cs.max_tasks, 3 + max_optional))
     n_optional = n_tasks - 3  # number of optional tasks to add
 
     optional_selected = random.sample(_OPTIONAL_TASK_IDS, min(n_optional, max_optional))
@@ -280,7 +338,7 @@ def _generate_volume() -> VolumeConfig:
     return VolumeConfig(seasonal_ranges=seasonal_ranges, weekly_curve=weekly_curve)
 
 
-def _generate_rules() -> BusinessRules:
+def _generate_rules(cs: CurriculumStage) -> BusinessRules:
     """Sample business rules from reasonable priors, using BOUNDS for timing fields."""
     # Sample shift timing coherently (start before end, lunch between them)
     ds_lo, ds_hi = BOUNDS["day_start_hour"]
@@ -313,8 +371,8 @@ def _generate_rules() -> BusinessRules:
     cc_lo, cc_hi = BOUNDS["cycle_count_weekly_hours"]
     ccow_lo, ccow_hi = BOUNDS["cycle_count_max_overdue_weeks"]
 
-    # Order carryover (40% of synthetic facilities have it)
-    order_carryover_enabled = random.random() < 0.4
+    # Order carryover — stage-gated
+    order_carryover_enabled = random.random() < cs.carryover_prob
     order_carryover_max_days = random.randint(1, 5) if order_carryover_enabled else 3
     order_carryover_max_backlog = random.choice([0, 0, 0, random.randint(50, 500)])
 
@@ -324,8 +382,11 @@ def _generate_rules() -> BusinessRules:
         weights=[0.5, 0.3, 0.2]
     )[0]
 
-    # Saturday operations (25% of facilities)
-    work_saturday = random.random() < 0.25
+    # Saturday — stage-gated
+    # NOTE: carrier_pickup, breaks, picker_assignment, restock_availability,
+    # late_order_exception_rate — these are NOT gated. Always sampled at full
+    # probability regardless of stage.
+    work_saturday = random.random() < cs.saturday_prob
     saturday_vol = round(random.uniform(0.2, 0.6), 2) if work_saturday else 0.4
 
     # Late order exceptions (30% of facilities)
@@ -406,9 +467,9 @@ def _generate_breaks(day_start: float, eod: float) -> list:
         ]
 
 
-def _generate_peak_staffing() -> Optional[PeakStaffingConfig]:
-    """Generate peak staffing config — 50% of facilities have it."""
-    if random.random() > 0.5:
+def _generate_peak_staffing(cs: CurriculumStage) -> Optional[PeakStaffingConfig]:
+    """Generate peak staffing config — probability controlled by curriculum stage."""
+    if random.random() > cs.peak_staffing_prob:
         return None
     # Peak months: typically spring and/or summer
     all_months = ["march", "april", "may", "june", "july", "august", "september"]
@@ -425,14 +486,46 @@ def _generate_peak_staffing() -> Optional[PeakStaffingConfig]:
     )
 
 
-def _sample_random_complexity() -> OrderComplexityConfig:
+def _sample_random_complexity(cs: CurriculumStage) -> OrderComplexityConfig:
     """
     Sample a random order complexity config.
-    40% single tier, 40% two tiers, 20% three tiers.
+    Stage constrains maximum number of tiers.
+    Stage 1: always single tier.
+    Stage 2: single or two tiers (50/50).
+    Stage 3: 40% single, 40% two tiers, 20% three tiers.
     """
-    roll = random.random()
     mult_lo, mult_hi = BOUNDS["order_complexity_oph_multiplier"]
 
+    if cs.max_complexity_tiers == 1:
+        return OrderComplexityConfig(tiers=[OrderComplexityTier("standard", 1.0, 1.0)])
+
+    roll = random.random()
+
+    if cs.max_complexity_tiers == 2:
+        # Only single or two tiers
+        if roll < 0.50:
+            return OrderComplexityConfig(tiers=[OrderComplexityTier("standard", 1.0, 1.0)])
+        # else fall through to two-tier logic
+        if random.random() < 0.5:
+            # simple + standard
+            w_simple = round(random.uniform(0.1, 0.5), 2)
+            w_standard = round(1.0 - w_simple, 2)
+            simple_mult = round(random.uniform(1.1, min(mult_hi, 2.0)), 2)
+            return OrderComplexityConfig(tiers=[
+                OrderComplexityTier("simple", w_simple, simple_mult),
+                OrderComplexityTier("standard", w_standard, 1.0),
+            ])
+        else:
+            # standard + complex
+            w_standard = round(random.uniform(0.5, 0.9), 2)
+            w_complex = round(1.0 - w_standard, 2)
+            complex_mult = round(random.uniform(max(mult_lo, 0.3), 0.9), 2)
+            return OrderComplexityConfig(tiers=[
+                OrderComplexityTier("standard", w_standard, 1.0),
+                OrderComplexityTier("complex", w_complex, complex_mult),
+            ])
+
+    # max_complexity_tiers == 3: full distribution
     if roll < 0.40:
         # Single tier: all standard
         return OrderComplexityConfig(tiers=[
