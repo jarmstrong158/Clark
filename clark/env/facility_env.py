@@ -219,9 +219,9 @@ class FacilityEnv:
         """All available workers pick 1-2 carts at day start. Driven by config rules."""
         rules = self.facility_config.rules
         carts_min = rules.morning_pick_carts_min
-        carts_max = rules.morning_pick_carts_max
+        carts_max = max(carts_min, rules.morning_pick_carts_max)
         per_cart_min = rules.morning_pick_per_cart_min
-        per_cart_max = rules.morning_pick_per_cart_max
+        per_cart_max = max(per_cart_min, rules.morning_pick_per_cart_max)
         for w in self.episode.workers:
             if w.is_absent:
                 continue
