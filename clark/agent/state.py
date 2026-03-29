@@ -8,7 +8,7 @@ if TYPE_CHECKING:
     from clark.config.schema import FacilityConfig
     from clark.env.facility_env import FacilityEnv
 
-from clark.env.facility_env import ENV_STATE_SIZE, WORKER_STATE_SCALARS
+from clark.env.facility_env import ENV_STATE_SIZE, WORKER_STATE_SCALARS, TASK_OPH_MULTIPLIERS, PICK_MULTIPLIER_MAIN
 from clark.env.worker import SORENESS_HOUR_THRESHOLD
 from clark.env.episode_generator import DAY_START_HOUR, SEASONS
 
@@ -18,9 +18,9 @@ class StateBuilder:
     Converts a live FacilityEnv into structured token dicts for the transformer.
 
     Output shapes:
-      worker_feats:    (N, 13)
+      worker_feats:    (N, 14)
       task_feats:      (M, 3)
-      env_feats:       (15,)
+      env_feats:       (17,)
       worker_role_ids: (N,) int64
       task_type_ids:   (M,) int64
     """
@@ -57,9 +57,9 @@ class StateBuilder:
 
         Returns:
             {
-                "worker_feats":    np.ndarray (N, 13)  float32
+                "worker_feats":    np.ndarray (N, 14)  float32
                 "task_feats":      np.ndarray (M, 3)   float32
-                "env_feats":       np.ndarray (15,)    float32
+                "env_feats":       np.ndarray (17,)    float32
                 "worker_role_ids": np.ndarray (N,)     int64
                 "task_type_ids":   np.ndarray (M,)     int64
             }
@@ -95,7 +95,7 @@ class StateBuilder:
 
     def _build_worker_feats(self, env: "FacilityEnv") -> np.ndarray:
         """
-        13 scalar features per worker (same semantics as Jack's WORKER_STATE_SCALARS).
+        14 scalar features per worker.
 
         Feature index:
           0  normalized OPH (base_oph / 30.0)
@@ -111,6 +111,7 @@ class StateBuilder:
          10  hustle_today_ratio (hustle_hours_today / hustle_daily_cap)
          11  hustle_weekly_ratio (weekly_hustle_hours / hustle_weekly_threshold)
          12  is_hustle_exhausted (1.0 or 0.0)
+         13  task_oph_normalized — OPH on current task / max_possible_oph, normalized [0,1]
         """
         required = self.config.rules.management_daily_hours_required
         feats = np.zeros((self.N, WORKER_STATE_SCALARS), dtype=np.float32)
@@ -133,6 +134,10 @@ class StateBuilder:
             feats[i, 10] = w.hustle_hours_today / max(0.01, w.hustle_daily_cap)
             feats[i, 11] = w.weekly_hustle_hours / max(0.01, w.hustle_weekly_threshold)
             feats[i, 12] = 1.0 if w.is_hustle_exhausted else 0.0
+            # Feature 13: task_oph_normalized
+            task_oph = env._get_worker_task_oph_by_id(w.worker_id, w.current_task)
+            max_oph = PICK_MULTIPLIER_MAIN * max(1.0, w.base_oph)
+            feats[i, 13] = min(1.0, task_oph / max(1.0, max_oph))
 
         return feats
 
@@ -190,7 +195,7 @@ class StateBuilder:
 
     def _build_env_feats(self, env: "FacilityEnv") -> np.ndarray:
         """
-        15 global environment features (mirrors _get_state() ENV block in FacilityEnv).
+        17 global environment features (mirrors _get_state() ENV block in FacilityEnv).
 
           0   time_of_day_norm        (current_hour - DAY_START) / shift_span
           1   orders_in_queue_norm    orders_in_queue / total_orders
@@ -204,15 +209,18 @@ class StateBuilder:
          12   picker_needs_replacement (1.0 / 0.0)
          13   restock_level           (0-1)
          14   is_ot                   (1.0 / 0.0)
+         15   carrier_urgency         1-(hours_until_pickup/shift_span) if deadline set, else 0.0
+         16   order_complexity_load   weighted avg OPH multiplier for today's order mix
         """
         ep = env.episode
         eod_hour = env._eod_hour
+        day_start = self.config.rules.day_start_hour
         required = self.config.rules.management_daily_hours_required
         total_orders = max(1, ep.total_orders)
 
         feats = np.zeros(ENV_STATE_SIZE, dtype=np.float32)
 
-        feats[0] = (env.current_hour - DAY_START_HOUR) / max(0.01, eod_hour - DAY_START_HOUR)
+        feats[0] = (env.current_hour - day_start) / max(0.01, eod_hour - day_start)
         feats[1] = env.orders_in_queue / total_orders
         feats[2] = env.orders_completed / total_orders
         feats[3] = env.orders_picked_not_audited / total_orders
@@ -236,5 +244,11 @@ class StateBuilder:
         feats[12] = 1.0 if ep.picker_needs_replacement else 0.0
         feats[13] = env.restock_level
         feats[14] = 1.0 if env.is_ot else 0.0
+
+        # Feature 15: carrier_urgency
+        feats[15] = env._compute_carrier_urgency()
+
+        # Feature 16: order_complexity_load
+        feats[16] = env._compute_complexity_load()
 
         return feats

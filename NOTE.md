@@ -47,9 +47,9 @@ Jack's LSTM handles temporal memory well but requires a fixed-size state vector.
 
 ```
 Input per step:
-  worker_feats: (N, worker_feat_dim)   — 13 scalars per worker
+  worker_feats: (N, worker_feat_dim)   — 14 scalars per worker
   task_feats:   (M, task_feat_dim)     — demand signal + task type embedding
-  env_feats:    (env_size,)            — time, orders, restock, season, etc.
+  env_feats:    (env_size,)            — time, orders, restock, season, carrier urgency, etc.
 
 Encoder:
   W = WorkerLinear(worker_feats) + RoleEmbed(roles)     → (N, 256)
@@ -115,6 +115,7 @@ List of worker entries:
 - `max_ot_hours`: personal OT cap (null = no limit)
 - `call_off_probability`: daily absence rate
 - `individual_debuff`: optional config-driven debuff
+- `task_oph_overrides`: optional per-task OPH rates (e.g. `{pick: 42.5, restock: 8.0}`). Overrides `base_oph × multiplier` for listed tasks.
 
 ### `tasks`
 - `enabled`: list of standard task IDs to activate
@@ -134,6 +135,37 @@ List of worker entries:
 - `high_volume_day_orders`: order count defining a "high volume" day
 - `target_daily_orders`: optional hard target (null = ship everything)
 - `order_incomplete_threshold`: remaining orders below this = no penalty
+- **Shift timing** (new):
+  - `day_start_hour`: shift start in 24h decimal (default 9.0)
+  - `eod_hour`: regular end of day in 24h decimal (default 17.5)
+  - `order_cutoff_hour`: last hour orders are accepted (default 17.0)
+  - `carrier_pickup_hour`: hard carrier deadline (null = no deadline)
+- **Breaks** (new):
+  - `lunch_hour`: lunch start in 24h decimal (default 13.0)
+  - `lunch_duration`: lunch duration in hours — 0.0 disables (default 0.5)
+- **Morning pick round** (new):
+  - `morning_pick_enabled`: whether workers do an initial pick round (default true)
+  - `morning_pick_carts_min/max`: cart count range per worker
+  - `morning_pick_per_cart_min/max`: orders-per-cart range
+- **Equipment** (new):
+  - `pack_stations`: max simultaneous packers (null = unlimited)
+  - `carts_available`: total carts in facility (null = unlimited)
+
+### `order_complexity`
+Optional. Controls per-day order difficulty mix. Default = all orders equal.
+```yaml
+order_complexity:
+  tiers:
+    - name: simple
+      weight: 0.30      # fraction of orders (all weights must sum to 1.0)
+      oph_multiplier: 1.4  # faster than base OPH
+    - name: standard
+      weight: 0.55
+      oph_multiplier: 1.0
+    - name: complex
+      weight: 0.15
+      oph_multiplier: 0.55  # slower than base OPH
+```
 
 ### `rewards`
 Optional overrides for reward signal weights. Unset = Clark defaults.
@@ -191,6 +223,8 @@ clark dashboard                   — launch local dashboard server
 5. **Padding**: Variable-length batches padded to `max_N` / `max_M`; `key_padding_mask` prevents attention to pad tokens.
 6. **Checkpoint versioning**: Every checkpoint includes `arch_version = "clark-v1"` and `facility_config` metadata. Stale checkpoints are rejected at load time.
 7. **FP epsilon**: OT hard stop uses `>= OT_HARD_STOP - 1e-9` to guard against float accumulation (learned from Jack's bug).
+8. **State dimensions**: `ENV_FEAT_DIM = 17` (was 15 — added `carrier_urgency` at index 15, `order_complexity_load` at index 16). `WORKER_FEAT_DIM = 14` (was 13 — added `task_oph_normalized` at index 13).
+9. **Clark limits**: `clark/config/clark_limits.yaml` defines the absolute bounds for all configurable parameters. The synthetic pre-training generator samples within these bounds — everything outside this envelope is out-of-distribution. Expand bounds before retraining when adding new facilities with unusual parameters.
 
 ---
 

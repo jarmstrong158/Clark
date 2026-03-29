@@ -27,18 +27,15 @@ from clark.env.episode_generator import (
 from clark.env.worker import WorkerState
 
 if TYPE_CHECKING:
-    from clark.config.schema import FacilityConfig
+    from clark.config.schema import FacilityConfig, WorkerConfig
 
 
 # ─── Constants (not user-configurable) ────────────────────────────────────────
 
-LUNCH_HOUR = 13.0
-LUNCH_DURATION = 0.5
-
-# Task OPH multipliers
+# Task OPH multipliers (fallback when no task_oph_overrides set)
 PICK_MULTIPLIER_MAIN = 2.5
 PICK_MULTIPLIER_SUPPLEMENT = 2.25
-TASK_OPH_MULTIPLIER = {
+TASK_OPH_MULTIPLIERS = {
     "pack": 1.0,
     "restock": 1.0,
     "side_project": 1.0,
@@ -46,6 +43,8 @@ TASK_OPH_MULTIPLIER = {
     "idle": 0.0,
     "cycle_count": 0.0,
 }
+# Keep old name as alias for any external code still referencing it
+TASK_OPH_MULTIPLIER = TASK_OPH_MULTIPLIERS
 
 # Restock level system
 RESTOCK_STARTING_LEVEL = 1.0
@@ -54,8 +53,8 @@ RESTOCK_PICK_PENALTY_THRESHOLD = 0.2
 RESTOCK_PICK_PENALTY_MULTIPLIER = 0.05
 
 # State vector sizing
-WORKER_STATE_SCALARS = 13
-ENV_STATE_SIZE = 15  # see _get_state() for breakdown
+WORKER_STATE_SCALARS = 14   # expanded from 13 (added task_oph_normalized at index 13)
+ENV_STATE_SIZE = 17          # expanded from 15 (added carrier_urgency, order_complexity_load)
 
 # Tasks that cannot be hustled
 HUSTLE_BLOCKED_TASKS = {"management", "idle", "cycle_count"}
@@ -79,6 +78,9 @@ class FacilityEnv:
         # OT config from rules
         self._eod_hour: float = facility_config.rules.ot_hard_stop_hour - facility_config.rules.ot_wall_clock_max
         self._ot_hard_stop: float = facility_config.rules.ot_hard_stop_hour
+
+        # Order complexity mix for the current day: {tier_name: count}
+        self.today_complexity_mix: dict[str, int] = {}
 
         # Order tracking
         self.orders_in_queue: int = 0
@@ -153,7 +155,7 @@ class FacilityEnv:
             month=force_month,
             cooldown_tracker=self.cooldown_tracker,
         )
-        self.current_hour = DAY_START_HOUR
+        self.current_hour = self.facility_config.rules.day_start_hour
         self.orders_in_queue = 0
         self.orders_completed = 0
         self.orders_picked_not_audited = 0
@@ -177,11 +179,15 @@ class FacilityEnv:
 
         self.step_log = []
 
+        # Sample today's order complexity mix
+        self.today_complexity_mix = self._sample_order_complexity(self.episode.total_orders)
+
         # Process initial order arrivals
         self._process_arrivals()
 
         # Morning pick round: everyone grabs 1-2 carts before assignments
-        self._morning_pick_round()
+        if self.facility_config.rules.morning_pick_enabled:
+            self._morning_pick_round()
 
         # Default assignments
         mgmt_eligible = self._mgmt_eligible_ids
@@ -198,13 +204,18 @@ class FacilityEnv:
         return self._get_state()
 
     def _morning_pick_round(self):
-        """All available workers pick 1-2 carts at day start. Fixed mechanic."""
+        """All available workers pick 1-2 carts at day start. Driven by config rules."""
+        rules = self.facility_config.rules
+        carts_min = rules.morning_pick_carts_min
+        carts_max = rules.morning_pick_carts_max
+        per_cart_min = rules.morning_pick_per_cart_min
+        per_cart_max = rules.morning_pick_per_cart_max
         for w in self.episode.workers:
             if w.is_absent:
                 continue
-            num_carts = random.randint(MORNING_PICK_CARTS_MIN, MORNING_PICK_CARTS_MAX)
+            num_carts = random.randint(carts_min, carts_max)
             cart_total = sum(
-                random.randint(PER_CART_MIN, PER_CART_MAX)
+                random.randint(per_cart_min, per_cart_max)
                 for _ in range(num_carts)
             )
             picked = min(cart_total, self.orders_in_queue)
@@ -246,13 +257,18 @@ class FacilityEnv:
                     )
                     worker.hustle_mode = can_hustle
 
-        # Check lunch (1 PM, 30 min)
-        is_lunch = abs(self.current_hour - LUNCH_HOUR) < 0.01
+        # Check lunch — driven by config (duration > 0 enables it)
+        rules = self.facility_config.rules
+        is_lunch = (
+            rules.lunch_duration > 0
+            and abs(self.current_hour - rules.lunch_hour) < 0.01
+        )
         if is_lunch:
-            self._process_arrivals()           # 13.0
-            self.current_hour += STEP_DURATION
-            self._process_arrivals()           # 13.25
-            self.current_hour += STEP_DURATION  # now at 13.5
+            # Advance through lunch_duration worth of steps
+            steps_for_lunch = max(1, round(rules.lunch_duration / STEP_DURATION))
+            for _ in range(steps_for_lunch):
+                self._process_arrivals()
+                self.current_hour += STEP_DURATION
             for w in self.episode.workers:
                 w.current_task = "idle"
         else:
@@ -508,10 +524,11 @@ class FacilityEnv:
     def _process_arrivals(self):
         if self.episode is None:
             return
+        cutoff = self.facility_config.rules.order_cutoff_hour
         current = round(self.current_hour, 2)
         to_remove = []
         for key, count in self.episode.arrival_schedule.items():
-            if key >= ORDER_CUTOFF_HOUR:
+            if key >= cutoff:
                 to_remove.append(key)
             elif key <= current + 0.01:
                 self.orders_in_queue += count
@@ -628,7 +645,7 @@ class FacilityEnv:
             state[idx + task_idx] = 1.0
             idx += num_tasks
 
-            # 13 scalar features (same as Jack)
+            # 14 scalar features (13 original + task_oph_normalized at index 13)
             state[idx] = w.effective_oph() / 25.0
             idx += 1
             state[idx] = w.hours_worked / 10.0
@@ -660,11 +677,17 @@ class FacilityEnv:
             # Exhaustion flag
             state[idx] = 1.0 if w.is_hustle_exhausted else 0.0
             idx += 1
+            # Feature 13: task_oph_normalized — OPH on current task / max_possible_oph
+            task_oph = self._get_worker_task_oph_by_id(w.worker_id, w.current_task)
+            max_oph = TASK_OPH_MULTIPLIERS.get("pick", 1.0) * PICK_MULTIPLIER_MAIN * max(1.0, w.base_oph)
+            state[idx] = min(1.0, task_oph / max(1.0, max_oph))
+            idx += 1
 
         eod_hour = self._eod_hour
+        day_start = self.facility_config.rules.day_start_hour
 
-        # ENV features (15 total)
-        state[idx] = (self.current_hour - DAY_START_HOUR) / max(0.01, eod_hour - DAY_START_HOUR)
+        # ENV features (17 total)
+        state[idx] = (self.current_hour - day_start) / max(0.01, eod_hour - day_start)
         idx += 1
         state[idx] = self.orders_in_queue / max(1, self.episode.total_orders)
         idx += 1
@@ -701,7 +724,106 @@ class FacilityEnv:
         state[idx] = self.restock_level
         idx += 1
 
+        # Feature 15: carrier_urgency
+        state[idx] = self._compute_carrier_urgency()
+        idx += 1
+
+        # Feature 16: order_complexity_load
+        state[idx] = self._compute_complexity_load()
+        idx += 1
+
         return state
+
+    # ── OPH resolution ─────────────────────────────────────────────────────────
+
+    def _get_worker_task_oph(
+        self,
+        worker: WorkerState,
+        worker_config: "WorkerConfig",
+        task_id: str,
+    ) -> float:
+        """
+        Get effective OPH for a worker on a task.
+        Priority: task_oph_overrides[task_id] > base_oph × standard_multiplier
+        """
+        if worker_config.task_oph_overrides and task_id in worker_config.task_oph_overrides:
+            return worker_config.task_oph_overrides[task_id]
+        multiplier = TASK_OPH_MULTIPLIERS.get(task_id, 1.0)
+        return worker.base_oph * multiplier
+
+    def _get_worker_task_oph_by_id(self, worker_id: int, task_id: str) -> float:
+        """Convenience: look up worker config by ID then delegate to _get_worker_task_oph."""
+        worker_cfg = next(
+            (w for w in self.facility_config.workers if w.worker_id == worker_id), None
+        )
+        if worker_cfg is None or self.episode is None:
+            return 1.0
+        worker_state = next(
+            (w for w in self.episode.workers if w.worker_id == worker_id), None
+        )
+        if worker_state is None:
+            return 1.0
+        return self._get_worker_task_oph(worker_state, worker_cfg, task_id)
+
+    # ── Carrier deadline ───────────────────────────────────────────────────────
+
+    @property
+    def hours_until_carrier_pickup(self) -> Optional[float]:
+        if self.facility_config.rules.carrier_pickup_hour is None:
+            return None
+        return max(0.0, self.facility_config.rules.carrier_pickup_hour - self.current_hour)
+
+    # ── Order complexity ───────────────────────────────────────────────────────
+
+    def _sample_order_complexity(self, total_orders: int) -> dict[str, int]:
+        """
+        Sample a complexity mix for today's orders.
+        Returns {tier_name: count} summing to total_orders.
+        """
+        tiers = self.facility_config.order_complexity.tiers
+        if not tiers:
+            return {}
+        counts: dict[str, int] = {}
+        remaining = total_orders
+        for i, tier in enumerate(tiers):
+            if i == len(tiers) - 1:
+                counts[tier.name] = remaining
+            else:
+                n = int(round(tier.weight * total_orders))
+                n = max(0, min(n, remaining))
+                counts[tier.name] = n
+                remaining -= n
+        return counts
+
+    def _compute_complexity_load(self) -> float:
+        """
+        Weighted average OPH multiplier for today's order mix.
+        1.0 = standard, <1.0 = complex-heavy, >1.0 = simple-heavy.
+        """
+        tiers = self.facility_config.order_complexity.tiers
+        if not tiers:
+            return 1.0
+        total = sum(self.today_complexity_mix.get(t.name, 0) for t in tiers)
+        if total == 0:
+            return 1.0
+        weighted = sum(
+            self.today_complexity_mix.get(t.name, 0) * t.oph_multiplier
+            for t in tiers
+        )
+        return weighted / total
+
+    def _compute_carrier_urgency(self) -> float:
+        """
+        Carrier urgency: 0.0 when no carrier deadline, else 1 - (hours_remaining / shift_span).
+        Rises toward 1.0 as the carrier pickup approaches.
+        """
+        pickup = self.facility_config.rules.carrier_pickup_hour
+        if pickup is None:
+            return 0.0
+        day_start = self.facility_config.rules.day_start_hour
+        shift_span = max(0.01, pickup - day_start)
+        elapsed = self.current_hour - day_start
+        return max(0.0, min(1.0, elapsed / shift_span))
 
     # ── Info / logging ─────────────────────────────────────────────────────────
 

@@ -107,5 +107,28 @@ business_rules:
   high_volume_day_orders: 130
   high_volume_percentile: 0.75
   max_call_offs_per_day: 1              # can't afford 2 call-offs on a small team
+  # Shift timing
+  day_start_hour: 8.0
+  eod_hour: 17.0
+  order_cutoff_hour: 16.5
+  carrier_pickup_hour: null
+  # Breaks
+  lunch_hour: 12.0
+  lunch_duration: 0.5
+  # Morning pick round
+  morning_pick_enabled: true
+  morning_pick_carts_min: 1
+  morning_pick_carts_max: 2
+  morning_pick_per_cart_min: 1
+  morning_pick_per_cart_max: 4
+  # Equipment
+  pack_stations: null
+  carts_available: null
+
+order_complexity:
+  tiers:
+    - name: standard
+      weight: 1.0
+      oph_multiplier: 1.0
 
 rewards: {}

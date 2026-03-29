@@ -301,5 +301,34 @@ business_rules:
   order_incomplete_threshold: 0
   max_call_offs_per_day: 3              # larger team can absorb more
   max_call_offs_high_volume: 2
+  # Shift timing
+  day_start_hour: 7.0
+  eod_hour: 16.5
+  order_cutoff_hour: 16.0
+  carrier_pickup_hour: 15.0             # hard carrier deadline at 3 PM
+  # Breaks
+  lunch_hour: 11.5
+  lunch_duration: 0.5
+  # Morning pick round
+  morning_pick_enabled: true
+  morning_pick_carts_min: 2
+  morning_pick_carts_max: 4
+  morning_pick_per_cart_min: 3
+  morning_pick_per_cart_max: 10
+  # Equipment
+  pack_stations: 12
+  carts_available: 40
+
+order_complexity:
+  tiers:
+    - name: simple
+      weight: 0.30
+      oph_multiplier: 1.40
+    - name: standard
+      weight: 0.55
+      oph_multiplier: 1.00
+    - name: complex
+      weight: 0.15
+      oph_multiplier: 0.55
 
 rewards: {}

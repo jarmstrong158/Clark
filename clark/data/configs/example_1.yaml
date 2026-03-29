@@ -1,10 +1,10 @@
-# Volt Warehouse — Clark facility config
-# Jack's exact parameters translated to the Clark config schema.
-# This config should reproduce Jack's behavior when loaded into Clark's environment.
-# Reference: C:\Users\jarms\repos\volt-warehouse\volt_sim\config.py
+# Example Facility 1 — Clark facility config
+# Derived from the original Volt Warehouse parameters.
+# Demonstrates full use of all new operational fields.
+# Reference: formerly volt_warehouse.yaml
 
 facility:
-  name: "Volt Warehouse"
+  name: "Example Facility 1"
   timezone: "America/New_York"
 
 workers:
@@ -26,6 +26,9 @@ workers:
       cooldown_days: 5
       effect: lose_hours
       hours_lost_range: [1.0, 2.0]
+    # Manager picks at ~2.5x base rate when jumping on the floor
+    task_oph_overrides:
+      pick: 42.5
 
   - id: 1
     name: "Evan"
@@ -46,6 +49,8 @@ workers:
       cooldown_days: 5
       effect: lose_hours
       hours_lost_range: [1.0, 2.0]
+    task_oph_overrides:
+      pick: 34.5
 
   - id: 2
     name: "Jonah"
@@ -91,6 +96,8 @@ workers:
         spring: 0.20
         summer: 0.25
         fall: 0.12
+    task_oph_overrides:
+      pick: 45.75  # strong picker
 
   - id: 4
     name: "Dan"
@@ -104,7 +111,8 @@ workers:
     hustle_daily_cap: 8.0
     bad_headspace_effects:
       default: 1.00  # immune to bad headspace
-    # No individual debuff
+    task_oph_overrides:
+      pick: 47.35  # fastest picker
 
   - id: 5
     name: "Guy"
@@ -157,7 +165,7 @@ tasks:
   custom: []
 
 volume:
-  # Volt's real seasonal order ranges — set these to your actual numbers.
+  # Volt's real seasonal order ranges
   seasonal_ranges:
     january:   [60, 100]
     february:  [60, 100]
@@ -195,6 +203,29 @@ business_rules:
   order_incomplete_threshold: 0
   max_call_offs_per_day: 2
   max_call_offs_high_volume: 1
+  # Shift timing
+  day_start_hour: 9.0
+  eod_hour: 17.5
+  order_cutoff_hour: 17.0
+  carrier_pickup_hour: null
+  # Breaks
+  lunch_hour: 13.0
+  lunch_duration: 0.5
+  # Morning pick round
+  morning_pick_enabled: true
+  morning_pick_carts_min: 1
+  morning_pick_carts_max: 2
+  morning_pick_per_cart_min: 1
+  morning_pick_per_cart_max: 6
+  # Equipment
+  pack_stations: null
+  carts_available: null
+
+order_complexity:
+  tiers:
+    - name: standard
+      weight: 1.0
+      oph_multiplier: 1.0
 
 # No reward overrides — use Clark defaults (which match Jack exactly)
 rewards: {}

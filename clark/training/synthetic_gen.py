@@ -17,8 +17,11 @@ from clark.config.schema import (
     VolumeConfig,
     BusinessRules,
     RewardOverrides,
+    OrderComplexityConfig,
+    OrderComplexityTier,
 )
 from clark.config.task_vocab import STANDARD_VOCAB, CORE_TASK_IDS
+from clark.config.bounds import BOUNDS
 
 
 # ── Constants ──────────────────────────────────────────────────────────────────
@@ -49,8 +52,9 @@ def _clamp(val: float, lo: float, hi: float) -> float:
 
 
 def _sample_oph() -> float:
-    """Sample worker OPH from N(16, 2.5), clamped to [8, 28]."""
-    return _clamp(random.gauss(16.0, 2.5), 8.0, 28.0)
+    """Sample worker OPH from N(16, 2.5), clamped within BOUNDS['base_oph']."""
+    lo, hi = BOUNDS["base_oph"]
+    return _clamp(random.gauss(16.0, 2.5), max(lo, 8.0), min(hi, 28.0))
 
 
 def generate_random_facility() -> FacilityConfig:
@@ -61,12 +65,13 @@ def generate_random_facility() -> FacilityConfig:
     no errors (warnings may appear for edge cases like no manager with
     management task).
     """
-    n_workers = random.randint(5, 50)
+    n_workers = random.randint(*BOUNDS["n_workers"])
     workers = _generate_workers(n_workers)
 
     tasks = _generate_tasks()
     volume = _generate_volume()
     rules = _generate_rules()
+    complexity = _sample_random_complexity()
 
     return FacilityConfig(
         name=f"synthetic_{random.randint(1000, 9999)}",
@@ -76,6 +81,7 @@ def generate_random_facility() -> FacilityConfig:
         volume=volume,
         rules=rules,
         reward_overrides=RewardOverrides(),
+        order_complexity=complexity,
     )
 
 
@@ -109,9 +115,17 @@ def _generate_workers(n_workers: int) -> list[WorkerConfig]:
     for i, role in enumerate(roles):
         oph = round(_sample_oph(), 1)
         # Small variation in shift hours per worker
-        shift_h = round(_clamp(shift_hours_base + random.uniform(-0.5, 0.5), 6.0, 12.0), 1)
-        hustle_cap = round(random.uniform(2.0, 9.0), 1)
-        call_off_prob = round(random.uniform(0.01, 0.05), 3)
+        sh_lo, sh_hi = BOUNDS["shift_hours"]
+        shift_h = round(_clamp(shift_hours_base + random.uniform(-0.5, 0.5), max(sh_lo, 6.0), sh_hi), 1)
+        hustle_lo, hustle_hi = BOUNDS["hustle_daily_cap"]
+        hustle_cap = round(random.uniform(max(hustle_lo, 2.0), min(hustle_hi, 9.0)), 1)
+        co_lo, co_hi = BOUNDS["call_off_probability"]
+        call_off_prob = round(random.uniform(max(co_lo, 0.01), min(co_hi, 0.05)), 3)
+
+        # 30% chance of task_oph_overrides for 1-3 tasks
+        task_oph_overrides = None
+        if random.random() < 0.3:
+            task_oph_overrides = _sample_task_oph_overrides()
 
         workers.append(WorkerConfig(
             worker_id=i,
@@ -124,14 +138,25 @@ def _generate_workers(n_workers: int) -> list[WorkerConfig]:
             call_off_probability=call_off_prob,
             max_ot_hours=round(random.uniform(0.5, 2.0), 1),
             hustle_daily_cap=hustle_cap,
+            task_oph_overrides=task_oph_overrides,
         ))
 
     return workers
 
 
 def _sample_shift_hours() -> float:
-    """Sample facility-level shift length from [7.0, 10.0]."""
-    return round(random.uniform(7.0, 10.0), 1)
+    """Sample facility-level shift length from [7.0, 10.0], within BOUNDS."""
+    sh_lo, sh_hi = BOUNDS["shift_hours"]
+    return round(random.uniform(max(sh_lo, 7.0), min(sh_hi, 10.0)), 1)
+
+
+def _sample_task_oph_overrides() -> dict[str, float]:
+    """Sample per-task OPH overrides for 1-3 randomly chosen tasks."""
+    candidate_tasks = ["pick", "pack", "restock", "side_project", "receiving"]
+    n_tasks = random.randint(1, min(3, len(candidate_tasks)))
+    chosen = random.sample(candidate_tasks, n_tasks)
+    lo, hi = BOUNDS["task_oph"]
+    return {t: round(random.uniform(lo, min(hi, 50.0)), 1) for t in chosen}
 
 
 def _generate_tasks() -> TasksConfig:
@@ -225,17 +250,48 @@ def _generate_volume() -> VolumeConfig:
 
 
 def _generate_rules() -> BusinessRules:
-    """Sample business rules from reasonable priors."""
+    """Sample business rules from reasonable priors, using BOUNDS for timing fields."""
+    # Sample shift timing coherently (start before end, lunch between them)
+    ds_lo, ds_hi = BOUNDS["day_start_hour"]
+    eod_lo, eod_hi = BOUNDS["eod_hour"]
+    lunch_lo, lunch_hi = BOUNDS["lunch_hour"]
+    lunch_dur_lo, lunch_dur_hi = BOUNDS["lunch_duration"]
+
+    day_start = round(random.uniform(ds_lo, ds_hi) * 2) / 2  # 30-min increments
+    eod = round(random.uniform(max(eod_lo, day_start + 6), eod_hi) * 2) / 2
+    lunch_h = round(random.uniform(day_start + 2, eod - 2) * 2) / 2
+    lunch_h = max(lunch_lo, min(lunch_hi, lunch_h))
+    lunch_dur = round(random.uniform(lunch_dur_lo, lunch_dur_hi) * 4) / 4  # 15-min increments
+
+    # Carrier pickup: 50% of facilities have one
+    carrier = None
+    if random.random() < 0.5:
+        cpu_lo, cpu_hi = BOUNDS["carrier_pickup_hour"]
+        carrier = round(random.uniform(cpu_lo, min(cpu_hi, eod)) * 2) / 2
+
+    # Morning pick: 60% of facilities use it
+    morning_pick = random.random() < 0.6
+
+    # OT
+    otw_lo, otw_hi = BOUNDS["ot_wall_clock_max"]
+    ot_stop_lo, ot_stop_hi = BOUNDS["ot_hard_stop_hour"]
+    ot_wall = round(random.uniform(max(otw_lo, 0.5), min(otw_hi, 2.0)), 1)
+    ot_stop = round(random.uniform(max(ot_stop_lo, 17.5), min(ot_stop_hi, 20.0)), 1)
+
+    # Cycle counts
+    cc_lo, cc_hi = BOUNDS["cycle_count_weekly_hours"]
+    ccow_lo, ccow_hi = BOUNDS["cycle_count_max_overdue_weeks"]
+
     return BusinessRules(
         management_daily_hours_required=round(random.uniform(2.0, 6.0), 1),
         management_min_daily_hours=round(random.uniform(1.0, 2.0), 1),
         management_backlog_week_threshold=round(random.uniform(5.0, 15.0), 1),
         management_backlog_weekly_penalty=round(random.uniform(-75.0, -25.0), 1),
-        ot_wall_clock_max=round(random.uniform(0.5, 2.0), 1),
-        ot_hard_stop_hour=round(random.uniform(17.5, 20.0), 1),
+        ot_wall_clock_max=ot_wall,
+        ot_hard_stop_hour=ot_stop,
         ot_trigger_orders_remaining=random.randint(5, 25),
-        cycle_count_weekly_hours=round(random.uniform(2.0, 5.0), 1),
-        cycle_count_max_overdue_weeks=random.randint(2, 6),
+        cycle_count_weekly_hours=round(random.uniform(max(cc_lo, 2.0), min(cc_hi, 5.0)), 1),
+        cycle_count_max_overdue_weeks=random.randint(max(ccow_lo, 2), min(ccow_hi, 6)),
         min_staffing_floor=random.randint(1, 3),
         high_volume_day_orders=random.randint(200, 800),
         high_volume_percentile=round(random.uniform(0.65, 0.85), 2),
@@ -243,14 +299,79 @@ def _generate_rules() -> BusinessRules:
         order_incomplete_threshold=0,
         max_call_offs_per_day=random.randint(1, 4),
         max_call_offs_high_volume=random.randint(1, 2),
+        # New timing fields
+        day_start_hour=day_start,
+        eod_hour=eod,
+        order_cutoff_hour=round(random.uniform(eod - 2, eod) * 2) / 2,
+        carrier_pickup_hour=carrier,
+        lunch_hour=lunch_h,
+        lunch_duration=lunch_dur,
+        morning_pick_enabled=morning_pick,
+        morning_pick_carts_min=random.randint(0, 2),
+        morning_pick_carts_max=random.randint(1, 4),
+        morning_pick_per_cart_min=random.randint(1, 5),
+        morning_pick_per_cart_max=random.randint(4, 12),
     )
+
+
+def _sample_random_complexity() -> OrderComplexityConfig:
+    """
+    Sample a random order complexity config.
+    40% single tier, 40% two tiers, 20% three tiers.
+    """
+    roll = random.random()
+    mult_lo, mult_hi = BOUNDS["order_complexity_oph_multiplier"]
+
+    if roll < 0.40:
+        # Single tier: all standard
+        return OrderComplexityConfig(tiers=[
+            OrderComplexityTier("standard", 1.0, 1.0)
+        ])
+    elif roll < 0.80:
+        # Two tiers
+        if random.random() < 0.5:
+            # simple + standard
+            w_simple = round(random.uniform(0.1, 0.5), 2)
+            w_standard = round(1.0 - w_simple, 2)
+            simple_mult = round(random.uniform(1.1, min(mult_hi, 2.0)), 2)
+            return OrderComplexityConfig(tiers=[
+                OrderComplexityTier("simple", w_simple, simple_mult),
+                OrderComplexityTier("standard", w_standard, 1.0),
+            ])
+        else:
+            # standard + complex
+            w_standard = round(random.uniform(0.5, 0.9), 2)
+            w_complex = round(1.0 - w_standard, 2)
+            complex_mult = round(random.uniform(max(mult_lo, 0.3), 0.9), 2)
+            return OrderComplexityConfig(tiers=[
+                OrderComplexityTier("standard", w_standard, 1.0),
+                OrderComplexityTier("complex", w_complex, complex_mult),
+            ])
+    else:
+        # Three tiers: simple + standard + complex
+        w_simple = round(random.uniform(0.1, 0.3), 2)
+        w_complex = round(random.uniform(0.1, 0.3), 2)
+        w_standard = round(1.0 - w_simple - w_complex, 2)
+        # Clamp to ensure weights sum exactly
+        w_standard = max(0.01, w_standard)
+        total = w_simple + w_standard + w_complex
+        w_simple = round(w_simple / total, 3)
+        w_standard = round(w_standard / total, 3)
+        w_complex = round(1.0 - w_simple - w_standard, 3)
+        simple_mult = round(random.uniform(1.1, min(mult_hi, 2.0)), 2)
+        complex_mult = round(random.uniform(max(mult_lo, 0.3), 0.9), 2)
+        return OrderComplexityConfig(tiers=[
+            OrderComplexityTier("simple", w_simple, simple_mult),
+            OrderComplexityTier("standard", w_standard, 1.0),
+            OrderComplexityTier("complex", w_complex, complex_mult),
+        ])
 
 
 # ── Convenience loader ─────────────────────────────────────────────────────────
 
 def get_volt_config() -> FacilityConfig:
-    """Load the volt_warehouse.yaml config from the standard data directory."""
+    """Load the example_1.yaml config (formerly volt_warehouse.yaml) from the standard data directory."""
     config_path = (
-        Path(__file__).parent.parent / "data" / "configs" / "volt_warehouse.yaml"
+        Path(__file__).parent.parent / "data" / "configs" / "example_1.yaml"
     )
     return FacilityConfig.from_yaml(config_path)

@@ -1,0 +1,62 @@
+# Clark Parameter Limits
+# ─────────────────────────────────────────────────────────────────────────────
+# This file defines the absolute min/max for every configurable parameter.
+# Users cannot set values outside these bounds in their facility configs.
+# The synthetic pre-training generator samples within these bounds — so the
+# foundation model is only competent within this envelope.
+#
+# Expand bounds here as the model matures (wider training = wider competence).
+# After changing bounds, re-run pretrain to keep the model's envelope current.
+# ─────────────────────────────────────────────────────────────────────────────
+
+facility:
+  # Worker roster
+  n_workers:          { min: 2,    max: 50   }
+  base_oph:           { min: 5.0,  max: 40.0 }   # orders/hr — packing rate baseline
+  shift_hours:        { min: 4.0,  max: 12.0 }
+  shift_start_hour:   { min: 5.0,  max: 11.0 }   # 5 AM earliest, 11 AM latest
+  hustle_daily_cap:   { min: 0.5,  max: 12.0 }
+  call_off_probability: { min: 0.0, max: 0.15 }  # 0–15% daily call-off rate
+
+  # Task OPH overrides (per-worker per-task rates)
+  task_oph:           { min: 1.0,  max: 80.0 }   # any task-specific OPH override
+
+  # Shift / schedule
+  day_start_hour:     { min: 5.0,  max: 11.0 }
+  eod_hour:           { min: 13.0, max: 22.0 }
+  order_cutoff_hour:  { min: 12.0, max: 21.0 }
+  carrier_pickup_hour: { min: 12.0, max: 20.0 }  # null = no hard carrier deadline
+  lunch_hour:         { min: 10.0, max: 15.0 }
+  lunch_duration:     { min: 0.0,  max: 1.0  }   # 0 = no lunch break
+
+  # Morning pick round
+  morning_pick_carts_min:     { min: 0, max: 5  }
+  morning_pick_carts_max:     { min: 0, max: 10 }
+  morning_pick_per_cart_min:  { min: 1, max: 20 }
+  morning_pick_per_cart_max:  { min: 1, max: 30 }
+
+  # Equipment
+  pack_stations:      { min: 1,    max: 30   }    # null = unlimited
+  carts_available:    { min: 1,    max: 100  }    # null = unlimited
+
+  # OT
+  ot_wall_clock_max:  { min: 0.0,  max: 3.0  }
+  ot_hard_stop_hour:  { min: 13.0, max: 23.0 }
+
+  # Volume
+  daily_orders_min:   { min: 1,    max: 500  }
+  daily_orders_max:   { min: 1,    max: 5000 }
+
+  # Cycle counts
+  cycle_count_weekly_hours:    { min: 0.5, max: 20.0 }
+  cycle_count_max_overdue_weeks: { min: 1,  max: 12  }
+
+  # Management
+  management_daily_hours_required: { min: 0.0, max: 10.0 }
+
+  # Order complexity weights (must sum to ~1.0 — validated at load time)
+  order_complexity_weight: { min: 0.0, max: 1.0 }
+  order_complexity_oph_multiplier: { min: 0.1, max: 3.0 }
+
+  # Tasks
+  n_tasks:            { min: 2,    max: 15   }    # pick + pack minimum

@@ -18,9 +18,34 @@ from pathlib import Path
 from typing import Optional
 
 from clark.config.task_vocab import STANDARD_VOCAB, CORE_TASK_IDS, TaskDef
+from clark.config.bounds import validate_value
 
 
 # ─── Sub-dataclasses ─────────────────────────────────────────────────────────
+
+@dataclass
+class OrderComplexityTier:
+    name: str             # "simple", "standard", "complex"
+    weight: float         # fraction of orders (all tiers must sum to ~1.0)
+    oph_multiplier: float # speed multiplier vs base OPH
+
+
+@dataclass
+class OrderComplexityConfig:
+    tiers: list[OrderComplexityTier]
+
+    @classmethod
+    def default(cls) -> "OrderComplexityConfig":
+        """Standard single-tier config (all orders equal) — backwards compatible."""
+        return cls(tiers=[OrderComplexityTier("standard", 1.0, 1.0)])
+
+    def validate(self) -> list[str]:
+        errors = []
+        total = sum(t.weight for t in self.tiers)
+        if abs(total - 1.0) > 0.01:
+            errors.append(f"Order complexity weights sum to {total:.3f}, must sum to 1.0")
+        return errors
+
 
 @dataclass
 class IndividualDebuff:
@@ -47,6 +72,11 @@ class WorkerConfig:
     hustle_daily_cap: Optional[float] = None  # None = role-based default
     bad_headspace_effects: Optional[dict[str, float]] = None  # task_id → multiplier
     individual_debuff: Optional[IndividualDebuff] = None
+    task_oph_overrides: Optional[dict[str, float]] = None
+    # Per-task OPH rates. Overrides the base_oph × task_multiplier calculation.
+    # Example: {"pick": 42.5, "restock": 8.0}
+    # Tasks not listed use base_oph × standard multiplier.
+    # Management, idle, cycle_count are time-based — OPH overrides ignored for them.
 
     def eligible_for(self, task_id: str) -> bool:
         if self.task_eligibility == "all":
@@ -105,6 +135,27 @@ class BusinessRules:
     order_incomplete_threshold: int = 0
     max_call_offs_per_day: int = 2
     max_call_offs_high_volume: int = 1
+
+    # Shift timing
+    day_start_hour: float = 9.0
+    eod_hour: float = 17.5
+    order_cutoff_hour: float = 17.0
+    carrier_pickup_hour: Optional[float] = None  # None = no hard deadline
+
+    # Breaks
+    lunch_hour: float = 13.0
+    lunch_duration: float = 0.5   # 0.0 = no lunch break
+
+    # Morning pick round
+    morning_pick_enabled: bool = True
+    morning_pick_carts_min: int = 1
+    morning_pick_carts_max: int = 2
+    morning_pick_per_cart_min: int = 1
+    morning_pick_per_cart_max: int = 6
+
+    # Equipment constraints
+    pack_stations: Optional[int] = None    # None = unlimited
+    carts_available: Optional[int] = None  # None = unlimited
 
 
 @dataclass
@@ -176,6 +227,7 @@ class FacilityConfig:
     volume: VolumeConfig
     rules: BusinessRules
     reward_overrides: RewardOverrides = field(default_factory=RewardOverrides)
+    order_complexity: OrderComplexityConfig = field(default_factory=OrderComplexityConfig.default)
 
     # ── Computed properties ───────────────────────────────────────────────────
 
@@ -229,6 +281,7 @@ class FacilityConfig:
         volume = cls._parse_volume(d.get("volume", {}))
         rules = cls._parse_rules(d.get("business_rules", {}))
         reward_overrides = cls._parse_reward_overrides(d.get("rewards", {}))
+        order_complexity = cls._parse_order_complexity(d.get("order_complexity"))
 
         return cls(
             name=facility.get("name", "Unnamed Facility"),
@@ -238,6 +291,7 @@ class FacilityConfig:
             volume=volume,
             rules=rules,
             reward_overrides=reward_overrides,
+            order_complexity=order_complexity,
         )
 
     @staticmethod
@@ -256,6 +310,11 @@ class FacilityConfig:
                 oph_multiplier=debuff_raw.get("oph_multiplier"),
                 season_weights=season_w,
             )
+        raw_oph_overrides = d.get("task_oph_overrides")
+        task_oph_overrides = None
+        if raw_oph_overrides:
+            task_oph_overrides = {k: float(v) for k, v in raw_oph_overrides.items()}
+
         return WorkerConfig(
             worker_id=d["id"],
             name=d["name"],
@@ -269,6 +328,7 @@ class FacilityConfig:
             hustle_daily_cap=d.get("hustle_daily_cap"),
             bad_headspace_effects=d.get("bad_headspace_effects"),
             individual_debuff=debuff,
+            task_oph_overrides=task_oph_overrides,
         )
 
     @staticmethod
@@ -317,7 +377,39 @@ class FacilityConfig:
             order_incomplete_threshold=int(d.get("order_incomplete_threshold", 0)),
             max_call_offs_per_day=int(d.get("max_call_offs_per_day", 2)),
             max_call_offs_high_volume=int(d.get("max_call_offs_high_volume", 1)),
+            # Shift timing
+            day_start_hour=float(d.get("day_start_hour", 9.0)),
+            eod_hour=float(d.get("eod_hour", 17.5)),
+            order_cutoff_hour=float(d.get("order_cutoff_hour", 17.0)),
+            carrier_pickup_hour=(float(d["carrier_pickup_hour"]) if d.get("carrier_pickup_hour") is not None else None),
+            # Breaks
+            lunch_hour=float(d.get("lunch_hour", 13.0)),
+            lunch_duration=float(d.get("lunch_duration", 0.5)),
+            # Morning pick round
+            morning_pick_enabled=bool(d.get("morning_pick_enabled", True)),
+            morning_pick_carts_min=int(d.get("morning_pick_carts_min", 1)),
+            morning_pick_carts_max=int(d.get("morning_pick_carts_max", 2)),
+            morning_pick_per_cart_min=int(d.get("morning_pick_per_cart_min", 1)),
+            morning_pick_per_cart_max=int(d.get("morning_pick_per_cart_max", 6)),
+            # Equipment
+            pack_stations=(int(d["pack_stations"]) if d.get("pack_stations") is not None else None),
+            carts_available=(int(d["carts_available"]) if d.get("carts_available") is not None else None),
         )
+
+    @staticmethod
+    def _parse_order_complexity(d: Optional[dict]) -> OrderComplexityConfig:
+        if d is None:
+            return OrderComplexityConfig.default()
+        tiers = []
+        for t in d.get("tiers", []):
+            tiers.append(OrderComplexityTier(
+                name=str(t["name"]),
+                weight=float(t["weight"]),
+                oph_multiplier=float(t["oph_multiplier"]),
+            ))
+        if not tiers:
+            return OrderComplexityConfig.default()
+        return OrderComplexityConfig(tiers=tiers)
 
     @staticmethod
     def _parse_reward_overrides(d: dict) -> RewardOverrides:
@@ -358,10 +450,66 @@ class FacilityConfig:
         if sorted(ids) != list(range(self.num_workers)):
             errors.append(f"Worker IDs must be 0-indexed contiguous integers (0..{self.num_workers-1}).")
 
-        # OPH sanity
+        # OPH sanity + bounds check
         for w in self.workers:
             if w.base_oph < 1.0 or w.base_oph > 50.0:
                 warnings.append(f"Worker '{w.name}' base_oph={w.base_oph} is outside typical range [1, 50].")
+            ok, msg = validate_value("base_oph", w.base_oph)
+            if not ok:
+                errors.append(f"base_oph (Worker '{w.name}'): {w.base_oph} exceeds max of 40.0 — see clark_limits.yaml")
+            ok, msg = validate_value("shift_hours", w.shift_hours)
+            if not ok:
+                errors.append(f"shift_hours (Worker '{w.name}'): {w.shift_hours} — {msg} — see clark_limits.yaml")
+            # task_oph_overrides bounds
+            if w.task_oph_overrides:
+                for task_id, oph_val in w.task_oph_overrides.items():
+                    ok, msg = validate_value("task_oph", oph_val)
+                    if not ok:
+                        errors.append(
+                            f"task_oph_overrides['{task_id}'] (Worker '{w.name}'): {oph_val} — {msg} — see clark_limits.yaml"
+                        )
+
+        # n_workers bounds check
+        ok, msg = validate_value("n_workers", self.num_workers)
+        if not ok:
+            errors.append(f"n_workers: {msg} — see clark_limits.yaml")
+
+        # Shift timing validations
+        rules = self.rules
+        if rules.eod_hour <= rules.day_start_hour + 4:
+            errors.append(
+                f"eod_hour ({rules.eod_hour}) must be > day_start_hour + 4 ({rules.day_start_hour + 4}). "
+                "Minimum 4-hour shift required."
+            )
+        if not (rules.day_start_hour < rules.lunch_hour < rules.eod_hour):
+            errors.append(
+                f"lunch_hour ({rules.lunch_hour}) must be between day_start_hour ({rules.day_start_hour}) "
+                f"and eod_hour ({rules.eod_hour})."
+            )
+        if rules.carrier_pickup_hour is not None:
+            if not (rules.day_start_hour <= rules.carrier_pickup_hour <= rules.eod_hour):
+                errors.append(
+                    f"carrier_pickup_hour ({rules.carrier_pickup_hour}) must be between "
+                    f"day_start_hour ({rules.day_start_hour}) and eod_hour ({rules.eod_hour})."
+                )
+
+        # Bounds checks for key rules fields
+        for field_name, value in [
+            ("day_start_hour", rules.day_start_hour),
+            ("eod_hour", rules.eod_hour),
+            ("ot_wall_clock_max", rules.ot_wall_clock_max),
+            ("ot_hard_stop_hour", rules.ot_hard_stop_hour),
+            ("management_daily_hours_required", rules.management_daily_hours_required),
+            ("cycle_count_weekly_hours", rules.cycle_count_weekly_hours),
+            ("cycle_count_max_overdue_weeks", rules.cycle_count_max_overdue_weeks),
+        ]:
+            ok, msg = validate_value(field_name, value)
+            if not ok:
+                errors.append(f"{msg} — see clark_limits.yaml")
+
+        # Order complexity validation
+        complexity_errors = self.order_complexity.validate()
+        errors.extend(complexity_errors)
 
         # Seasonal ranges present for all 12 months
         expected_months = {
