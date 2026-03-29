@@ -23,11 +23,13 @@ from clark.agent.ppo import ClarkAgent
 from clark.agent.state import StateBuilder
 from clark.env.year_env import YearEnv
 from clark.training.synthetic_gen import generate_random_facility
+from clark.sim_logging.episode_logger import EpisodeLogger
 
 
 def pretrain(
     n_episodes: int = 10000,
     output_path: str = "clark/data/checkpoints/clark_foundation.pt",
+    log_dir: str = "clark/data/logs/pretrain",
     save_interval: int = 100,
     log_interval: int = 10,
     device: str = "cpu",
@@ -48,8 +50,12 @@ def pretrain(
     # One foundation agent, no config dependency in the model weights.
     agent = ClarkAgent()
 
+    # Lightweight logger — pretrain mode strips step data to control log size
+    logger = EpisodeLogger(log_dir=log_dir, mode="pretrain")
+
     print(f"Pre-training Clark foundation model for {n_episodes} episodes.")
-    print(f"Output: {output_path}")
+    print(f"Output:  {output_path}")
+    print(f"Logs:    {log_dir}")
     print()
 
     start_time = time.time()
@@ -100,6 +106,21 @@ def pretrain(
 
         episode_rewards.append(episode_reward)
 
+        # Log last day's summary for this episode (lightweight in pretrain mode)
+        if env.daily_summaries:
+            last_summary = env.daily_summaries[-1]
+            logger.log_episode(last_summary, ep, facility_config=config,
+                               write=(ep % log_interval == 0))
+
+        # Write year snapshot at the end of each year
+        if ep % save_interval == 0:
+            year_summary = env._get_year_summary()
+            logger.write_year_snapshot(
+                n_days=env.total_work_days,
+                year_summary=year_summary,
+                facility_config=config,
+            )
+
         if ep % log_interval == 0:
             recent = episode_rewards[-log_interval:]
             avg_reward = sum(recent) / len(recent)
@@ -116,7 +137,7 @@ def pretrain(
 
         if ep % save_interval == 0:
             agent.save(output_path, ep, config)
-            print(f"  [Checkpoint saved: ep {ep} → {output_path}]")
+            print(f"  [Checkpoint saved → {output_path}]")
 
     # Final save
     final_config = generate_random_facility()  # dummy config for metadata
@@ -132,12 +153,14 @@ def main():
                         default="clark/data/checkpoints/clark_foundation.pt")
     parser.add_argument("--save-interval", type=int, default=100)
     parser.add_argument("--log-interval", type=int, default=10)
+    parser.add_argument("--log-dir", type=str, default="clark/data/logs/pretrain")
     parser.add_argument("--device", type=str, default="cpu")
     args = parser.parse_args()
 
     pretrain(
         n_episodes=args.episodes,
         output_path=args.output,
+        log_dir=args.log_dir,
         save_interval=args.save_interval,
         log_interval=args.log_interval,
         device=args.device,

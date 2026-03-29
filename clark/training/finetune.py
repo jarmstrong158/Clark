@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import os
 import time
+from pathlib import Path
 
 from torch.optim import Adam
 
@@ -26,6 +27,7 @@ from clark.agent.ppo import ClarkAgent
 from clark.agent.state import StateBuilder
 from clark.config.schema import FacilityConfig
 from clark.env.year_env import YearEnv
+from clark.sim_logging.episode_logger import EpisodeLogger
 
 
 def finetune(
@@ -37,6 +39,7 @@ def finetune(
     freeze_encoder: bool = False,
     log_interval: int = 10,
     save_interval: int = 50,
+    log_dir: str = None,
 ) -> None:
     """
     Fine-tune a foundation checkpoint on a specific facility.
@@ -56,6 +59,11 @@ def finetune(
     os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
 
     config = FacilityConfig.from_yaml(config_path)
+
+    # Default log dir: next to checkpoint, named after the facility
+    if log_dir is None:
+        safe_name = config.name.lower().replace(" ", "_").replace("/", "_")
+        log_dir = str(Path(output_path).parent / f"logs_{safe_name}")
 
     errors, warnings = config.validate()
     if errors:
@@ -99,10 +107,14 @@ def finetune(
         # Rebuild optimizer at fine-tune LR even with all params unfrozen
         agent.optimizer = Adam(agent.model.parameters(), lr=lr)
 
+    # Full-detail logger — includes step assignments and year snapshots for dashboard
+    logger = EpisodeLogger(log_dir=log_dir, mode="finetune", facility_config=config)
+
     print(f"Fine-tuning on: {config.name} ({config_path})")
-    print(f"Base model: {base_model_path}")
-    print(f"Output: {output_path}")
-    print(f"LR: {lr}, freeze_encoder: {freeze_encoder}, episodes: {n_episodes}")
+    print(f"Base model:     {base_model_path}")
+    print(f"Output:         {output_path}")
+    print(f"Logs:           {log_dir}")
+    print(f"LR: {lr}  |  freeze_encoder: {freeze_encoder}  |  episodes: {n_episodes}")
     print()
 
     start_time = time.time()
@@ -149,20 +161,35 @@ def finetune(
 
         episode_rewards.append(episode_reward)
 
+        # Log all daily summaries for this year — full detail for dashboard
+        for day_idx, summary in enumerate(env.daily_summaries):
+            ep_day_num = (ep - 1) * env.total_work_days + day_idx + 1
+            logger.log_episode(summary, ep_day_num, write=False)
+        logger._write_log()  # single disk write per year
+
+        # Year snapshot — dashboard reads this for the grade history panel
+        year_summary = env._get_year_summary()
+        logger.write_year_snapshot(
+            n_days=env.total_work_days,
+            year_summary=year_summary,
+        )
+
         if ep % log_interval == 0:
             recent = episode_rewards[-log_interval:]
             avg_reward = sum(recent) / len(recent)
             elapsed = time.time() - start_time
+            stats = logger.get_training_stats()
             print(
                 f"  Ep {ep:5d}/{n_episodes} | "
                 f"AvgReward: {avg_reward:8.1f} | "
+                f"WinRate: {stats['win_rate_last_window']:.1%} | "
                 f"Steps: {steps:4d} | "
                 f"{elapsed:6.0f}s"
             )
 
         if ep % save_interval == 0:
             agent.save(output_path, ep, config)
-            print(f"  [Checkpoint saved: ep {ep} → {output_path}]")
+            print(f"  [Checkpoint saved → {output_path}]")
 
     # Final save
     agent.save(output_path, n_episodes, config)
