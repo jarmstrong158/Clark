@@ -80,7 +80,7 @@ def pretrain(
     print()
     print(
         f"  {'Grade':<6} {'Episode':<14} {'Stage':<7} {'Config':<20} "
-        f"{'Size':<10} {'R/W':>8} {'Win':>6} {'OT':>6} {'Ord✓':>6} "
+        f"{'Size':<10} {'R/W':>8} {'Win':>6} {'OT':>6} {'Cmp%':>6} "
         f"{'P-loss':>8} {'V-loss':>8} {'Entr':>6} {'Clip':>6} {'Time':>7}"
     )
     print("  " + "-" * 130)
@@ -114,6 +114,10 @@ def pretrain(
             years_on_current_config = 0
 
         years_on_current_config += 1
+
+        # Heartbeat: print a dot every episode so the terminal isn't silent during long episodes.
+        # Overwrite the same line to avoid flooding the log.
+        print(f"  ... running ep {ep}/{n_episodes} (stg {current_stage}, cfg {configs_seen}/{total_configs})", end="\r", flush=True)
 
         env = YearEnv(current_config)
         builder = StateBuilder(current_config)
@@ -201,6 +205,7 @@ def pretrain(
 
         # ── Progress line ──────────────────────────────────────────────────────
         if ep % log_interval == 0:
+            print(" " * 80, end="\r")  # clear heartbeat line
             w = log_interval  # window size
 
             recent_rw   = episode_reward_per_worker[-w:]
@@ -212,11 +217,11 @@ def pretrain(
                 prev_avg = sum(prev_rw) / len(prev_rw)
                 delta_pct = (avg_rw - prev_avg) / (abs(prev_avg) + 1e-8) * 100
                 if delta_pct > 2.0:
-                    trend = "↑"
+                    trend = "+"
                 elif delta_pct < -2.0:
-                    trend = "↓"
+                    trend = "-"
                 else:
-                    trend = "→"
+                    trend = "="
             else:
                 trend = " "
 
@@ -254,14 +259,14 @@ def pretrain(
                 f"R/W {avg_rw:7.1f}{trend} | "
                 f"Win {win_rate:4.0%} | "
                 f"OT {ot_rate:4.0%} | "
-                f"Ord✓ {ord_pct:4.0%} | "
+                f"Cmp% {ord_pct:4.0%} | "
                 f"P:{pl:.3f} V:{vl:.3f} H:{ent:.3f} Clip:{clip:.0%} | "
                 f"{elapsed:6.0f}s"
             )
 
         if ep % save_interval == 0:
             agent.save(output_path, ep, current_config)
-            print(f"  [Checkpoint saved → {output_path}]")
+            print(f"  [Checkpoint saved -> {output_path}]")
 
     # Final save
     final_config = generate_random_facility()  # dummy config for metadata

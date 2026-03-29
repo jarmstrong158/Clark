@@ -44,10 +44,10 @@ _DEFAULT_DROPOUT = 0.1
 _NUM_ROLES = 4       # manager=0, assistant_manager=1, lead=2, warehouse=3
 _MAX_TASKS = 20      # len(STANDARD_VOCAB)=12 + 5 custom + 3 buffer
 
-# Feature dimensions (mirrors FacilityEnv constants)
-_WORKER_FEAT_DIM = 13
-_TASK_FEAT_DIM = 3   # demand_signal, availability_flag, task_type_id
-_ENV_FEAT_DIM = 15
+# Feature dimensions — must match WORKER_STATE_SCALARS and ENV_STATE_SIZE in facility_env.py
+_WORKER_FEAT_DIM = 14  # 13 base scalars + task_oph_normalized (index 13)
+_TASK_FEAT_DIM = 3     # demand_signal, availability_flag, task_type_id
+_ENV_FEAT_DIM = 17     # 15 base + carrier_urgency (15) + order_complexity_load (16)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
