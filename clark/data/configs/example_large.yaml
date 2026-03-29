@@ -1,1 +1,305 @@
-# Large facility example (25 workers) — to be written in Phase 1
+# Large facility example — 25 workers, full task set with receiving
+# Good starting point for a mid-to-large fulfillment center.
+# Copy this file and adjust to your facility's real numbers.
+
+facility:
+  name: "Example Large Facility"
+  timezone: "America/Los_Angeles"
+
+workers:
+  - id: 0
+    name: "General Manager"
+    base_oph: 16.0
+    shift_hours: 10.0
+    shift_start: 7.0
+    role: manager
+    task_eligibility: all
+    call_off_probability: 0.01
+    hustle_daily_cap: 8.0
+    individual_debuff:
+      type: family_needs
+      probability: 0.15
+      cooldown_days: 7
+      effect: lose_hours
+      hours_lost_range: [1.0, 2.0]
+
+  - id: 1
+    name: "Operations Manager"
+    base_oph: 17.0
+    shift_hours: 9.0
+    shift_start: 8.0
+    role: assistant_manager
+    task_eligibility: all
+    call_off_probability: 0.015
+    hustle_daily_cap: 7.5
+
+  - id: 2
+    name: "Receiving Lead"
+    base_oph: 18.5
+    shift_hours: 8.5
+    shift_start: 7.0
+    role: lead
+    task_eligibility: [receiving, restock, cycle_count, side_project, idle]
+    call_off_probability: 0.025
+    hustle_daily_cap: 7.0
+
+  - id: 3
+    name: "Pick Lead"
+    base_oph: 20.0
+    shift_hours: 8.5
+    shift_start: 8.0
+    role: lead
+    task_eligibility: [pick, pack, restock, cycle_count, side_project, idle]
+    call_off_probability: 0.025
+    hustle_daily_cap: 8.0
+
+  - id: 4
+    name: "Pack Lead"
+    base_oph: 19.0
+    shift_hours: 8.5
+    shift_start: 8.0
+    role: lead
+    task_eligibility: [pick, pack, restock, side_project, idle]
+    call_off_probability: 0.025
+    hustle_daily_cap: 7.5
+
+  # Pickers (ids 5-10)
+  - id: 5
+    name: "Picker 1"
+    base_oph: 18.0
+    shift_hours: 8.0
+    shift_start: 8.0
+    role: warehouse
+    task_eligibility: [pick, pack, restock, side_project, idle]
+    call_off_probability: 0.035
+    hustle_daily_cap: 7.0
+  - id: 6
+    name: "Picker 2"
+    base_oph: 17.5
+    shift_hours: 8.0
+    shift_start: 8.0
+    role: warehouse
+    task_eligibility: [pick, pack, restock, idle]
+    call_off_probability: 0.035
+    hustle_daily_cap: 6.5
+  - id: 7
+    name: "Picker 3"
+    base_oph: 16.0
+    shift_hours: 8.0
+    shift_start: 8.0
+    role: warehouse
+    task_eligibility: [pick, pack, side_project, idle]
+    call_off_probability: 0.035
+    hustle_daily_cap: 6.0
+  - id: 8
+    name: "Picker 4"
+    base_oph: 19.0
+    shift_hours: 8.0
+    shift_start: 8.0
+    role: warehouse
+    task_eligibility: [pick, pack, restock, idle]
+    call_off_probability: 0.035
+    hustle_daily_cap: 7.5
+  - id: 9
+    name: "Picker 5"
+    base_oph: 15.5
+    shift_hours: 8.0
+    shift_start: 8.0
+    role: warehouse
+    task_eligibility: [pick, pack, idle]
+    call_off_probability: 0.04
+    hustle_daily_cap: 5.0
+  - id: 10
+    name: "Picker 6"
+    base_oph: 17.0
+    shift_hours: 8.0
+    shift_start: 8.0
+    role: warehouse
+    task_eligibility: [pick, pack, restock, side_project, idle]
+    call_off_probability: 0.035
+    hustle_daily_cap: 6.5
+
+  # Packers (ids 11-16)
+  - id: 11
+    name: "Packer 1"
+    base_oph: 18.5
+    shift_hours: 8.0
+    shift_start: 8.0
+    role: warehouse
+    task_eligibility: [pick, pack, restock, side_project, idle]
+    call_off_probability: 0.035
+    hustle_daily_cap: 7.0
+  - id: 12
+    name: "Packer 2"
+    base_oph: 17.0
+    shift_hours: 8.0
+    shift_start: 8.0
+    role: warehouse
+    task_eligibility: [pack, idle]
+    call_off_probability: 0.035
+    hustle_daily_cap: 5.5
+  - id: 13
+    name: "Packer 3"
+    base_oph: 16.5
+    shift_hours: 8.0
+    shift_start: 8.0
+    role: warehouse
+    task_eligibility: [pack, side_project, idle]
+    call_off_probability: 0.035
+    hustle_daily_cap: 6.0
+  - id: 14
+    name: "Packer 4"
+    base_oph: 20.0
+    shift_hours: 8.0
+    shift_start: 8.0
+    role: warehouse
+    task_eligibility: [pick, pack, restock, idle]
+    call_off_probability: 0.03
+    hustle_daily_cap: 8.0
+  - id: 15
+    name: "Packer 5"
+    base_oph: 15.0
+    shift_hours: 8.0
+    shift_start: 8.0
+    role: warehouse
+    task_eligibility: [pack, idle]
+    call_off_probability: 0.04
+    hustle_daily_cap: 4.0
+  - id: 16
+    name: "Packer 6"
+    base_oph: 18.0
+    shift_hours: 8.0
+    shift_start: 8.0
+    role: warehouse
+    task_eligibility: [pick, pack, side_project, idle]
+    call_off_probability: 0.035
+    hustle_daily_cap: 7.0
+
+  # Receiving team (ids 17-20)
+  - id: 17
+    name: "Receiver 1"
+    base_oph: 22.0
+    shift_hours: 8.0
+    shift_start: 7.0
+    role: warehouse
+    task_eligibility: [receiving, restock, side_project, idle]
+    call_off_probability: 0.035
+    hustle_daily_cap: 7.0
+  - id: 18
+    name: "Receiver 2"
+    base_oph: 20.0
+    shift_hours: 8.0
+    shift_start: 7.0
+    role: warehouse
+    task_eligibility: [receiving, restock, idle]
+    call_off_probability: 0.035
+    hustle_daily_cap: 6.5
+  - id: 19
+    name: "Receiver 3"
+    base_oph: 18.0
+    shift_hours: 8.0
+    shift_start: 7.0
+    role: warehouse
+    task_eligibility: [receiving, restock, idle]
+    call_off_probability: 0.04
+    hustle_daily_cap: 6.0
+  - id: 20
+    name: "Receiver 4"
+    base_oph: 19.5
+    shift_hours: 8.0
+    shift_start: 7.0
+    role: warehouse
+    task_eligibility: [receiving, restock, side_project, idle]
+    call_off_probability: 0.035
+    hustle_daily_cap: 6.5
+
+  # Float / multi-role (ids 21-24)
+  - id: 21
+    name: "Float 1"
+    base_oph: 17.0
+    shift_hours: 8.0
+    shift_start: 8.0
+    role: warehouse
+    task_eligibility: all
+    call_off_probability: 0.035
+    hustle_daily_cap: 6.5
+  - id: 22
+    name: "Float 2"
+    base_oph: 16.5
+    shift_hours: 8.0
+    shift_start: 8.0
+    role: warehouse
+    task_eligibility: all
+    call_off_probability: 0.035
+    hustle_daily_cap: 6.0
+  - id: 23
+    name: "Float 3"
+    base_oph: 15.5
+    shift_hours: 8.0
+    shift_start: 8.0
+    role: warehouse
+    task_eligibility: [pick, pack, receiving, restock, idle]
+    call_off_probability: 0.04
+    hustle_daily_cap: 5.5
+  - id: 24
+    name: "Float 4"
+    base_oph: 16.0
+    shift_hours: 8.0
+    shift_start: 8.0
+    role: warehouse
+    task_eligibility: [pick, pack, restock, side_project, idle]
+    call_off_probability: 0.035
+    hustle_daily_cap: 6.0
+
+tasks:
+  enabled:
+    - pick
+    - pack
+    - restock
+    - side_project
+    - management
+    - cycle_count
+    - receiving
+    - idle
+  custom: []
+
+volume:
+  # Adjust these to your real order volumes.
+  seasonal_ranges:
+    january:   [400, 700]
+    february:  [400, 700]
+    march:     [800, 1400]
+    april:     [1500, 2500]
+    may:       [1800, 3000]
+    june:      [1800, 3000]
+    july:      [1400, 2200]
+    august:    [1400, 2200]
+    september: [1200, 1800]
+    october:   [1000, 1600]
+    november:  [800, 1200]
+    december:  [400, 700]
+  weekly_curve:
+    monday:    [0.86, 1.00]
+    tuesday:   [0.71, 0.85]
+    wednesday: [0.56, 0.70]
+    thursday:  [0.41, 0.55]
+    friday:    [0.00, 0.40]
+
+business_rules:
+  management_daily_hours_required: 6.0   # larger team = more admin
+  management_min_daily_hours: 2.0
+  management_backlog_week_threshold: 15.0
+  ot_wall_clock_max: 1.5                 # larger team can push longer
+  ot_hard_stop_hour: 19.0
+  ot_trigger_orders_remaining: 50
+  cycle_count_weekly_hours: 3.0
+  cycle_count_max_overdue_weeks: 4
+  min_staffing_floor: 5                  # always need 5 on production tasks
+  high_volume_day_orders: 2000
+  high_volume_percentile: 0.75
+  target_daily_orders: null
+  order_incomplete_threshold: 0
+  max_call_offs_per_day: 3              # larger team can absorb more
+  max_call_offs_high_volume: 2
+
+rewards: {}

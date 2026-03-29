@@ -1,1 +1,119 @@
-# Standard task vocabulary — to be written in Phase 1
+# Clark Standard Task Vocabulary
+# Reference document — not loaded by the model directly.
+# The authoritative definitions live in clark/config/task_vocab.py.
+# This file is for human reference when writing facility configs.
+
+tasks:
+
+  # ─── Core (always enabled — cannot be disabled) ───────────────────────────
+
+  - id: pick
+    display_name: "Picking"
+    output_type: orders_per_hour
+    hustle_eligible: true
+    always_enabled: true
+    notes: >
+      Pull orders from shelves. Designated picker gets a 2.5x OPH multiplier;
+      supplemental pickers get 2.25x. Picking speed is affected by restock level —
+      below 20% restock, OPH drops sharply (empty shelves).
+
+  - id: pack
+    display_name: "Packing"
+    output_type: orders_per_hour
+    hustle_eligible: true
+    always_enabled: true
+    notes: >
+      Pack picked orders for shipment. Base OPH = worker's base_oph.
+      Pack-only workers (e.g. workers with a physical restriction) can only pack.
+
+  - id: idle
+    display_name: "Idle"
+    output_type: none
+    hustle_eligible: false
+    always_enabled: true
+    notes: >
+      No productive work. Assigned automatically to absent workers.
+      The agent incurs a per_idle_hour penalty to discourage unnecessary idling.
+
+  # ─── Operations (opt-in) ─────────────────────────────────────────────────
+
+  - id: restock
+    display_name: "Restocking"
+    output_type: hours
+    hustle_eligible: true
+    notes: >
+      Replenish pick locations. Restock level is a shared resource that depletes
+      as orders are picked. If it reaches 0%, picking OPH drops to ~5% — equivalent
+      to empty shelves. Restocking refills the level at a per-episode calculated rate.
+      Facility managers and leads are most efficient; warehouse workers incur a
+      small penalty for using their time on restock vs production.
+
+  - id: management
+    display_name: "Management"
+    output_type: hours
+    hustle_eligible: false
+    notes: >
+      Admin, emails, floor oversight, HR tasks. Measured in hours, not output.
+      Facilities can set a daily_hours_required target. Falling below the minimum
+      accumulates backlog; exceeding it burns backlog down. Cannot be hustled —
+      rushing admin creates errors.
+
+  - id: cycle_count
+    display_name: "Cycle Count"
+    output_type: hours
+    hustle_eligible: false
+    notes: >
+      Inventory audit. Typically 1.5h per count, 2 counts per week required.
+      Only workers with cycle_count in their task_eligibility can perform this.
+      Typically managers/assistant managers. Cannot be hustled — counts must be accurate.
+      Missing 4+ consecutive weeks triggers serious compliance consequences.
+
+  - id: side_project
+    display_name: "Side Project"
+    output_type: hours
+    hustle_eligible: true
+    notes: >
+      Facility improvement work — reorganizing aisles, building shelves, process improvement.
+      Two types: deliberate (2-6 worker-hours, specific completion bonus) and filler
+      (always available, minor per-unit reward). Incurs a penalty if assigned during crunch.
+
+  - id: receiving
+    display_name: "Receiving"
+    output_type: units_per_hour
+    hustle_eligible: true
+    notes: >
+      Process inbound freight — unboxing, scanning, put-away.
+      Output measured in units/hr. Enable if your facility has inbound logistics.
+
+  # ─── Extended (less common) ──────────────────────────────────────────────
+
+  - id: loading
+    display_name: "Loading"
+    output_type: units_per_hour
+    hustle_eligible: false
+    notes: >
+      Load outbound trucks or pallets. Enable if facility has outbound logistics.
+      Cannot be hustled — loading errors cause carrier issues.
+
+  - id: returns_processing
+    display_name: "Returns Processing"
+    output_type: units_per_hour
+    hustle_eligible: false
+    notes: >
+      Inspect, sort, and restock customer returns. Enable if returns volume is significant.
+
+  - id: quality_check
+    display_name: "Quality Check"
+    output_type: orders_per_hour
+    hustle_eligible: false
+    notes: >
+      Inspect outbound orders for accuracy before shipment.
+      Cannot be hustled — accuracy is the point.
+
+  - id: training
+    display_name: "Training"
+    output_type: hours
+    hustle_eligible: false
+    notes: >
+      Onboard or train new hires. The trainer is pulled from production;
+      trainees are not productive until training completes. Use sparingly.

@@ -1,1 +1,111 @@
-# Small facility example (5 workers) — to be written in Phase 1
+# Small facility example — 5 workers, minimal task set
+# Good starting point for a small shipping operation or boutique warehouse.
+# Copy this file and adjust to your facility's real numbers.
+
+facility:
+  name: "Example Small Facility"
+  timezone: "America/Chicago"
+
+workers:
+  - id: 0
+    name: "Manager"
+    base_oph: 16.0
+    shift_hours: 9.0
+    shift_start: 8.0
+    role: manager
+    task_eligibility: all
+    call_off_probability: 0.01
+    hustle_daily_cap: 8.0
+    individual_debuff:
+      type: family_needs
+      probability: 0.20
+      cooldown_days: 5
+      effect: lose_hours
+      hours_lost_range: [0.5, 1.5]
+
+  - id: 1
+    name: "Lead"
+    base_oph: 17.5
+    shift_hours: 8.0
+    shift_start: 8.0
+    role: lead
+    task_eligibility: all
+    call_off_probability: 0.025
+    hustle_daily_cap: 7.0
+
+  - id: 2
+    name: "Worker A"
+    base_oph: 15.0
+    shift_hours: 8.0
+    shift_start: 8.0
+    role: warehouse
+    task_eligibility: [pick, pack, restock, side_project, idle]
+    call_off_probability: 0.035
+    hustle_daily_cap: 6.0
+
+  - id: 3
+    name: "Worker B"
+    base_oph: 14.0
+    shift_hours: 8.0
+    shift_start: 8.0
+    role: warehouse
+    task_eligibility: [pick, pack, restock, idle]
+    call_off_probability: 0.035
+    hustle_daily_cap: 5.0
+
+  - id: 4
+    name: "Worker C"
+    base_oph: 13.5
+    shift_hours: 8.0
+    shift_start: 8.0
+    role: warehouse
+    task_eligibility: [pack, idle]  # pack-only (physical restriction example)
+    call_off_probability: 0.04
+    hustle_daily_cap: 4.0
+
+tasks:
+  enabled:
+    - pick
+    - pack
+    - restock
+    - side_project
+    - management
+    - idle
+  custom: []
+
+volume:
+  # Adjust these to your real order volumes.
+  seasonal_ranges:
+    january:   [20, 40]
+    february:  [20, 40]
+    march:     [40, 80]
+    april:     [80, 140]
+    may:       [100, 160]
+    june:      [100, 160]
+    july:      [80, 130]
+    august:    [80, 130]
+    september: [70, 110]
+    october:   [60, 90]
+    november:  [40, 70]
+    december:  [20, 40]
+  weekly_curve:
+    monday:    [0.80, 1.00]
+    tuesday:   [0.65, 0.85]
+    wednesday: [0.50, 0.70]
+    thursday:  [0.35, 0.55]
+    friday:    [0.00, 0.40]
+
+business_rules:
+  management_daily_hours_required: 3.0   # smaller team, less admin overhead
+  management_min_daily_hours: 1.0
+  ot_wall_clock_max: 1.0
+  ot_hard_stop_hour: 18.0
+  ot_trigger_orders_remaining: 5
+  cycle_count_weekly_hours: 2.0          # 2 workers, 1 hour each
+  cycle_count_max_overdue_weeks: 4
+  min_staffing_floor: 2
+  high_volume_day_orders: 130
+  high_volume_percentile: 0.75
+  max_call_offs_per_day: 1              # can't afford 2 call-offs on a small team
+
+rewards: {}

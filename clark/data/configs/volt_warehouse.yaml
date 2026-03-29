@@ -1,1 +1,200 @@
-# Volt Warehouse facility config — to be written in Phase 1
+# Volt Warehouse — Clark facility config
+# Jack's exact parameters translated to the Clark config schema.
+# This config should reproduce Jack's behavior when loaded into Clark's environment.
+# Reference: C:\Users\jarms\repos\volt-warehouse\volt_sim\config.py
+
+facility:
+  name: "Volt Warehouse"
+  timezone: "America/New_York"
+
+workers:
+  - id: 0
+    name: "Jonathan"
+    base_oph: 17.0
+    shift_hours: 9.75
+    shift_start: 9.0
+    role: manager
+    task_eligibility: all
+    call_off_probability: 0.01
+    max_ot_hours: 1.0
+    hustle_daily_cap: 9.5
+    bad_headspace_effects:
+      default: 0.95
+    individual_debuff:
+      type: family_needs
+      probability: 0.25
+      cooldown_days: 5
+      effect: lose_hours
+      hours_lost_range: [1.0, 2.0]
+
+  - id: 1
+    name: "Evan"
+    base_oph: 15.35
+    shift_hours: 8.5
+    shift_start: 9.0
+    role: assistant_manager
+    task_eligibility: all
+    call_off_probability: 0.02
+    max_ot_hours: 1.0
+    hustle_daily_cap: 7.0
+    bad_headspace_effects:
+      side_project: 1.10
+      default: 0.90
+    individual_debuff:
+      type: family_needs
+      probability: 0.25
+      cooldown_days: 5
+      effect: lose_hours
+      hours_lost_range: [1.0, 2.0]
+
+  - id: 2
+    name: "Jonah"
+    base_oph: 16.23
+    shift_hours: 8.5
+    shift_start: 9.0
+    role: warehouse
+    task_eligibility: all
+    call_off_probability: 0.035
+    max_ot_hours: 1.0
+    hustle_daily_cap: 6.0
+    bad_headspace_effects:
+      pack: 1.10
+      default: 0.90
+    individual_debuff:
+      type: stomach_issues
+      probability: 0.30
+      cooldown_days: 4
+      effect: oph_penalty
+      oph_multiplier: 0.85
+
+  - id: 3
+    name: "Andrew"
+    base_oph: 18.30
+    shift_hours: 8.5
+    shift_start: 9.0
+    role: warehouse
+    task_eligibility: all
+    call_off_probability: 0.035
+    max_ot_hours: 1.0
+    hustle_daily_cap: 8.0
+    bad_headspace_effects:
+      pack: 1.10
+      default: 0.90
+    individual_debuff:
+      type: eoe_muscle_flare
+      # probability is season-weighted — see season_weights below
+      probability: 0.0
+      cooldown_days: 0
+      effect: pack_only
+      season_weights:
+        winter: 0.05
+        spring: 0.20
+        summer: 0.25
+        fall: 0.12
+
+  - id: 4
+    name: "Dan"
+    base_oph: 18.94
+    shift_hours: 8.5
+    shift_start: 9.0
+    role: warehouse
+    task_eligibility: all
+    call_off_probability: 0.035
+    max_ot_hours: 1.0
+    hustle_daily_cap: 8.0
+    bad_headspace_effects:
+      default: 1.00  # immune to bad headspace
+    # No individual debuff
+
+  - id: 5
+    name: "Guy"
+    base_oph: 15.28
+    shift_hours: 8.5
+    shift_start: 9.0
+    role: warehouse
+    task_eligibility: all
+    call_off_probability: 0.035
+    max_ot_hours: 1.0
+    hustle_daily_cap: 3.0
+    bad_headspace_effects:
+      pack: 1.10
+      default: 0.90
+    individual_debuff:
+      type: soreness
+      probability: 0.16667  # 1/6 ≈ 16.7%
+      cooldown_days: 0
+      effect: soreness
+
+  - id: 6
+    name: "Yusef"
+    base_oph: 14.88
+    shift_hours: 8.5
+    shift_start: 9.0
+    role: warehouse
+    task_eligibility: all
+    call_off_probability: 0.035
+    max_ot_hours: 1.0
+    hustle_daily_cap: 7.0
+    bad_headspace_effects:
+      pack: 1.10
+      default: 0.90
+    individual_debuff:
+      type: family_needs
+      probability: 0.15
+      cooldown_days: 7
+      effect: lose_hours
+      hours_lost_range: [1.0, 2.0]
+
+tasks:
+  enabled:
+    - pick
+    - pack
+    - restock
+    - side_project
+    - management
+    - idle
+    - cycle_count
+  custom: []
+
+volume:
+  # Volt's real seasonal order ranges — set these to your actual numbers.
+  seasonal_ranges:
+    january:   [60, 100]
+    february:  [60, 100]
+    march:     [150, 250]
+    april:     [300, 450]
+    may:       [350, 500]
+    june:      [350, 500]
+    july:      [280, 400]
+    august:    [280, 400]
+    september: [250, 350]
+    october:   [200, 300]
+    november:  [150, 220]
+    december:  [60, 100]
+  weekly_curve:
+    monday:    [0.86, 1.00]
+    tuesday:   [0.71, 0.85]
+    wednesday: [0.56, 0.70]
+    thursday:  [0.41, 0.55]
+    friday:    [0.00, 0.40]
+
+business_rules:
+  management_daily_hours_required: 4.0
+  management_min_daily_hours: 1.5
+  management_backlog_week_threshold: 10.0
+  management_backlog_weekly_penalty: -50.0
+  ot_wall_clock_max: 1.0
+  ot_hard_stop_hour: 18.5
+  ot_trigger_orders_remaining: 10
+  cycle_count_weekly_hours: 3.0
+  cycle_count_max_overdue_weeks: 4
+  min_staffing_floor: 2
+  high_volume_day_orders: 400
+  high_volume_percentile: 0.75
+  target_daily_orders: null
+  order_incomplete_threshold: 0
+  max_call_offs_per_day: 2
+  max_call_offs_high_volume: 1
+
+# No reward overrides — use Clark defaults (which match Jack exactly)
+rewards: {}

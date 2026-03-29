@@ -1,1 +1,240 @@
-"""State builder: structured token dict for transformer input."""
+"""State builder: converts FacilityEnv state into structured token dicts for the transformer."""
+from __future__ import annotations
+
+import numpy as np
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from clark.config.schema import FacilityConfig
+    from clark.env.facility_env import FacilityEnv
+
+from clark.env.facility_env import ENV_STATE_SIZE, WORKER_STATE_SCALARS
+from clark.env.worker import SORENESS_HOUR_THRESHOLD
+from clark.env.episode_generator import DAY_START_HOUR, SEASONS
+
+
+class StateBuilder:
+    """
+    Converts a live FacilityEnv into structured token dicts for the transformer.
+
+    Output shapes:
+      worker_feats:    (N, 13)
+      task_feats:      (M, 3)
+      env_feats:       (15,)
+      worker_role_ids: (N,) int64
+      task_type_ids:   (M,) int64
+    """
+
+    # Canonical role → integer mapping
+    ROLE_IDS: dict[str, int] = {
+        "manager": 0,
+        "assistant_manager": 1,
+        "lead": 2,
+        "warehouse": 3,
+    }
+
+    def __init__(self, facility_config: "FacilityConfig"):
+        self.config = facility_config
+        self.N: int = facility_config.num_workers
+        self.M: int = facility_config.num_tasks
+        self.task_ids: list[str] = facility_config.task_ids
+        # task_id → column index in task dimension
+        self.task_type_ids: dict[str, int] = {
+            t_id: i for i, t_id in enumerate(self.task_ids)
+        }
+
+        # Pre-compute per-worker role IDs (stable; never changes during episode)
+        self._worker_role_ids: np.ndarray = np.array(
+            [self.ROLE_IDS.get(w.role, 3) for w in facility_config.workers],
+            dtype=np.int64,
+        )
+
+    # ── Public API ─────────────────────────────────────────────────────────────
+
+    def build(self, env: "FacilityEnv") -> dict:
+        """
+        Build a structured state dict from a live FacilityEnv after reset/step.
+
+        Returns:
+            {
+                "worker_feats":    np.ndarray (N, 13)  float32
+                "task_feats":      np.ndarray (M, 3)   float32
+                "env_feats":       np.ndarray (15,)    float32
+                "worker_role_ids": np.ndarray (N,)     int64
+                "task_type_ids":   np.ndarray (M,)     int64
+            }
+        """
+        return {
+            "worker_feats": self._build_worker_feats(env),
+            "task_feats": self._build_task_feats(env),
+            "env_feats": self._build_env_feats(env),
+            "worker_role_ids": self._worker_role_ids.copy(),
+            "task_type_ids": np.arange(self.M, dtype=np.int64),
+        }
+
+    def validate(self, state_dict: dict) -> bool:
+        """Check shapes and that no NaN values are present."""
+        expected_shapes = {
+            "worker_feats": (self.N, WORKER_STATE_SCALARS),
+            "task_feats": (self.M, 3),
+            "env_feats": (ENV_STATE_SIZE,),
+            "worker_role_ids": (self.N,),
+            "task_type_ids": (self.M,),
+        }
+        for key, shape in expected_shapes.items():
+            if key not in state_dict:
+                return False
+            arr = state_dict[key]
+            if arr.shape != shape:
+                return False
+            if np.issubdtype(arr.dtype, np.floating) and np.any(np.isnan(arr)):
+                return False
+        return True
+
+    # ── Worker features ────────────────────────────────────────────────────────
+
+    def _build_worker_feats(self, env: "FacilityEnv") -> np.ndarray:
+        """
+        13 scalar features per worker (same semantics as Jack's WORKER_STATE_SCALARS).
+
+        Feature index:
+          0  normalized OPH (base_oph / 30.0)
+          1  hours_worked / shift_hours
+          2  hours_remaining / shift_hours
+          3  generic_debuff (sleep+health, 1.0 if any active)
+          4  individual_debuff (1.0 if active)
+          5  fatigue flag (1.0 if fatigued)
+          6  is_picker (1.0 if designated picker today)
+          7  is_pack_only (1.0 if restricted)
+          8  soreness_progress (non_side_project_hours / SORENESS_HOUR_THRESHOLD)
+          9  management_hours / management_daily_hours_required
+         10  hustle_today_ratio (hustle_hours_today / hustle_daily_cap)
+         11  hustle_weekly_ratio (weekly_hustle_hours / hustle_weekly_threshold)
+         12  is_hustle_exhausted (1.0 or 0.0)
+        """
+        required = self.config.rules.management_daily_hours_required
+        feats = np.zeros((self.N, WORKER_STATE_SCALARS), dtype=np.float32)
+
+        for i, w in enumerate(env.episode.workers):
+            shift_h = max(0.01, w.shift_hours)
+            feats[i, 0] = w.base_oph / 30.0
+            feats[i, 1] = w.hours_worked / shift_h
+            feats[i, 2] = w.hours_remaining / shift_h
+            feats[i, 3] = 1.0 if (w.sleep_debuff != "normal" or w.health_debuff != "normal") else 0.0
+            feats[i, 4] = 1.0 if w.individual_debuff is not None else 0.0
+            feats[i, 5] = 1.0 if w.is_fatigued else 0.0
+            feats[i, 6] = 1.0 if w.is_picker else 0.0
+            feats[i, 7] = 1.0 if w.is_pack_only else 0.0
+            feats[i, 8] = (
+                w.non_side_project_hours / SORENESS_HOUR_THRESHOLD
+                if w.has_soreness else 0.0
+            )
+            feats[i, 9] = w.management_hours / max(0.01, required)
+            feats[i, 10] = w.hustle_hours_today / max(0.01, w.hustle_daily_cap)
+            feats[i, 11] = w.weekly_hustle_hours / max(0.01, w.hustle_weekly_threshold)
+            feats[i, 12] = 1.0 if w.is_hustle_exhausted else 0.0
+
+        return feats
+
+    # ── Task features ──────────────────────────────────────────────────────────
+
+    def _build_task_feats(self, env: "FacilityEnv") -> np.ndarray:
+        """
+        3 features per task:
+          0  demand_signal  — urgency/load (float 0-1)
+          1  availability_flag — 1.0 if any worker can do this task
+          2  task_type_id   — integer index (used as embedding key; stored as float)
+        """
+        feats = np.zeros((self.M, 3), dtype=np.float32)
+        orders_total = max(1, env.episode.total_orders)
+        orders_pending = env.orders_in_queue + env.orders_picked_not_audited
+
+        # Pre-compute which workers are available (not absent)
+        available_workers = [w for w in env.episode.workers if not w.is_absent]
+
+        for j, t_id in enumerate(self.task_ids):
+            # --- demand_signal ---
+            if t_id in ("pick", "pack"):
+                demand = min(1.0, orders_pending / orders_total)
+            elif t_id == "restock":
+                demand = max(0.0, 1.0 - env.restock_level)
+            elif t_id == "management":
+                required = self.config.rules.management_daily_hours_required
+                total_mgmt = sum(
+                    w.management_hours for w in env.episode.workers
+                    if w.worker_id in env._mgmt_eligible_ids
+                )
+                demand = max(0.0, min(1.0, 1.0 - total_mgmt / max(0.01, required)))
+            elif t_id == "idle":
+                demand = 0.0
+            else:
+                # side_project, cycle_count, receiving, etc. — moderate constant signal
+                demand = 0.5
+
+            feats[j, 0] = demand
+
+            # --- availability_flag ---
+            available = False
+            for w in available_workers:
+                if w.eligible_for(t_id) and not (w.is_pack_only and t_id != "pack"):
+                    available = True
+                    break
+            feats[j, 1] = 1.0 if available else 0.0
+
+            # --- task_type_id (as float for consistency; cast to int for embedding) ---
+            feats[j, 2] = float(j)
+
+        return feats
+
+    # ── Environment features ───────────────────────────────────────────────────
+
+    def _build_env_feats(self, env: "FacilityEnv") -> np.ndarray:
+        """
+        15 global environment features (mirrors _get_state() ENV block in FacilityEnv).
+
+          0   time_of_day_norm        (current_hour - DAY_START) / shift_span
+          1   orders_in_queue_norm    orders_in_queue / total_orders
+          2   orders_completed_norm   orders_completed / total_orders
+          3   orders_audited_norm     orders_picked_not_audited / total_orders
+          4   restock_remaining_norm  restock_remaining / restock_hours
+          5   side_project_progress   deliberate or filler progress normalized
+          6-9 season_one_hot          [winter, spring, summer, fall]
+         10   is_high_volume          (1.0 / 0.0)
+         11   management_progress     total_mgmt_hours / required
+         12   picker_needs_replacement (1.0 / 0.0)
+         13   restock_level           (0-1)
+         14   is_ot                   (1.0 / 0.0)
+        """
+        ep = env.episode
+        eod_hour = env._eod_hour
+        required = self.config.rules.management_daily_hours_required
+        total_orders = max(1, ep.total_orders)
+
+        feats = np.zeros(ENV_STATE_SIZE, dtype=np.float32)
+
+        feats[0] = (env.current_hour - DAY_START_HOUR) / max(0.01, eod_hour - DAY_START_HOUR)
+        feats[1] = env.orders_in_queue / total_orders
+        feats[2] = env.orders_completed / total_orders
+        feats[3] = env.orders_picked_not_audited / total_orders
+        feats[4] = env.restock_remaining / max(1.0, ep.restock_hours)
+
+        # Side project progress
+        if ep.has_deliberate_project and ep.deliberate_project_size > 0:
+            feats[5] = env.deliberate_progress / ep.deliberate_project_size
+        else:
+            feats[5] = env.filler_progress / 10.0
+
+        # Season one-hot (4 slots: indices 6-9)
+        season_idx = SEASONS.index(ep.season) if ep.season in SEASONS else 0
+        feats[6 + season_idx] = 1.0
+
+        feats[10] = 1.0 if ep.is_high_volume else 0.0
+
+        total_mgmt = env._get_effective_management_hours()
+        feats[11] = total_mgmt / max(0.01, required)
+
+        feats[12] = 1.0 if ep.picker_needs_replacement else 0.0
+        feats[13] = env.restock_level
+        feats[14] = 1.0 if env.is_ot else 0.0
+
+        return feats

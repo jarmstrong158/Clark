@@ -1,1 +1,1156 @@
-<!-- Clark Dashboard — to be built in Phase 6 -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Clark — Training Dashboard</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/chartjs-plugin-annotation/3.0.1/chartjs-plugin-annotation.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    background: #0f1117;
+    color: #e0e0e0;
+    padding: 20px;
+  }
+  h1 { color: #ffd700; margin-bottom: 8px; font-size: 1.8rem; }
+  h2 { color: #8ab4f8; margin-bottom: 10px; font-size: 1.1rem; font-weight: 500; }
+  .header { display: flex; align-items: baseline; gap: 20px; margin-bottom: 12px; }
+  .header .subtitle { color: #888; font-size: 0.9rem; }
+  .grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-bottom: 16px;
+  }
+  .grid-3 {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 16px;
+    margin-bottom: 16px;
+  }
+  .grid-4 {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr 1fr;
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+  .panel {
+    background: #1a1d27;
+    border: 1px solid #2a2d37;
+    border-radius: 8px;
+    padding: 16px;
+  }
+  .panel.full { grid-column: 1 / -1; }
+  .summary-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 12px;
+  }
+  .stat-card {
+    background: #22252f;
+    border-radius: 6px;
+    padding: 12px;
+    text-align: center;
+  }
+  .stat-card .label { font-size: 0.75rem; color: #888; text-transform: uppercase; }
+  .stat-card .value { font-size: 1.5rem; font-weight: 700; margin-top: 4px; }
+  .grade-A { color: #4caf50; }
+  .grade-B { color: #8bc34a; }
+  .grade-C { color: #ffc107; }
+  .grade-D { color: #ff9800; }
+  .grade-F { color: #f44336; }
+  .controls {
+    display: flex; gap: 12px; align-items: center; margin-bottom: 16px;
+  }
+  .controls label { color: #888; font-size: 0.85rem; }
+  .controls select, .controls input[type=file] {
+    background: #22252f; color: #e0e0e0; border: 1px solid #3a3d47;
+    border-radius: 4px; padding: 6px 10px; font-size: 0.85rem;
+  }
+  .debuff-list { font-size: 0.8rem; color: #ccc; max-height: 120px; overflow-y: auto; }
+  .debuff-list .debuff-item { margin-bottom: 4px; padding: 4px 8px; background: #22252f; border-radius: 4px; }
+  .debuff-item .worker-name { color: #8ab4f8; font-weight: 600; }
+  .debuff-item .debuff-type { color: #ff9800; }
+  .timeline-container { overflow-x: auto; }
+  canvas { max-width: 100%; }
+  .reward-breakdown { font-size: 0.8rem; }
+  .reward-breakdown table { width: 100%; border-collapse: collapse; }
+  .reward-breakdown td { padding: 3px 8px; border-bottom: 1px solid #2a2d37; }
+  .reward-breakdown td:last-child { text-align: right; font-family: monospace; }
+  .positive { color: #4caf50; }
+  .negative { color: #f44336; }
+  .no-data { color: #666; text-align: center; padding: 40px; font-style: italic; }
+  .season-card {
+    background: #22252f; border-radius: 6px; padding: 14px; text-align: center;
+  }
+  .season-card .season-name { font-size: 0.8rem; color: #888; text-transform: uppercase; margin-bottom: 6px; }
+  .season-card .season-winrate { font-size: 1.8rem; font-weight: 700; }
+  .season-card .season-detail { font-size: 0.7rem; color: #666; margin-top: 4px; }
+  .debuff-combo-table { font-size: 0.8rem; width: 100%; border-collapse: collapse; }
+  .debuff-combo-table th { color: #888; text-align: left; padding: 6px 8px; border-bottom: 1px solid #3a3d47; font-weight: 500; }
+  .debuff-combo-table td { padding: 5px 8px; border-bottom: 1px solid #2a2d37; }
+  .debuff-combo-table tr:hover { background: #22252f; }
+  /* Facility Config Summary panel */
+  .facility-config-panel {
+    background: #1a1d27;
+    border: 1px solid #2a2d37;
+    border-radius: 8px;
+    margin-bottom: 16px;
+  }
+  .facility-config-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 16px; cursor: pointer; user-select: none;
+  }
+  .facility-config-header:hover { background: #22252f; border-radius: 8px; }
+  .facility-config-header h2 { margin-bottom: 0; }
+  .facility-config-toggle { color: #888; font-size: 0.85rem; }
+  .facility-config-body { padding: 0 16px 14px 16px; display: none; }
+  .facility-config-body.open { display: block; }
+  .facility-config-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 10px;
+    margin-top: 8px;
+  }
+  .fc-item { background: #22252f; border-radius: 5px; padding: 8px 12px; font-size: 0.82rem; }
+  .fc-item .fc-label { color: #888; font-size: 0.72rem; text-transform: uppercase; margin-bottom: 3px; }
+  .fc-item .fc-value { color: #e0e0e0; }
+  /* Shift Plan table */
+  .shift-plan-table { font-size: 0.82rem; width: 100%; border-collapse: collapse; }
+  .shift-plan-table th { color: #888; text-align: left; padding: 5px 10px; border-bottom: 1px solid #3a3d47; font-weight: 500; text-transform: uppercase; font-size: 0.72rem; }
+  .shift-plan-table td { padding: 5px 10px; border-bottom: 1px solid #2a2d37; }
+  .shift-plan-table tr:hover { background: #22252f; }
+  .task-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 5px; vertical-align: middle; }
+  .hustle-yes { color: #4caf50; }
+  .hustle-no { color: #666; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1 id="dashTitle">CLARK</h1>
+  <span class="subtitle" id="dashSubtitle">Warehouse RL Training Dashboard</span>
+</div>
+
+<div class="controls">
+  <label>Load log:</label>
+  <input type="file" id="fileInput" accept=".json">
+  <label>Episode:</label>
+  <select id="episodeSelect"><option>No data loaded</option></select>
+</div>
+
+<!-- Facility Config Summary (collapsible) -->
+<div class="facility-config-panel" id="facilityConfigPanel" style="display:none">
+  <div class="facility-config-header" id="facilityConfigToggle">
+    <h2>Facility Config</h2>
+    <span class="facility-config-toggle" id="facilityConfigArrow">&#9660; expand</span>
+  </div>
+  <div class="facility-config-body" id="facilityConfigBody">
+    <div class="facility-config-grid" id="facilityConfigGrid"></div>
+  </div>
+</div>
+
+<!-- Training Progress Panel -->
+<div class="grid">
+  <div class="panel full">
+    <h2>Training Progress (Last 100 Days)</h2>
+    <div class="summary-grid" id="trainingStats">
+      <div class="stat-card"><div class="label">Total Episodes</div><div class="value" id="statTotalEp">—</div></div>
+      <div class="stat-card"><div class="label">Avg Reward</div><div class="value" id="statAvgReward">—</div></div>
+      <div class="stat-card"><div class="label">Win Rate</div><div class="value" id="statWinRate">—</div></div>
+      <div class="stat-card"><div class="label">OT Frequency</div><div class="value" id="statOTFreq">—</div></div>
+      <div class="stat-card"><div class="label">Best Reward</div><div class="value" id="statBestReward">—</div></div>
+      <div class="stat-card"><div class="label">Worst Reward</div><div class="value" id="statWorstReward">—</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="grid">
+  <div class="panel">
+    <h2>Reward Trend (Last 100)</h2>
+    <canvas id="rewardTrendChart" height="200"></canvas>
+  </div>
+  <div class="panel">
+    <h2>Win Rate Trend</h2>
+    <canvas id="winRateTrendChart" height="200"></canvas>
+  </div>
+</div>
+
+<!-- Year Overview Panel -->
+<div class="grid">
+  <div class="panel full">
+    <h2>Year Overview (Current Training Year)</h2>
+    <div id="yearOverview" class="no-data">Waiting for year data...</div>
+    <div style="margin-top:12px">
+      <canvas id="monthlyVolumeChart" height="120"></canvas>
+    </div>
+  </div>
+</div>
+
+<!-- Season Performance + Debuff Impact (training-level panels) -->
+<div class="grid">
+  <div class="panel">
+    <h2>Season Performance</h2>
+    <div class="grid-4" id="seasonGrid" style="margin-bottom:0">
+      <div class="season-card"><div class="season-name">Winter</div><div class="season-winrate" id="seasonWinter">—</div><div class="season-detail" id="seasonWinterDetail"></div></div>
+      <div class="season-card"><div class="season-name">Spring</div><div class="season-winrate" id="seasonSpring">—</div><div class="season-detail" id="seasonSpringDetail"></div></div>
+      <div class="season-card"><div class="season-name">Summer</div><div class="season-winrate" id="seasonSummer">—</div><div class="season-detail" id="seasonSummerDetail"></div></div>
+      <div class="season-card"><div class="season-name">Fall</div><div class="season-winrate" id="seasonFall">—</div><div class="season-detail" id="seasonFallDetail"></div></div>
+    </div>
+  </div>
+  <div class="panel">
+    <h2>Debuff Impact (F-Grade Episodes)</h2>
+    <canvas id="debuffImpactChart" height="200"></canvas>
+  </div>
+</div>
+
+<!-- Worst Debuff Combos -->
+<div class="grid">
+  <div class="panel full">
+    <h2>Worst Debuff Combinations (by Avg Reward)</h2>
+    <div id="debuffComboTable"><div class="no-data">No data</div></div>
+  </div>
+</div>
+
+<!-- Episode Detail Panels -->
+<div class="grid-3">
+  <div class="panel">
+    <h2>Episode Summary</h2>
+    <div class="summary-grid" id="episodeSummary">
+      <div class="stat-card"><div class="label">Grade</div><div class="value" id="epGrade">—</div></div>
+      <div class="stat-card"><div class="label">Orders</div><div class="value" id="epOrders">—</div></div>
+      <div class="stat-card"><div class="label">OT Hours</div><div class="value" id="epOT">—</div></div>
+      <div class="stat-card"><div class="label">Restock %</div><div class="value" id="epRestock">—</div></div>
+      <div class="stat-card"><div class="label">Season</div><div class="value" id="epSeason">—</div></div>
+      <div class="stat-card"><div class="label">Reward</div><div class="value" id="epReward">—</div></div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Debuffs Fired</h2>
+    <div class="debuff-list" id="debuffList"><div class="no-data">No data</div></div>
+  </div>
+
+  <div class="panel">
+    <h2>Reward Breakdown</h2>
+    <div class="reward-breakdown" id="rewardBreakdown"><div class="no-data">No data</div></div>
+  </div>
+</div>
+
+<!-- Today's Shift Plan -->
+<div class="panel full" id="shiftPlanPanel" style="display:none; margin-bottom:16px">
+  <h2>Today's Shift Plan (Step 0 Assignments)</h2>
+  <div id="shiftPlanContent"></div>
+</div>
+
+<!-- Worker Timeline -->
+<div class="panel full" style="margin-bottom:16px">
+  <h2>Worker Timeline</h2>
+  <div class="timeline-container" id="timelineContainer">
+    <svg id="timelineSvg" width="100%" height="280"></svg>
+  </div>
+</div>
+
+<!-- Per-Worker Utilization -->
+<div class="panel full" style="margin-bottom:16px">
+  <h2>Worker Utilization</h2>
+  <canvas id="utilizationChart" height="180"></canvas>
+</div>
+
+<div class="grid">
+  <div class="panel">
+    <h2>Order Queue Depth</h2>
+    <canvas id="orderChart" height="220"></canvas>
+  </div>
+  <div class="panel">
+    <h2>Running Reward</h2>
+    <canvas id="rewardChart" height="220"></canvas>
+  </div>
+</div>
+
+<script>
+// ─── Standard task color map (full vocab) ────────────────────────────────────
+const STANDARD_TASK_COLORS = {
+  pick:               '#4caf50',  // green
+  pack:               '#2196f3',  // blue
+  restock:            '#ff9800',  // orange
+  management:         '#9c27b0',  // purple
+  side_project:       '#00bcd4',  // teal
+  idle:               '#607d8b',  // grey
+  cycle_count:        '#f06292',  // pink
+  receiving:          '#ffeb3b',  // yellow
+  loading:            '#ff5722',  // deep orange
+  returns_processing: '#795548',  // brown
+  quality_check:      '#e91e63',  // pink-red
+  training:           '#8bc34a',  // light green
+};
+
+// Fallback palette for custom tasks not in STANDARD_TASK_COLORS
+const CUSTOM_TASK_PALETTE = [
+  '#26a69a', '#ab47bc', '#5c6bc0', '#ef5350', '#66bb6a',
+  '#ffa726', '#29b6f6', '#d4e157', '#ec407a', '#78909c',
+];
+
+// These are set dynamically once data is loaded
+let TASK_COLORS = Object.assign({}, STANDARD_TASK_COLORS);
+let TASK_ORDER = Object.keys(STANDARD_TASK_COLORS);
+let WORKER_NAMES = [];
+
+let logData = null;
+let charts = {};
+
+// ─── Derive runtime config from loaded log data ───────────────────────────────
+function deriveConfig() {
+  if (!logData) return;
+
+  const fc = logData.facility_config;
+
+  // --- Worker names ---
+  if (fc && fc.workers && Array.isArray(fc.workers) && fc.workers.length > 0) {
+    WORKER_NAMES = fc.workers.map(w => w.name || w.id || String(w));
+  } else {
+    // Infer from first episode's step data
+    WORKER_NAMES = inferWorkersFromData();
+  }
+
+  // --- Task order ---
+  if (fc && fc.tasks && Array.isArray(fc.tasks.enabled) && fc.tasks.enabled.length > 0) {
+    TASK_ORDER = fc.tasks.enabled;
+  } else {
+    TASK_ORDER = Object.keys(STANDARD_TASK_COLORS);
+  }
+
+  // --- Task colors: add custom tasks from config or data ---
+  TASK_COLORS = Object.assign({}, STANDARD_TASK_COLORS);
+  const allTasksInData = inferTasksFromData();
+  let paletteIdx = 0;
+  allTasksInData.forEach(t => {
+    if (!TASK_COLORS[t]) {
+      TASK_COLORS[t] = CUSTOM_TASK_PALETTE[paletteIdx % CUSTOM_TASK_PALETTE.length];
+      paletteIdx++;
+    }
+  });
+  // Also ensure all TASK_ORDER tasks have colors
+  TASK_ORDER.forEach(t => {
+    if (!TASK_COLORS[t]) {
+      TASK_COLORS[t] = CUSTOM_TASK_PALETTE[paletteIdx % CUSTOM_TASK_PALETTE.length];
+      paletteIdx++;
+    }
+  });
+
+  // Update the page title with facility name
+  const facilityName = (fc && fc.facility && fc.facility.name) || (fc && fc.name) || null;
+  if (facilityName) {
+    document.getElementById('dashTitle').textContent = facilityName.toUpperCase();
+    document.title = facilityName + ' — Training Dashboard';
+    document.getElementById('dashSubtitle').textContent = 'Warehouse RL Training Dashboard';
+  }
+}
+
+function inferWorkersFromData() {
+  // Walk episodes looking for worker names in step data
+  const nameSet = new Set();
+  if (!logData || !logData.episodes) return [];
+  for (const ep of logData.episodes) {
+    if (!ep.steps) continue;
+    for (const step of ep.steps) {
+      if (!step.workers) continue;
+      for (const w of step.workers) {
+        if (w.name) nameSet.add(w.name);
+      }
+    }
+    if (nameSet.size > 0) break; // first episode with data is enough
+  }
+  return Array.from(nameSet);
+}
+
+function inferTasksFromData() {
+  // Collect all task IDs used in any step
+  const taskSet = new Set();
+  if (!logData || !logData.episodes) return [];
+  for (const ep of logData.episodes.slice(-20)) { // sample last 20 eps
+    if (!ep.steps) continue;
+    for (const step of ep.steps) {
+      if (!step.workers) continue;
+      for (const w of step.workers) {
+        if (w.task) taskSet.add(w.task);
+      }
+    }
+  }
+  return Array.from(taskSet);
+}
+
+// ─── Facility Config Summary panel ───────────────────────────────────────────
+function renderFacilityConfig() {
+  const panel = document.getElementById('facilityConfigPanel');
+  const grid = document.getElementById('facilityConfigGrid');
+  const fc = logData && logData.facility_config;
+
+  if (!fc) {
+    panel.style.display = 'none';
+    return;
+  }
+
+  panel.style.display = 'block';
+
+  const facilityName = (fc.facility && fc.facility.name) || fc.name || 'Unknown';
+  const nWorkers = WORKER_NAMES.length;
+  const nTasks = TASK_ORDER.length;
+
+  // Volume profile: find peak month
+  let peakMonth = '—';
+  let peakRange = '—';
+  if (fc.volume && fc.volume.seasonal_ranges) {
+    const sr = fc.volume.seasonal_ranges;
+    let bestPeak = -1;
+    Object.entries(sr).forEach(([month, range]) => {
+      const hi = Array.isArray(range) ? range[1] : 0;
+      if (hi > bestPeak) { bestPeak = hi; peakMonth = month.charAt(0).toUpperCase() + month.slice(1); peakRange = Array.isArray(range) ? range[0] + '–' + range[1] : '—'; }
+    });
+  }
+
+  // Business rules
+  const br = fc.business_rules || {};
+  const mgmtTarget = br.management_daily_hours_required != null ? br.management_daily_hours_required + 'h/day' : '—';
+  const otLimit = br.ot_wall_clock_max != null ? br.ot_wall_clock_max + 'h' : '—';
+  const ccHours = br.cycle_count_weekly_hours != null ? br.cycle_count_weekly_hours + 'h/wk' : '—';
+  const ccMaxOverdue = br.cycle_count_max_overdue_weeks != null ? br.cycle_count_max_overdue_weeks + ' wks' : '—';
+
+  const items = [
+    { label: 'Facility', value: facilityName },
+    { label: 'Workers', value: nWorkers + ' (' + WORKER_NAMES.join(', ') + ')' },
+    { label: 'Tasks Enabled', value: nTasks + ' (' + TASK_ORDER.join(', ') + ')' },
+    { label: 'Peak Month', value: peakMonth },
+    { label: 'Peak Volume Range', value: peakRange + ' orders/day' },
+    { label: 'Mgmt Target', value: mgmtTarget },
+    { label: 'OT Limit', value: otLimit },
+    { label: 'Cycle Count Weekly', value: ccHours },
+    { label: 'CC Max Overdue', value: ccMaxOverdue },
+  ];
+
+  grid.innerHTML = items.map(item =>
+    `<div class="fc-item"><div class="fc-label">${item.label}</div><div class="fc-value">${item.value}</div></div>`
+  ).join('');
+}
+
+// Toggle collapse for facility config panel
+document.getElementById('facilityConfigToggle').addEventListener('click', () => {
+  const body = document.getElementById('facilityConfigBody');
+  const arrow = document.getElementById('facilityConfigArrow');
+  const isOpen = body.classList.contains('open');
+  body.classList.toggle('open', !isOpen);
+  arrow.innerHTML = isOpen ? '&#9660; expand' : '&#9650; collapse';
+});
+
+// ─── File loading ─────────────────────────────────────────────────────────────
+document.getElementById('fileInput').addEventListener('change', e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    try {
+      logData = JSON.parse(ev.target.result);
+      loadDashboard();
+    } catch(err) { alert('Error parsing JSON: ' + err.message); }
+  };
+  reader.readAsText(file);
+});
+
+// year_snapshot.json is written once per completed year — always a full year of data
+const paths = [
+  '/clark/data/year_snapshot.json',
+  '/data/year_snapshot.json',
+  '/volt_sim/data/year_snapshot.json',
+];
+
+let autoFollowLatest = true;
+let activeFetchPath = null;
+const REFRESH_INTERVAL = 10000;
+
+function loadDashboard() {
+  const sel = document.getElementById('episodeSelect');
+  const wasFollowingLatest = autoFollowLatest || sel.value === '' || parseInt(sel.value) === logData.episodes.length - 2;
+
+  deriveConfig();
+  renderFacilityConfig();
+  populateEpisodeSelect();
+  renderTrainingStats();
+  renderTrainingCharts();
+  renderYearOverview();
+  renderSeasonPerformance();
+  renderDebuffImpact();
+  renderDebuffCombos();
+
+  if (wasFollowingLatest) {
+    sel.value = sel.options[sel.options.length - 1].value;
+    renderEpisode(logData.episodes[logData.episodes.length - 1]);
+  }
+}
+
+async function fetchData() {
+  const tryPaths = activeFetchPath ? [activeFetchPath] : paths;
+  for (const p of tryPaths) {
+    try {
+      const r = await fetch(p, { cache: 'no-store' });
+      if (!r.ok) continue;
+      const text = await r.text();
+      try {
+        const parsed = JSON.parse(text);
+        if (parsed.episodes && parsed.episodes.length > 0) {
+          logData = parsed;
+          activeFetchPath = p;
+          loadDashboard();
+          return true;
+        }
+      } catch(parseErr) {
+        // JSON was mid-write or corrupt — skip this cycle, try again next refresh
+        if (activeFetchPath) return false;  // known path, just wait
+      }
+    } catch(e) {}
+  }
+  return false;
+}
+
+let retrying = false;
+(async function autoLoad() {
+  for (let attempt = 0; attempt < 10; attempt++) {
+    const loaded = await fetchData();
+    if (loaded) return;
+    await new Promise(r => setTimeout(r, 2000));
+  }
+  // Didn't load yet — that's fine, the interval will keep trying
+  retrying = true;
+})();
+
+setInterval(async () => {
+  await fetchData();
+}, REFRESH_INTERVAL);
+
+// Attach episode select listener once
+document.getElementById('episodeSelect').addEventListener('change', () => {
+  autoFollowLatest = false;
+  const sel = document.getElementById('episodeSelect');
+  renderEpisode(logData.episodes[parseInt(sel.value)]);
+});
+
+function populateEpisodeSelect() {
+  const sel = document.getElementById('episodeSelect');
+  sel.innerHTML = '';
+  logData.episodes.forEach((ep, i) => {
+    const opt = document.createElement('option');
+    opt.value = i;
+    const hdr = ep.header;
+    opt.textContent = `Ep ${ep.episode} — ${hdr.day_of_week} ${hdr.month} (${hdr.season}) — Grade ${ep.footer.grade}`;
+    sel.appendChild(opt);
+  });
+}
+
+function renderTrainingStats() {
+  if (!logData || !logData.training_stats) return;
+  const s = logData.training_stats;
+  document.getElementById('statTotalEp').textContent = s.total_episodes ?? '—';
+  document.getElementById('statAvgReward').textContent = s.avg_reward_last_100 ?? '—';
+  document.getElementById('statWinRate').textContent = s.win_rate_last_100 != null ? (s.win_rate_last_100 * 100).toFixed(1) + '%' : '—';
+  document.getElementById('statOTFreq').textContent = s.ot_frequency_last_100 != null ? (s.ot_frequency_last_100 * 100).toFixed(1) + '%' : '—';
+  document.getElementById('statBestReward').textContent = s.best_reward_ever ?? '—';
+  document.getElementById('statWorstReward').textContent = s.worst_reward_ever ?? '—';
+}
+
+function renderTrainingCharts() {
+  if (!logData || !logData.episodes) return;
+  const rewards = logData.episodes.map(e => e.footer.reward);
+  const episodes = logData.episodes.map(e => e.episode);
+
+  // Rolling win rate over last 50 episodes
+  const ROLLING = 50;
+  const winRates = [];
+  const winBuf = [];
+  logData.episodes.forEach((e, i) => {
+    winBuf.push(e.footer.grade === 'A' || e.footer.grade === 'B' ? 1 : 0);
+    if (winBuf.length > ROLLING) winBuf.shift();
+    winRates.push(winBuf.reduce((a,b) => a+b, 0) / winBuf.length);
+  });
+
+  if (charts.rewardTrend) charts.rewardTrend.destroy();
+  charts.rewardTrend = new Chart(document.getElementById('rewardTrendChart'), {
+    type: 'line',
+    data: {
+      labels: episodes,
+      datasets: [{ label: 'Episode Reward', data: rewards, borderColor: '#ffd700',
+        backgroundColor: 'rgba(255,215,0,0.1)', fill: true, pointRadius: 1, tension: 0.3 }]
+    },
+    options: { responsive: true, scales: { x: { display: true, ticks: { color: '#666' } },
+      y: { ticks: { color: '#666' } } }, plugins: { legend: { display: false } } }
+  });
+
+  if (charts.winRateTrend) charts.winRateTrend.destroy();
+  charts.winRateTrend = new Chart(document.getElementById('winRateTrendChart'), {
+    type: 'line',
+    data: {
+      labels: episodes,
+      datasets: [{ label: 'Win Rate', data: winRates, borderColor: '#4caf50',
+        backgroundColor: 'rgba(76,175,80,0.1)', fill: true, pointRadius: 1, tension: 0.3 }]
+    },
+    options: { responsive: true, scales: { x: { display: true, ticks: { color: '#666' } },
+      y: { min: 0, max: 1, ticks: { color: '#666', callback: v => (v*100)+'%' } } },
+      plugins: { legend: { display: false } } }
+  });
+}
+
+// --- Season Performance Breakdown ---
+function renderSeasonPerformance() {
+  if (!logData || !logData.episodes) return;
+  const seasons = { winter: { wins: 0, total: 0 }, spring: { wins: 0, total: 0 },
+                     summer: { wins: 0, total: 0 }, fall: { wins: 0, total: 0 } };
+  logData.episodes.forEach(ep => {
+    const s = ep.header.season;
+    if (seasons[s] !== undefined) {
+      seasons[s].total++;
+      if (ep.footer.grade === 'A' || ep.footer.grade === 'B') seasons[s].wins++;
+    }
+  });
+
+  const colorForRate = r => r >= 0.8 ? '#4caf50' : r >= 0.6 ? '#8bc34a' : r >= 0.4 ? '#ffc107' : '#f44336';
+
+  for (const [season, data] of Object.entries(seasons)) {
+    const rate = data.total > 0 ? data.wins / data.total : 0;
+    const name = season.charAt(0).toUpperCase() + season.slice(1);
+    const el = document.getElementById('season' + name);
+    const detailEl = document.getElementById('season' + name + 'Detail');
+    if (el) {
+      el.textContent = (rate * 100).toFixed(0) + '%';
+      el.style.color = colorForRate(rate);
+    }
+    if (detailEl) {
+      detailEl.textContent = `${data.wins}W / ${data.total} episodes`;
+    }
+  }
+}
+
+// --- Debuff Impact Tracker ---
+function renderDebuffImpact() {
+  if (!logData || !logData.episodes) return;
+
+  const debuffCounts = {};
+  logData.episodes.forEach(ep => {
+    if (ep.footer.grade !== 'F') return;
+    if (!ep.header.debuffs_fired) return;
+    ep.header.debuffs_fired.forEach(d => {
+      if (d.sleep && d.sleep !== 'normal') {
+        const key = `sleep: ${d.sleep}`;
+        debuffCounts[key] = (debuffCounts[key] || 0) + 1;
+      }
+      if (d.health && d.health !== 'normal') {
+        const key = `health: ${d.health}`;
+        debuffCounts[key] = (debuffCounts[key] || 0) + 1;
+      }
+      if (d.individual) {
+        const key = `indiv: ${d.individual}`;
+        debuffCounts[key] = (debuffCounts[key] || 0) + 1;
+      }
+    });
+  });
+
+  const sorted = Object.entries(debuffCounts).sort((a,b) => b[1] - a[1]).slice(0, 10);
+
+  if (charts.debuffImpact) charts.debuffImpact.destroy();
+  const canvas = document.getElementById('debuffImpactChart');
+  const noDataEl = document.getElementById('debuffImpactNoData');
+  if (noDataEl) noDataEl.remove();
+
+  if (sorted.length === 0) {
+    canvas.parentElement.querySelector('h2').insertAdjacentHTML('afterend',
+      '<div class="no-data" id="debuffImpactNoData">No F-grade episodes yet</div>');
+    return;
+  }
+
+  charts.debuffImpact = new Chart(canvas, {
+    type: 'bar',
+    data: {
+      labels: sorted.map(s => s[0]),
+      datasets: [{
+        label: 'Appearances in F-Grade Episodes',
+        data: sorted.map(s => s[1]),
+        backgroundColor: sorted.map((_, i) => {
+          const colors = ['#f44336','#ff5722','#ff9800','#ffc107','#ffeb3b','#cddc39','#8bc34a','#4caf50','#009688','#00bcd4'];
+          return colors[i % colors.length];
+        }),
+        borderRadius: 4,
+      }]
+    },
+    options: {
+      indexAxis: 'y',
+      responsive: true,
+      scales: {
+        x: { ticks: { color: '#666' }, beginAtZero: true },
+        y: { ticks: { color: '#ccc', font: { size: 11 } } }
+      },
+      plugins: { legend: { display: false } }
+    }
+  });
+}
+
+// --- Worst Debuff Combinations ---
+function renderDebuffCombos() {
+  if (!logData || !logData.episodes) return;
+
+  const comboMap = {};
+  logData.episodes.forEach(ep => {
+    if (!ep.header.debuffs_fired || ep.header.debuffs_fired.length === 0) return;
+
+    const parts = [];
+    ep.header.debuffs_fired.forEach(d => {
+      const worker = d.worker;
+      const debuffs = [];
+      if (d.sleep && d.sleep !== 'normal') debuffs.push(d.sleep);
+      if (d.health && d.health !== 'normal') debuffs.push(d.health);
+      if (d.individual) debuffs.push(d.individual);
+      if (debuffs.length > 0) parts.push(`${worker}(${debuffs.join('+')})`);
+    });
+
+    if (parts.length < 2) return;
+    const sig = parts.sort().join(' | ');
+    if (!comboMap[sig]) comboMap[sig] = { rewards: [], combo: parts.join(', '), count: 0 };
+    comboMap[sig].rewards.push(ep.footer.reward);
+    comboMap[sig].count++;
+  });
+
+  const combos = Object.values(comboMap)
+    .filter(c => c.count >= 2)
+    .map(c => ({
+      combo: c.combo,
+      count: c.count,
+      avgReward: c.rewards.reduce((a,b) => a+b, 0) / c.rewards.length,
+      minReward: Math.min(...c.rewards),
+    }))
+    .sort((a,b) => a.avgReward - b.avgReward)
+    .slice(0, 5);
+
+  const container = document.getElementById('debuffComboTable');
+  if (combos.length === 0) {
+    container.innerHTML = '<div class="no-data">Not enough data yet (need multi-debuff episodes with 2+ occurrences)</div>';
+    return;
+  }
+
+  let html = '<table class="debuff-combo-table"><thead><tr><th>Debuff Combination</th><th>Episodes</th><th>Avg Reward</th><th>Worst</th></tr></thead><tbody>';
+  combos.forEach(c => {
+    const avgColor = c.avgReward >= 0 ? '#4caf50' : '#f44336';
+    html += `<tr>
+      <td style="max-width:500px;word-wrap:break-word">${c.combo}</td>
+      <td>${c.count}</td>
+      <td style="color:${avgColor};font-family:monospace">${c.avgReward.toFixed(1)}</td>
+      <td style="color:#f44336;font-family:monospace">${c.minReward.toFixed(1)}</td>
+    </tr>`;
+  });
+  html += '</tbody></table>';
+  container.innerHTML = html;
+}
+
+// --- Year Overview ---
+function renderYearOverview() {
+  if (!logData || !logData.episodes || logData.episodes.length < 20) {
+    document.getElementById('yearOverview').innerHTML = '<div class="no-data">Need at least 20 days of data</div>';
+    return;
+  }
+
+  const eps = logData.episodes;
+
+  // Summary stats
+  const totalDays = eps.length;
+  const totalShipped = eps.reduce((s, e) => s + e.footer.orders_shipped, 0);
+  const totalOrders = eps.reduce((s, e) => s + e.footer.orders_total, 0);
+  const gradeA = eps.filter(e => e.footer.grade === 'A').length;
+  const gradeF = eps.filter(e => e.footer.grade === 'F').length;
+  const otDays = eps.filter(e => e.footer.ot_hours > 0).length;
+
+  // Cycle count compliance from year_summary (written at year-end)
+  const ys = (logData && logData.year_summary) || {};
+  const ccOverdue = ys.cycle_counts_overdue_final != null ? ys.cycle_counts_overdue_final : null;
+  const ccBreakdown = ys.year_reward_breakdown || {};
+  const ccWeeksComplete = ccBreakdown.cycle_count_week_complete != null
+    ? Math.round(ccBreakdown.cycle_count_week_complete / 20)   // 20 pts per week
+    : null;
+  const ccWeeksMissed = ccBreakdown.cycle_count_week_missed != null
+    ? Math.round(Math.abs(ccBreakdown.cycle_count_week_missed) / 15)  // 15 pts per miss
+    : null;
+  const ccCritical = (ccBreakdown.cycle_count_critical_overdue || 0) < 0;
+
+  const ccOverdueColor = ccOverdue === null ? '#888'
+    : ccOverdue === 0 ? '#4caf50'
+    : ccOverdue <= 4  ? '#ffc107'
+    : '#f44336';
+
+  const ccCompleteHtml = ccWeeksComplete !== null
+    ? `<div class="stat-card"><div class="label">CC Weeks Done</div><div class="value" style="color:#4caf50">${ccWeeksComplete}</div></div>`
+    : '';
+  const ccMissedHtml = ccWeeksMissed !== null
+    ? `<div class="stat-card"><div class="label">CC Weeks Missed</div><div class="value" style="color:${ccWeeksMissed > 4 ? '#f44336' : ccWeeksMissed > 0 ? '#ffc107' : '#4caf50'}">${ccWeeksMissed}</div></div>`
+    : '';
+  const ccOverdueHtml = ccOverdue !== null
+    ? `<div class="stat-card"><div class="label">CC Overdue (EOY)</div><div class="value" style="color:${ccOverdueColor}">${ccOverdue}wk${ccCritical ? ' &#9888;' : ''}</div></div>`
+    : '';
+
+  document.getElementById('yearOverview').innerHTML = `
+    <div class="summary-grid">
+      <div class="stat-card"><div class="label">Days Logged</div><div class="value">${totalDays}</div></div>
+      <div class="stat-card"><div class="label">Orders Shipped</div><div class="value">${totalShipped.toLocaleString()}</div></div>
+      <div class="stat-card"><div class="label">Completion Rate</div><div class="value">${(totalShipped/Math.max(1,totalOrders)*100).toFixed(1)}%</div></div>
+      <div class="stat-card"><div class="label">A-Grade Days</div><div class="value grade-A">${gradeA} (${(gradeA/totalDays*100).toFixed(0)}%)</div></div>
+      <div class="stat-card"><div class="label">F-Grade Days</div><div class="value grade-F">${gradeF}</div></div>
+      <div class="stat-card"><div class="label">OT Days</div><div class="value">${otDays} (${(otDays/totalDays*100).toFixed(0)}%)</div></div>
+      ${ccCompleteHtml}${ccMissedHtml}${ccOverdueHtml}
+    </div>
+  `;
+
+  // Monthly volume bar chart
+  const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const monthData = monthNames.map((m, i) => {
+    const monthEps = eps.filter(e => e.header.month && e.header.month.startsWith(m));
+    const shipped = monthEps.reduce((s, e) => s + e.footer.orders_shipped, 0);
+    const total = monthEps.reduce((s, e) => s + e.footer.orders_total, 0);
+    return { shipped, total, days: monthEps.length };
+  });
+
+  if (charts.monthlyVolume) charts.monthlyVolume.destroy();
+  charts.monthlyVolume = new Chart(document.getElementById('monthlyVolumeChart'), {
+    type: 'bar',
+    data: {
+      labels: monthNames,
+      datasets: [
+        { label: 'Shipped', data: monthData.map(d => d.shipped), backgroundColor: '#4caf50', borderRadius: 3 },
+        { label: 'Total', data: monthData.map(d => d.total), backgroundColor: '#2a2d37', borderRadius: 3 },
+      ]
+    },
+    options: {
+      responsive: true,
+      scales: {
+        x: { ticks: { color: '#888' } },
+        y: { ticks: { color: '#666' }, beginAtZero: true }
+      },
+      plugins: { legend: { labels: { color: '#ccc' } } }
+    }
+  });
+}
+
+function renderEpisode(ep) {
+  if (!ep) return;
+  const f = ep.footer;
+  const h = ep.header;
+
+  // Summary
+  const gradeEl = document.getElementById('epGrade');
+  gradeEl.textContent = f.grade;
+  gradeEl.className = 'value grade-' + f.grade;
+  document.getElementById('epOrders').textContent = f.orders_shipped + '/' + f.orders_total;
+  document.getElementById('epOT').textContent = f.ot_hours + 'h';
+  document.getElementById('epRestock').textContent = f.restock_pct + '%';
+  document.getElementById('epSeason').textContent = h.season;
+  document.getElementById('epReward').textContent = f.reward;
+
+  // Debuffs
+  const debuffDiv = document.getElementById('debuffList');
+  if (h.debuffs_fired && h.debuffs_fired.length > 0) {
+    debuffDiv.innerHTML = h.debuffs_fired.map(d => {
+      let parts = [];
+      if (d.sleep !== 'normal') parts.push(`sleep: ${d.sleep}`);
+      if (d.health !== 'normal') parts.push(`health: ${d.health}`);
+      if (d.individual) parts.push(`${d.individual}`);
+      return `<div class="debuff-item"><span class="worker-name">${d.worker}</span> — <span class="debuff-type">${parts.join(', ')}</span></div>`;
+    }).join('');
+  } else {
+    debuffDiv.innerHTML = '<div class="debuff-item">No debuffs fired</div>';
+  }
+
+  // Reward breakdown
+  const rbDiv = document.getElementById('rewardBreakdown');
+  if (f.reward_breakdown) {
+    const rows = Object.entries(f.reward_breakdown)
+      .sort((a,b) => b[1] - a[1])
+      .map(([k,v]) => `<tr><td>${k.replace(/_/g,' ')}</td><td class="${v >= 0 ? 'positive' : 'negative'}">${v >= 0 ? '+' : ''}${v.toFixed(1)}</td></tr>`)
+      .join('');
+    rbDiv.innerHTML = `<table>${rows}</table>`;
+  }
+
+  // Shift Plan
+  renderShiftPlan(ep);
+
+  // Worker Timeline
+  renderTimeline(ep);
+
+  // Worker Utilization
+  renderUtilization(ep);
+
+  // Order queue chart with projected completion
+  renderOrderChart(ep);
+
+  // Running reward chart
+  renderRunningReward(ep);
+}
+
+// --- Shift Plan Panel ---
+function renderShiftPlan(ep) {
+  const panel = document.getElementById('shiftPlanPanel');
+  const content = document.getElementById('shiftPlanContent');
+
+  // Look for first step's assignments
+  const step0 = ep.steps && ep.steps.length > 0 ? ep.steps[0] : null;
+  if (!step0 || !step0.workers || step0.workers.length === 0) {
+    panel.style.display = 'none';
+    return;
+  }
+
+  panel.style.display = 'block';
+
+  const hour0 = step0.hour;
+  const hh = Math.floor(hour0);
+  const mm = Math.round((hour0 - hh) * 60);
+  const timeStr = `${hh}:${mm.toString().padStart(2,'0')}`;
+
+  let html = `<p style="color:#888;font-size:0.8rem;margin-bottom:8px">Assignments at shift start (${timeStr})</p>`;
+  html += '<table class="shift-plan-table"><thead><tr><th>Worker</th><th>Task</th><th>Hustle</th></tr></thead><tbody>';
+
+  step0.workers.forEach(w => {
+    const color = TASK_COLORS[w.task] || '#888';
+    const hustleLabel = w.hustle
+      ? '<span class="hustle-yes">Yes</span>'
+      : '<span class="hustle-no">No</span>';
+    html += `<tr>
+      <td>${w.name || '—'}</td>
+      <td><span class="task-dot" style="background:${color}"></span>${w.task || '—'}</td>
+      <td>${hustleLabel}</td>
+    </tr>`;
+  });
+
+  html += '</tbody></table>';
+  content.innerHTML = html;
+}
+
+// --- Worker Timeline ---
+function renderTimeline(ep) {
+  const svg = d3.select('#timelineSvg');
+  svg.selectAll('*').remove();
+
+  if (!ep.steps || ep.steps.length === 0) {
+    svg.append('text').attr('x', 400).attr('y', 140).attr('fill', '#666')
+      .attr('text-anchor', 'middle').text('No step data available');
+    return;
+  }
+
+  // Use dynamic worker names
+  const workerNames = WORKER_NAMES.length > 0 ? WORKER_NAMES : inferWorkersFromData();
+  if (workerNames.length === 0) {
+    svg.append('text').attr('x', 400).attr('y', 140).attr('fill', '#666')
+      .attr('text-anchor', 'middle').text('No worker data available');
+    return;
+  }
+
+  const svgHeight = Math.max(260, workerNames.length * 36 + 60);
+  const margin = { top: 30, right: 20, bottom: 30, left: 80 };
+  const width = 900 - margin.left - margin.right;
+  const height = svgHeight - margin.top - margin.bottom;
+  const g = svg.attr('width', 920).attr('height', svgHeight)
+    .append('g').attr('transform', `translate(${margin.left},${margin.top})`);
+
+  const hours = ep.steps.map(s => s.hour);
+  const x = d3.scaleLinear().domain([d3.min(hours), d3.max(hours)]).range([0, width]);
+  const y = d3.scaleBand().domain(workerNames).range([0, height]).padding(0.15);
+
+  g.append('g').attr('transform', `translate(0,${height})`)
+    .call(d3.axisBottom(x).ticks(10).tickFormat(h => {
+      const hr = Math.floor(h); const min = Math.round((h - hr) * 60);
+      return `${hr}:${min.toString().padStart(2,'0')}`;
+    })).selectAll('text').attr('fill', '#888');
+
+  g.append('g').call(d3.axisLeft(y)).selectAll('text').attr('fill', '#ccc').style('font-size', '11px');
+
+  const barHeight = y.bandwidth();
+  const stepWidth = ep.steps.length > 1 ? x(ep.steps[1].hour) - x(ep.steps[0].hour) : width / 10;
+
+  ep.steps.forEach(step => {
+    step.workers.forEach(w => {
+      if (!y(w.name)) return;
+      g.append('rect')
+        .attr('x', x(step.hour))
+        .attr('y', y(w.name))
+        .attr('width', Math.max(1, stepWidth - 1))
+        .attr('height', barHeight)
+        .attr('fill', TASK_COLORS[w.task] || '#333')
+        .attr('rx', 2);
+    });
+  });
+
+  // Legend: only show tasks that appear in this episode
+  const tasksSeen = new Set();
+  ep.steps.forEach(s => s.workers && s.workers.forEach(w => w.task && tasksSeen.add(w.task)));
+  const legendTasks = TASK_ORDER.filter(t => tasksSeen.has(t));
+  // Add any seen tasks not in TASK_ORDER
+  tasksSeen.forEach(t => { if (!legendTasks.includes(t)) legendTasks.push(t); });
+
+  const legend = g.append('g').attr('transform', `translate(0, -20)`);
+  let lx = 0;
+  legendTasks.forEach(task => {
+    const color = TASK_COLORS[task] || '#555';
+    legend.append('rect').attr('x', lx).attr('y', 0).attr('width', 12).attr('height', 12)
+      .attr('fill', color).attr('rx', 2);
+    legend.append('text').attr('x', lx + 16).attr('y', 10).attr('fill', '#ccc')
+      .style('font-size', '11px').text(task);
+    lx += task.length * 7 + 30;
+  });
+}
+
+// --- Per-Worker Utilization Bars ---
+function renderUtilization(ep) {
+  if (!ep.steps || ep.steps.length === 0) return;
+
+  const workerNames = WORKER_NAMES.length > 0 ? WORKER_NAMES : inferWorkersFromData();
+  if (workerNames.length === 0) return;
+
+  // Build active task order from this episode
+  const tasksSeen = new Set();
+  ep.steps.forEach(s => s.workers && s.workers.forEach(w => w.task && tasksSeen.add(w.task)));
+  const activeOrder = TASK_ORDER.filter(t => tasksSeen.has(t));
+  tasksSeen.forEach(t => { if (!activeOrder.includes(t)) activeOrder.push(t); });
+
+  // Count steps per task per worker
+  const taskCounts = {};
+  workerNames.forEach(name => {
+    taskCounts[name] = {};
+    activeOrder.forEach(t => taskCounts[name][t] = 0);
+  });
+
+  ep.steps.forEach(step => {
+    step.workers.forEach(w => {
+      if (taskCounts[w.name] !== undefined) {
+        if (taskCounts[w.name][w.task] !== undefined) {
+          taskCounts[w.name][w.task]++;
+        } else {
+          taskCounts[w.name][w.task] = 1;
+        }
+      }
+    });
+  });
+
+  const totalSteps = ep.steps.length;
+  const datasets = activeOrder.map(task => ({
+    label: task,
+    data: workerNames.map(name => totalSteps > 0 ? (taskCounts[name][task] / totalSteps * 100).toFixed(1) : 0),
+    backgroundColor: TASK_COLORS[task] || '#555',
+    borderRadius: 2,
+  }));
+
+  if (charts.utilization) charts.utilization.destroy();
+  charts.utilization = new Chart(document.getElementById('utilizationChart'), {
+    type: 'bar',
+    data: { labels: workerNames, datasets },
+    options: {
+      indexAxis: 'y',
+      responsive: true,
+      scales: {
+        x: { stacked: true, max: 100, ticks: { color: '#666', callback: v => v + '%' } },
+        y: { stacked: true, ticks: { color: '#ccc' } }
+      },
+      plugins: {
+        legend: { labels: { color: '#ccc', font: { size: 11 } } },
+        tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}: ${ctx.raw}%` } }
+      }
+    }
+  });
+}
+
+// --- Order chart with projected EOD completion ---
+function renderOrderChart(ep) {
+  if (!ep.steps || ep.steps.length === 0) return;
+
+  const labels = ep.steps.map(s => {
+    const h = Math.floor(s.hour);
+    const m = Math.round((s.hour - h) * 60);
+    return `${h}:${m.toString().padStart(2,'0')}`;
+  });
+
+  // Calculate projected completion at each step
+  const totalOrders = ep.header.total_orders;
+  const projectedCompletion = [];
+  ep.steps.forEach((s, i) => {
+    if (i === 0 || s.orders_completed === 0) {
+      projectedCompletion.push(null);
+      return;
+    }
+    const hoursElapsed = s.hour - ep.steps[0].hour;
+    if (hoursElapsed <= 0) { projectedCompletion.push(null); return; }
+    const pace = s.orders_completed / hoursElapsed;
+    const hoursLeft = Math.max(0, 17.5 - s.hour);
+    const projected = s.orders_completed + pace * hoursLeft;
+    projectedCompletion.push(Math.min(Math.round(projected), totalOrders * 1.2));
+  });
+
+  if (charts.orderChart) charts.orderChart.destroy();
+  charts.orderChart = new Chart(document.getElementById('orderChart'), {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        { label: 'Orders In Queue', data: ep.steps.map(s => s.orders_remaining),
+          borderColor: '#f44336', backgroundColor: 'rgba(244,67,54,0.1)', fill: true, tension: 0.3, pointRadius: 2 },
+        { label: 'Orders Completed', data: ep.steps.map(s => s.orders_completed),
+          borderColor: '#4caf50', backgroundColor: 'rgba(76,175,80,0.1)', fill: true, tension: 0.3, pointRadius: 2 },
+        { label: 'Picked (Not Audited)', data: ep.steps.map(s => s.picked_not_audited),
+          borderColor: '#ff9800', borderDash: [4,4], fill: false, tension: 0.3, pointRadius: 1 },
+        { label: 'Projected EOD Completion', data: projectedCompletion,
+          borderColor: '#8ab4f8', borderDash: [6,3], fill: false, tension: 0.3, pointRadius: 0, borderWidth: 2 },
+      ]
+    },
+    options: {
+      responsive: true,
+      scales: {
+        x: { ticks: { color: '#666', maxTicksLimit: 10 } },
+        y: { ticks: { color: '#666' }, beginAtZero: true }
+      },
+      plugins: {
+        legend: { labels: { color: '#ccc', font: { size: 11 } } },
+        annotation: totalOrders ? {
+          annotations: {
+            targetLine: {
+              type: 'line', yMin: totalOrders, yMax: totalOrders,
+              borderColor: '#ffd700', borderDash: [4,4], borderWidth: 1,
+              label: { display: true, content: `Target: ${totalOrders}`, color: '#ffd700', font: { size: 10 } }
+            }
+          }
+        } : undefined
+      }
+    }
+  });
+}
+
+function renderRunningReward(ep) {
+  if (!ep.steps || ep.steps.length === 0) return;
+
+  const labels = ep.steps.map(s => {
+    const h = Math.floor(s.hour);
+    const m = Math.round((s.hour - h) * 60);
+    return `${h}:${m.toString().padStart(2,'0')}`;
+  });
+
+  if (charts.rewardChart) charts.rewardChart.destroy();
+  charts.rewardChart = new Chart(document.getElementById('rewardChart'), {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [{ label: 'Running Reward', data: ep.steps.map(s => s.running_reward),
+        borderColor: '#ffd700', backgroundColor: 'rgba(255,215,0,0.1)', fill: true, tension: 0.3, pointRadius: 2 }]
+    },
+    options: {
+      responsive: true,
+      scales: {
+        x: { ticks: { color: '#666', maxTicksLimit: 10 } },
+        y: { ticks: { color: '#666' } }
+      },
+      plugins: { legend: { display: false } }
+    }
+  });
+}
+</script>
+</body>
+</html>
