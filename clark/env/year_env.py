@@ -65,6 +65,10 @@ class YearEnv:
         # Week tracking
         self.current_week: int = 0
 
+        # Order carryover state
+        self.order_backlog: int = 0               # current unshipped orders carried forward
+        self.backlog_ages: list[tuple[int, int]] = []  # list of (day_index, order_count)
+
     def reset(self) -> np.ndarray:
         """Start a new year. Returns initial state vector."""
         n = self.facility_config.num_workers
@@ -89,6 +93,10 @@ class YearEnv:
         self.daily_grades = []
         self.daily_summaries = []
         self.is_year_done = False
+
+        # Reset order carryover state
+        self.order_backlog = 0
+        self.backlog_ages = []
 
         return self._start_new_day()
 
@@ -147,14 +155,37 @@ class YearEnv:
             vol_lo, vol_hi = vol_range
             vol_spread = vol_hi - vol_lo
 
+            rules = self.facility_config.rules
             cal = calendar.Calendar()
+            # Track Monday volume for Saturday scaling
+            last_monday_vol_lo: int = vol_lo
+            last_monday_vol_hi: int = vol_hi
             for day, dow in cal.itermonthdays2(self.year, month):
                 if day == 0:
                     continue
-                if dow > 4:
-                    continue  # skip weekends
+                if dow > 5:
+                    continue  # skip Sunday only
 
-                # Apply weekly volume curve
+                if dow == 5:
+                    # Saturday — only include if work_saturday is enabled
+                    if not rules.work_saturday:
+                        continue
+                    sat_vol_lo = int(last_monday_vol_lo * rules.saturday_volume_fraction * 0.8)
+                    sat_vol_hi = int(last_monday_vol_hi * rules.saturday_volume_fraction)
+                    daily_volume = random.randint(sat_vol_lo, max(sat_vol_lo, sat_vol_hi))
+                    schedule.append({
+                        "year": self.year,
+                        "month": month,
+                        "month_name": month_name,
+                        "day": day,
+                        "day_of_week": dow,
+                        "season": season,
+                        "volume": daily_volume,
+                        "vol_range": vol_range,
+                    })
+                    continue
+
+                # Apply weekly volume curve (weekdays 0-4)
                 curve = self.facility_config.volume.weekly_curve
                 dow_name = dow_name_map[dow]
                 if dow_name in curve:
@@ -165,6 +196,11 @@ class YearEnv:
                 day_vol_lo = vol_lo + int(vol_spread * pct_lo)
                 day_vol_hi = vol_lo + int(vol_spread * pct_hi)
                 daily_volume = random.randint(day_vol_lo, max(day_vol_lo, day_vol_hi))
+
+                # Track Monday volume for Saturday scaling
+                if dow == 0:
+                    last_monday_vol_lo = day_vol_lo
+                    last_monday_vol_hi = day_vol_hi
 
                 schedule.append({
                     "year": self.year,
@@ -178,6 +214,32 @@ class YearEnv:
                 })
 
         return schedule
+
+    def _inject_temp_workers(self, peak) -> None:
+        """Append temporary WorkerState objects to the day env for peak staffing."""
+        from clark.env.worker import WorkerState
+        if self.day_env.episode is None:
+            return
+        # Find the highest existing worker ID
+        existing_ids = [w.worker_id for w in self.day_env.episode.workers]
+        next_id = max(existing_ids) + 1 if existing_ids else 0
+
+        oph_lo, oph_hi = peak.temp_oph_range
+        for i in range(peak.extra_workers):
+            temp_oph = round(random.uniform(oph_lo, oph_hi), 1)
+            # Decide if temp calls off
+            is_absent = random.random() < peak.temp_call_off_probability
+            temp_worker = WorkerState(
+                worker_id=next_id + i,
+                name=f"Temp_{next_id + i}",
+                base_oph=temp_oph,
+                shift_hours=peak.temp_shift_hours,
+                role="warehouse",
+                task_eligibility_set={"pick", "pack", "idle"},
+                is_absent=is_absent,
+            )
+            temp_worker.current_task = "idle" if is_absent else "pack"
+            self.day_env.episode.workers.append(temp_worker)
 
     def _get_volume_range(self, month_name: str) -> tuple[int, int]:
         """Look up seasonal volume range from config, case-insensitive."""
@@ -205,6 +267,19 @@ class YearEnv:
             force_dow=day_info["day_of_week"],
             force_volume=day_info["volume"],
         )
+
+        # Inject carried backlog into today's order count
+        if self.facility_config.rules.order_carryover_enabled and self.order_backlog > 0:
+            self.day_env.episode.total_orders += self.order_backlog
+            self.day_env.orders_in_queue += self.order_backlog
+            # Don't reset backlog here — it carries until shipped or expired
+
+        # Peak staffing injection
+        peak = self.facility_config.peak_staffing
+        if peak is not None:
+            current_month = day_info["month_name"].lower()
+            if current_month in [m.lower() for m in peak.months]:
+                self._inject_temp_workers(peak)
 
         # Apply carryover restock level from previous day
         self.day_env.restock_level = self.restock_level
@@ -284,6 +359,34 @@ class YearEnv:
         if current_day_info["day_of_week"] == 4:
             for w_id in self.hustle_exhausted:
                 self.hustle_exhausted[w_id] = False
+
+        # Order carryover
+        rules = self.facility_config.rules
+        if rules.order_carryover_enabled:
+            remaining = self.day_env.orders_in_queue + self.day_env.orders_picked_not_audited
+            if remaining > 0:
+                self.backlog_ages.append((self.current_day_idx, remaining))
+                self.order_backlog += remaining
+
+            # Expire orders older than max_carryover_days
+            if rules.order_carryover_max_days > 0:
+                cutoff = self.current_day_idx - rules.order_carryover_max_days
+                expired = [(d, c) for d, c in self.backlog_ages if d <= cutoff]
+                for day_idx, count in expired:
+                    self.order_backlog -= count
+                    # Expired unshipped orders = severe penalty
+                    penalty = self.facility_config.rewards["per_order_incomplete"] * count * 1.5
+                    reward += penalty
+                    self._add_year_reward("backlog_expired", penalty)
+                self.backlog_ages = [(d, c) for d, c in self.backlog_ages if d > cutoff]
+                self.order_backlog = max(0, self.order_backlog)
+
+            # Hard backlog cap penalty
+            if rules.order_carryover_max_backlog > 0 and self.order_backlog > rules.order_carryover_max_backlog:
+                excess = self.order_backlog - rules.order_carryover_max_backlog
+                penalty = self.facility_config.rewards["per_order_incomplete"] * excess
+                reward += penalty
+                self._add_year_reward("backlog_cap_exceeded", penalty)
 
         # Record daily summary
         summary = self.day_env.get_episode_summary(management_backlog=self.management_backlog)
@@ -408,6 +511,7 @@ class YearEnv:
             "year_reward_breakdown": {k: round(v, 2) for k, v in self.year_reward_breakdown.items()},
             "management_backlog_final": round(self.management_backlog, 2),
             "cycle_counts_overdue_final": self.cycle_counts_overdue,
+            "order_backlog_final": self.order_backlog,
             "daily_summaries": self.daily_summaries,
         }
 

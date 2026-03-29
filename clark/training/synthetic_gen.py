@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import random
 from pathlib import Path
+from typing import Optional
 
 from clark.config.schema import (
     FacilityConfig,
@@ -19,6 +20,8 @@ from clark.config.schema import (
     RewardOverrides,
     OrderComplexityConfig,
     OrderComplexityTier,
+    PeakStaffingConfig,
+    BreakConfig,
 )
 from clark.config.task_vocab import STANDARD_VOCAB, CORE_TASK_IDS
 from clark.config.bounds import BOUNDS
@@ -73,6 +76,12 @@ def generate_random_facility() -> FacilityConfig:
     rules = _generate_rules()
     complexity = _sample_random_complexity()
 
+    # Generate break schedule and peak staffing
+    day_start = rules.day_start_hour
+    eod = rules.eod_hour
+    breaks = _generate_breaks(day_start, eod)
+    peak_staffing = _generate_peak_staffing()
+
     return FacilityConfig(
         name=f"synthetic_{random.randint(1000, 9999)}",
         timezone=random.choice(_TIMEZONES),
@@ -82,6 +91,8 @@ def generate_random_facility() -> FacilityConfig:
         rules=rules,
         reward_overrides=RewardOverrides(),
         order_complexity=complexity,
+        breaks=breaks,
+        peak_staffing=peak_staffing,
     )
 
 
@@ -111,6 +122,11 @@ def _generate_workers(n_workers: int) -> list[WorkerConfig]:
     # We'll use "all" task eligibility for simplicity — the action mask
     # handles per-role business constraints at runtime.
     shift_hours_base = _sample_shift_hours()
+
+    # Facility shift start: most workers start together, some start late (split shift)
+    ds_lo, ds_hi = BOUNDS["day_start_hour"]
+    facility_start = round(random.uniform(ds_lo, ds_hi) * 2) / 2
+
     workers: list[WorkerConfig] = []
     for i, role in enumerate(roles):
         oph = round(_sample_oph(), 1)
@@ -122,17 +138,29 @@ def _generate_workers(n_workers: int) -> list[WorkerConfig]:
         co_lo, co_hi = BOUNDS["call_off_probability"]
         call_off_prob = round(random.uniform(max(co_lo, 0.01), min(co_hi, 0.05)), 3)
 
-        # 30% chance of task_oph_overrides for 1-3 tasks
-        task_oph_overrides = None
+        # 20% of warehouse workers get a staggered start (0.5–3h after facility start)
+        if role == "warehouse" and random.random() < 0.2:
+            shift_start = round((facility_start + random.uniform(0.5, 3.0)) * 2) / 2
+        else:
+            shift_start = facility_start
+
+        # Pick OPH is always set — realistic range is 1.5x to 3.5x base packing rate
+        # This reflects real warehouses: picking is faster because you're pulling, not packing
+        lo_task, hi_task = BOUNDS["task_oph"]
+        pick_oph = round(oph * random.uniform(1.5, 3.5), 1)
+        pick_oph = min(pick_oph, hi_task)
+        task_oph_overrides: dict = {"pick": pick_oph}
+        # 30% chance of additional task overrides
         if random.random() < 0.3:
-            task_oph_overrides = _sample_task_oph_overrides()
+            extra = _sample_task_oph_overrides(exclude=["pick"])
+            task_oph_overrides.update(extra)
 
         workers.append(WorkerConfig(
             worker_id=i,
             name=f"Worker_{i}",
             base_oph=oph,
             shift_hours=shift_h,
-            shift_start=9.0,
+            shift_start=shift_start,
             role=role,
             task_eligibility="all",
             call_off_probability=call_off_prob,
@@ -150,9 +178,12 @@ def _sample_shift_hours() -> float:
     return round(random.uniform(max(sh_lo, 7.0), min(sh_hi, 10.0)), 1)
 
 
-def _sample_task_oph_overrides() -> dict[str, float]:
+def _sample_task_oph_overrides(exclude: list[str] = []) -> dict[str, float]:
     """Sample per-task OPH overrides for 1-3 randomly chosen tasks."""
-    candidate_tasks = ["pick", "pack", "restock", "side_project", "receiving"]
+    candidate_tasks = [t for t in ["pick", "pack", "restock", "side_project", "receiving"]
+                       if t not in exclude]
+    if not candidate_tasks:
+        return {}
     n_tasks = random.randint(1, min(3, len(candidate_tasks)))
     chosen = random.sample(candidate_tasks, n_tasks)
     lo, hi = BOUNDS["task_oph"]
@@ -282,6 +313,30 @@ def _generate_rules() -> BusinessRules:
     cc_lo, cc_hi = BOUNDS["cycle_count_weekly_hours"]
     ccow_lo, ccow_hi = BOUNDS["cycle_count_max_overdue_weeks"]
 
+    # Order carryover (40% of synthetic facilities have it)
+    order_carryover_enabled = random.random() < 0.4
+    order_carryover_max_days = random.randint(1, 5) if order_carryover_enabled else 3
+    order_carryover_max_backlog = random.choice([0, 0, 0, random.randint(50, 500)])
+
+    # Picker assignment
+    picker_assignment = random.choices(
+        ["round_robin", "fixed", "agent"],
+        weights=[0.5, 0.3, 0.2]
+    )[0]
+
+    # Saturday operations (25% of facilities)
+    work_saturday = random.random() < 0.25
+    saturday_vol = round(random.uniform(0.2, 0.6), 2) if work_saturday else 0.4
+
+    # Late order exceptions (30% of facilities)
+    late_exception_rate = round(random.uniform(0.02, 0.15), 3) if random.random() < 0.3 else 0.0
+
+    # Restock availability (40% of facilities have a delivery window)
+    restock_avail = 0.0
+    if random.random() < 0.4:
+        avail_lo, avail_hi = BOUNDS["restock_availability_hour"]
+        restock_avail = round(random.uniform(max(avail_lo, 7.0), min(avail_hi, 13.0)) * 2) / 2
+
     return BusinessRules(
         management_daily_hours_required=round(random.uniform(2.0, 6.0), 1),
         management_min_daily_hours=round(random.uniform(1.0, 2.0), 1),
@@ -299,7 +354,7 @@ def _generate_rules() -> BusinessRules:
         order_incomplete_threshold=0,
         max_call_offs_per_day=random.randint(1, 4),
         max_call_offs_high_volume=random.randint(1, 2),
-        # New timing fields
+        # Timing fields
         day_start_hour=day_start,
         eod_hour=eod,
         order_cutoff_hour=round(random.uniform(eod - 2, eod) * 2) / 2,
@@ -311,6 +366,62 @@ def _generate_rules() -> BusinessRules:
         morning_pick_carts_max=random.randint(1, 4),
         morning_pick_per_cart_min=random.randint(1, 5),
         morning_pick_per_cart_max=random.randint(4, 12),
+        # New parameters
+        order_carryover_enabled=order_carryover_enabled,
+        order_carryover_max_days=order_carryover_max_days,
+        order_carryover_max_backlog=order_carryover_max_backlog,
+        picker_assignment=picker_assignment,
+        work_saturday=work_saturday,
+        saturday_volume_fraction=saturday_vol,
+        late_order_exception_rate=late_exception_rate,
+        restock_availability_hour=restock_avail,
+    )
+
+
+def _generate_breaks(day_start: float, eod: float) -> list:
+    """
+    Generate a break schedule relative to the shift.
+    30% no breaks (use lunch_hour fallback), 40% single lunch, 30% full schedule.
+    """
+    roll = random.random()
+    if roll < 0.30:
+        return []  # use lunch_hour fallback
+    # Calculate sensible break times relative to shift
+    shift_len = eod - day_start
+    lunch_time = day_start + shift_len * random.uniform(0.35, 0.55)
+    lunch_time = round(lunch_time * 2) / 2
+    lunch_dur = round(random.choice([0.25, 0.5, 0.75]), 2)
+    if roll < 0.70:
+        # Just lunch
+        return [BreakConfig(hour=lunch_time, duration=lunch_dur,
+                            staggered=random.random() < 0.3)]
+    else:
+        # Full schedule: morning, lunch, afternoon
+        morning_time = round((day_start + shift_len * random.uniform(0.15, 0.30)) * 2) / 2
+        afternoon_time = round((day_start + shift_len * random.uniform(0.65, 0.80)) * 2) / 2
+        return [
+            BreakConfig(hour=morning_time, duration=0.25, staggered=False),
+            BreakConfig(hour=lunch_time, duration=lunch_dur, staggered=random.random() < 0.4),
+            BreakConfig(hour=afternoon_time, duration=0.25, staggered=False),
+        ]
+
+
+def _generate_peak_staffing() -> Optional[PeakStaffingConfig]:
+    """Generate peak staffing config — 50% of facilities have it."""
+    if random.random() > 0.5:
+        return None
+    # Peak months: typically spring and/or summer
+    all_months = ["march", "april", "may", "june", "july", "august", "september"]
+    n_peak_months = random.randint(2, 4)
+    peak_months = random.sample(all_months, n_peak_months)
+    t_lo, t_hi = BOUNDS["temp_oph"]
+    return PeakStaffingConfig(
+        months=peak_months,
+        extra_workers=random.randint(1, min(5, BOUNDS["peak_extra_workers"][1])),
+        temp_oph_range=(round(random.uniform(max(t_lo, 8.0), min(t_hi, 15.0)), 1),
+                        round(random.uniform(max(t_lo, 12.0), min(t_hi, 20.0)), 1)),
+        temp_call_off_probability=round(random.uniform(0.05, 0.12), 3),
+        temp_shift_hours=round(random.uniform(6.0, 8.5), 1),
     )
 
 

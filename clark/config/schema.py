@@ -24,6 +24,22 @@ from clark.config.bounds import validate_value
 # ─── Sub-dataclasses ─────────────────────────────────────────────────────────
 
 @dataclass
+class BreakConfig:
+    hour: float           # 24h clock (e.g. 10.0 = 10:00 AM)
+    duration: float       # hours (0.25 = 15 min, 0.5 = 30 min)
+    staggered: bool = False  # if True, workers rotate in two groups instead of all at once
+
+
+@dataclass
+class PeakStaffingConfig:
+    months: list[str]                    # e.g. ["april", "may", "june"]
+    extra_workers: int                   # how many temps to add during peak
+    temp_oph_range: tuple[float, float]  # (min, max) OPH for temps — lower than regulars
+    temp_call_off_probability: float = 0.08
+    temp_shift_hours: float = 8.0
+
+
+@dataclass
 class OrderComplexityTier:
     name: str             # "simple", "standard", "complex"
     weight: float         # fraction of orders (all tiers must sum to ~1.0)
@@ -157,6 +173,26 @@ class BusinessRules:
     pack_stations: Optional[int] = None    # None = unlimited
     carts_available: Optional[int] = None  # None = unlimited
 
+    # Order carryover — user controls all three knobs
+    order_carryover_enabled: bool = False
+    order_carryover_max_days: int = 3        # orders expire after this many days unshipped
+    order_carryover_max_backlog: int = 0     # 0 = unlimited backlog; >0 = hard cap before penalty
+
+    # Picker assignment strategy
+    picker_assignment: str = "round_robin"   # "round_robin" | "fixed" | "agent"
+    fixed_picker_id: Optional[int] = None    # used when picker_assignment == "fixed"
+
+    # Weekend operations
+    work_saturday: bool = False
+    saturday_volume_fraction: float = 0.4   # fraction of Monday's volume applied to Saturday
+
+    # Late order exceptions (post-cutoff orders that still must ship)
+    late_order_exception_rate: float = 0.0  # 0.05 = 5% of post-cutoff orders still count
+
+    # Inbound freight timing
+    restock_availability_hour: float = 0.0  # 0.0 = restock materials always available
+                                             # e.g. 10.0 = truck arrives at 10 AM, can't restock before then
+
 
 @dataclass
 class RewardOverrides:
@@ -228,6 +264,10 @@ class FacilityConfig:
     rules: BusinessRules
     reward_overrides: RewardOverrides = field(default_factory=RewardOverrides)
     order_complexity: OrderComplexityConfig = field(default_factory=OrderComplexityConfig.default)
+    breaks: list[BreakConfig] = field(default_factory=list)
+    # If empty, falls back to BusinessRules.lunch_hour + lunch_duration (backwards compat).
+    # If populated, these replace the single lunch. Listed in chronological order.
+    peak_staffing: Optional[PeakStaffingConfig] = None
 
     # ── Computed properties ───────────────────────────────────────────────────
 
@@ -282,6 +322,8 @@ class FacilityConfig:
         rules = cls._parse_rules(d.get("business_rules", {}))
         reward_overrides = cls._parse_reward_overrides(d.get("rewards", {}))
         order_complexity = cls._parse_order_complexity(d.get("order_complexity"))
+        breaks = cls._parse_breaks(d.get("breaks", []))
+        peak_staffing = cls._parse_peak_staffing(d.get("peak_staffing"))
 
         return cls(
             name=facility.get("name", "Unnamed Facility"),
@@ -292,6 +334,8 @@ class FacilityConfig:
             rules=rules,
             reward_overrides=reward_overrides,
             order_complexity=order_complexity,
+            breaks=breaks,
+            peak_staffing=peak_staffing,
         )
 
     @staticmethod
@@ -394,6 +438,20 @@ class FacilityConfig:
             # Equipment
             pack_stations=(int(d["pack_stations"]) if d.get("pack_stations") is not None else None),
             carts_available=(int(d["carts_available"]) if d.get("carts_available") is not None else None),
+            # Order carryover
+            order_carryover_enabled=bool(d.get("order_carryover_enabled", False)),
+            order_carryover_max_days=int(d.get("order_carryover_max_days", 3)),
+            order_carryover_max_backlog=int(d.get("order_carryover_max_backlog", 0)),
+            # Picker assignment
+            picker_assignment=str(d.get("picker_assignment", "round_robin")),
+            fixed_picker_id=(int(d["fixed_picker_id"]) if d.get("fixed_picker_id") is not None else None),
+            # Weekend operations
+            work_saturday=bool(d.get("work_saturday", False)),
+            saturday_volume_fraction=float(d.get("saturday_volume_fraction", 0.4)),
+            # Late order exceptions
+            late_order_exception_rate=float(d.get("late_order_exception_rate", 0.0)),
+            # Inbound freight timing
+            restock_availability_hour=float(d.get("restock_availability_hour", 0.0)),
         )
 
     @staticmethod
@@ -410,6 +468,32 @@ class FacilityConfig:
         if not tiers:
             return OrderComplexityConfig.default()
         return OrderComplexityConfig(tiers=tiers)
+
+    @staticmethod
+    def _parse_breaks(raw: list) -> list[BreakConfig]:
+        if not raw:
+            return []
+        result = []
+        for b in raw:
+            result.append(BreakConfig(
+                hour=float(b["hour"]),
+                duration=float(b["duration"]),
+                staggered=bool(b.get("staggered", False)),
+            ))
+        return result
+
+    @staticmethod
+    def _parse_peak_staffing(raw: Optional[dict]) -> Optional[PeakStaffingConfig]:
+        if not raw:
+            return None
+        oph_range = raw.get("temp_oph_range", [8.0, 15.0])
+        return PeakStaffingConfig(
+            months=list(raw["months"]),
+            extra_workers=int(raw["extra_workers"]),
+            temp_oph_range=(float(oph_range[0]), float(oph_range[1])),
+            temp_call_off_probability=float(raw.get("temp_call_off_probability", 0.08)),
+            temp_shift_hours=float(raw.get("temp_shift_hours", 8.0)),
+        )
 
     @staticmethod
     def _parse_reward_overrides(d: dict) -> RewardOverrides:
@@ -541,5 +625,30 @@ class FacilityConfig:
                     if t_id not in active_ids:
                         warnings.append(f"Worker '{w.name}' has task_eligibility entry '{t_id}' "
                                         f"which is not in the active task list.")
+
+        # Picker assignment validation
+        rules = self.rules
+        if rules.picker_assignment == "fixed" and rules.fixed_picker_id is not None:
+            valid_ids = [w.worker_id for w in self.workers]
+            if rules.fixed_picker_id not in valid_ids:
+                errors.append(
+                    f"fixed_picker_id ({rules.fixed_picker_id}) is not a valid worker ID. "
+                    f"Valid IDs: {sorted(valid_ids)}"
+                )
+
+        # Order carryover validation
+        if rules.order_carryover_enabled and rules.order_carryover_max_days < 1:
+            errors.append(
+                f"order_carryover_max_days ({rules.order_carryover_max_days}) must be >= 1 "
+                "when order_carryover_enabled is True."
+            )
+
+        # Saturday operations validation
+        if rules.work_saturday:
+            if not (0.1 <= rules.saturday_volume_fraction <= 1.0):
+                errors.append(
+                    f"saturday_volume_fraction ({rules.saturday_volume_fraction}) must be between "
+                    "0.1 and 1.0 when work_saturday is True."
+                )
 
         return errors, warnings

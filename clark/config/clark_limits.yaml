@@ -58,5 +58,26 @@ facility:
   order_complexity_weight: { min: 0.0, max: 1.0 }
   order_complexity_oph_multiplier: { min: 0.1, max: 3.0 }
 
+  # Order carryover
+  order_carryover_max_days: { min: 1, max: 14 }
+  order_carryover_max_backlog: { min: 0, max: 2000 }
+
+  # Breaks
+  break_hour:     { min: 5.0, max: 22.0 }
+  break_duration: { min: 0.0, max: 2.0 }
+
+  # Weekend
+  saturday_volume_fraction: { min: 0.1, max: 1.0 }
+
+  # Inbound freight
+  restock_availability_hour: { min: 0.0, max: 16.0 }
+
+  # Late order exceptions
+  late_order_exception_rate: { min: 0.0, max: 0.3 }
+
+  # Peak staffing
+  peak_extra_workers: { min: 1, max: 20 }
+  temp_oph: { min: 5.0, max: 25.0 }
+
   # Tasks
   n_tasks:            { min: 2,    max: 15   }    # pick + pack minimum

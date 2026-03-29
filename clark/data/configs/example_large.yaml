@@ -318,6 +318,33 @@ business_rules:
   # Equipment
   pack_stations: 12
   carts_available: 40
+  # Order carryover
+  order_carryover_enabled: true
+  order_carryover_max_days: 2
+  order_carryover_max_backlog: 200
+  # Picker assignment — fixed to Pick Lead (id 3)
+  picker_assignment: fixed
+  fixed_picker_id: 3
+  # Weekend operations
+  work_saturday: true
+  saturday_volume_fraction: 0.35
+  # Late order exceptions
+  late_order_exception_rate: 0.0
+  # Inbound freight timing
+  restock_availability_hour: 0.0
+
+breaks:
+  - hour: 9.5
+    duration: 0.25
+    staggered: false
+  - hour: 11.5
+    duration: 0.5
+    staggered: false
+  - hour: 14.0
+    duration: 0.25
+    staggered: false
+
+peak_staffing: null
 
 order_complexity:
   tiers:

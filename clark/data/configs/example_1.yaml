@@ -220,6 +220,33 @@ business_rules:
   # Equipment
   pack_stations: null
   carts_available: null
+  # Order carryover
+  order_carryover_enabled: false
+  order_carryover_max_days: 3
+  order_carryover_max_backlog: 0
+  # Picker assignment
+  picker_assignment: round_robin
+  fixed_picker_id: null
+  # Weekend operations
+  work_saturday: false
+  saturday_volume_fraction: 0.4
+  # Late order exceptions
+  late_order_exception_rate: 0.0
+  # Inbound freight timing
+  restock_availability_hour: 0.0
+
+breaks:
+  - hour: 10.0
+    duration: 0.25
+    staggered: false
+  - hour: 13.0
+    duration: 0.5
+    staggered: false
+  - hour: 15.0
+    duration: 0.25
+    staggered: false
+
+peak_staffing: null
 
 order_complexity:
   tiers:

@@ -189,6 +189,18 @@ class FacilityEnv:
         if self.facility_config.rules.morning_pick_enabled:
             self._morning_pick_round()
 
+        # Apply picker assignment strategy
+        rules = self.facility_config.rules
+        if rules.picker_assignment == "fixed" and rules.fixed_picker_id is not None:
+            # Override is_picker: only the fixed picker gets the main picker role
+            for w in self.episode.workers:
+                w.is_picker = (w.worker_id == rules.fixed_picker_id)
+        elif rules.picker_assignment == "agent":
+            # Agent-determined: no pre-assigned picker; agent picks dynamically
+            for w in self.episode.workers:
+                w.is_picker = False
+        # else "round_robin": keep existing is_picker assignment from episode_generator
+
         # Default assignments
         mgmt_eligible = self._mgmt_eligible_ids
         for w in self.episode.workers:
@@ -257,21 +269,15 @@ class FacilityEnv:
                     )
                     worker.hustle_mode = can_hustle
 
-        # Check lunch — driven by config (duration > 0 enables it)
-        rules = self.facility_config.rules
-        is_lunch = (
-            rules.lunch_duration > 0
-            and abs(self.current_hour - rules.lunch_hour) < 0.01
-        )
-        if is_lunch:
-            # Advance through lunch_duration worth of steps
-            steps_for_lunch = max(1, round(rules.lunch_duration / STEP_DURATION))
-            for _ in range(steps_for_lunch):
-                self._process_arrivals()
-                self.current_hour += STEP_DURATION
-            for w in self.episode.workers:
-                w.current_task = "idle"
-        else:
+        # Check breaks — generalized break processor
+        active_breaks = self._get_active_breaks()
+        break_taken = False
+        for brk in active_breaks:
+            if abs(self.current_hour - brk.hour) < STEP_DURATION / 2:
+                self._process_break(brk)
+                break_taken = True
+                break
+        if not break_taken:
             self._process_arrivals()
             step_reward += self._simulate_step()
             self.current_hour += STEP_DURATION
@@ -422,6 +428,12 @@ class FacilityEnv:
             effective_duration = duration * effectiveness
 
             if task == "restock":
+                # Restock availability check — if truck hasn't arrived yet, treat as idle
+                if (self.facility_config.rules.restock_availability_hour > 0
+                        and self.current_hour < self.facility_config.rules.restock_availability_hour):
+                    reward += self._add_reward("per_idle_hour", duration)
+                    w.hours_worked += duration
+                    continue
                 prev_remaining = self.restock_remaining
                 self.restock_remaining = max(0.0, self.restock_remaining - effective_duration)
                 self.restock_level = min(
@@ -519,16 +531,67 @@ class FacilityEnv:
 
         return reward
 
+    # ── Break handling ─────────────────────────────────────────────────────────
+
+    def _get_active_breaks(self) -> list:
+        """Return the break schedule — explicit list if configured, else lunch fallback."""
+        cfg_breaks = self.facility_config.breaks
+        if cfg_breaks:
+            return cfg_breaks
+        # Backwards compat: single lunch from rules
+        if self.facility_config.rules.lunch_duration > 0:
+            from clark.config.schema import BreakConfig as BC
+            return [BC(
+                hour=self.facility_config.rules.lunch_hour,
+                duration=self.facility_config.rules.lunch_duration,
+                staggered=False,
+            )]
+        return []
+
+    def _process_break(self, brk) -> None:
+        """Process a break for all workers. Advances time by break duration."""
+        steps_for_break = max(1, round(brk.duration / STEP_DURATION))
+        if brk.staggered:
+            # Split workers into two groups
+            available_workers = [w for w in self.episode.workers if not w.is_absent]
+            mid = len(available_workers) // 2
+            group1 = available_workers[:mid]
+            group2 = available_workers[mid:]
+            # Group 1 takes break now
+            for w in group1:
+                w.current_task = "idle"
+            for _ in range(steps_for_break):
+                self._process_arrivals()
+                self.current_hour += STEP_DURATION
+            # Group 2 takes break next (group 1 resumes their prior work)
+            for w in group2:
+                w.current_task = "idle"
+            for _ in range(steps_for_break):
+                self._process_arrivals()
+                self.current_hour += STEP_DURATION
+        else:
+            # Non-staggered: all workers idle for break duration
+            for _ in range(steps_for_break):
+                self._process_arrivals()
+                self.current_hour += STEP_DURATION
+            for w in self.episode.workers:
+                w.current_task = "idle"
+
     # ── Order arrivals ─────────────────────────────────────────────────────────
 
     def _process_arrivals(self):
         if self.episode is None:
             return
         cutoff = self.facility_config.rules.order_cutoff_hour
+        late_exception_rate = self.facility_config.rules.late_order_exception_rate
         current = round(self.current_hour, 2)
         to_remove = []
         for key, count in self.episode.arrival_schedule.items():
             if key >= cutoff:
+                # Late order exceptions: some post-cutoff orders still count
+                if late_exception_rate > 0 and self.current_hour > cutoff:
+                    if random.random() < late_exception_rate:
+                        self.orders_in_queue += count
                 to_remove.append(key)
             elif key <= current + 0.01:
                 self.orders_in_queue += count
