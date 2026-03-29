@@ -139,9 +139,10 @@ def pretrain(
             )
 
             # Build action list: (worker_id, task_idx, hustle_bool)
+            # Use len(task_actions) — temp peak-staffing workers push N above config.num_workers
             actions = [
                 (i, task_actions[i], bool(hustle_actions[i]))
-                for i in range(current_config.num_workers)
+                for i in range(len(task_actions))
             ]
 
             _, reward, done, info = env.step(actions)

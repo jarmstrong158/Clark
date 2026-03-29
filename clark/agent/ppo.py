@@ -319,6 +319,8 @@ class ClarkAgent:
         Replay the stored sequence through the model to get log-probs, values,
         and entropies for the PPO loss.
 
+        Uses forward_sequence() to process each TBPTT chunk in one batched call
+        rather than T separate forward() calls — same math, much faster.
         TBPTT: hidden state is detached at each chunk boundary.
 
         Returns:
@@ -335,49 +337,53 @@ class ClarkAgent:
 
         for chunk_start in range(0, n, chunk_size):
             chunk_end = min(chunk_start + chunk_size, n)
+            T = chunk_end - chunk_start
 
-            for t in range(chunk_start, chunk_end):
-                sd = states[t]
-                mask = action_masks[t]
-
-                # Forward through model — with grad for loss computation
-                assign_logits, hustle_logits, value, hidden = self.model.forward(
-                    sd, mask, hidden
+            assign_logits, hustle_logits, values, entropies, hidden = (
+                self.model.forward_sequence(
+                    states[chunk_start:chunk_end],
+                    action_masks[chunk_start:chunk_end],
+                    hidden,
                 )
+            )
+            # assign_logits: (T, N, M), hustle_logits: (T, N, 2)
+            # values: (T,),  entropies: (T,)
 
-                N = assign_logits.shape[0]
+            # Vectorised log-prob computation — no Python loop over workers
+            device = assign_logits.device
+            ta = torch.tensor(
+                [task_actions[chunk_start + t] for t in range(T)],
+                dtype=torch.long, device=device,
+            )  # (T, N)
+            ha = torch.tensor(
+                [hustle_actions[chunk_start + t] for t in range(T)],
+                dtype=torch.long, device=device,
+            )  # (T, N)
 
-                # Compute log-prob of the stored actions
-                step_log_prob = torch.tensor(0.0, device=assign_logits.device)
-                step_entropy = torch.tensor(0.0, device=assign_logits.device)
+            task_lp = F.log_softmax(assign_logits, dim=-1)            # (T, N, M)
+            taken_task_lp = task_lp.gather(
+                dim=2, index=ta.unsqueeze(-1)
+            ).squeeze(-1)                                              # (T, N)
 
-                ta_t = torch.tensor(task_actions[t], dtype=torch.long,
-                                    device=assign_logits.device)
-                ha_t = torch.tensor(hustle_actions[t], dtype=torch.long,
-                                    device=hustle_logits.device)
+            hustle_lp = F.log_softmax(hustle_logits, dim=-1)          # (T, N, 2)
+            taken_hustle_lp = hustle_lp.gather(
+                dim=2, index=ha.unsqueeze(-1)
+            ).squeeze(-1)                                              # (T, N)
 
-                for i in range(N):
-                    # Task assignment
-                    task_dist = Categorical(logits=assign_logits[i])
-                    step_log_prob = step_log_prob + task_dist.log_prob(ta_t[i])
-                    step_entropy = step_entropy + task_dist.entropy()
+            # Sum log-probs across workers → one scalar per step
+            log_probs = (taken_task_lp + taken_hustle_lp).sum(dim=-1) # (T,)
 
-                    # Hustle decision
-                    hustle_dist = Categorical(logits=hustle_logits[i])
-                    step_log_prob = step_log_prob + hustle_dist.log_prob(ha_t[i])
-                    step_entropy = step_entropy + hustle_dist.entropy()
-
-                all_log_probs.append(step_log_prob)
-                all_values.append(value)
-                all_entropies.append(step_entropy)
+            all_log_probs.append(log_probs)
+            all_values.append(values)
+            all_entropies.append(entropies)
 
             # TBPTT: detach hidden state at chunk boundary
             hidden = (hidden[0].detach(), hidden[1].detach())
 
         return (
-            torch.stack(all_log_probs),
-            torch.stack(all_values),
-            torch.stack(all_entropies),
+            torch.cat(all_log_probs),
+            torch.cat(all_values),
+            torch.cat(all_entropies),
         )
 
     # ── Checkpoint ─────────────────────────────────────────────────────────────

@@ -71,29 +71,35 @@ class MultiHeadSelfAttention(nn.Module):
         self.attn_scale = math.sqrt(self.d_head)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """x: (N, d_model). Returns (N, d_model)."""
+        """x: (N, d_model) or (B, N, d_model). Returns same shape."""
+        squeeze = x.dim() == 2
+        if squeeze:
+            x = x.unsqueeze(0)           # → (1, N, D)
+
+        B, N, D = x.shape
+        H, dh = self.n_heads, self.d_head
+
         residual = x
-        x = self.norm(x)             # pre-LN
+        x = self.norm(x)                 # (B, N, D)
+        qkv = self.qkv(x)               # (B, N, 3D)
+        q, k, v = qkv.chunk(3, dim=-1)  # each (B, N, D)
 
-        N, D = x.shape
-        qkv = self.qkv(x)            # (N, 3*D)
-        q, k, v = qkv.chunk(3, dim=-1)  # each (N, D)
+        # Reshape to (B*H, N, dh) for batched matmul
+        q = q.view(B, N, H, dh).permute(0, 2, 1, 3).reshape(B * H, N, dh)
+        k = k.view(B, N, H, dh).permute(0, 2, 1, 3).reshape(B * H, N, dh)
+        v = v.view(B, N, H, dh).permute(0, 2, 1, 3).reshape(B * H, N, dh)
 
-        # Reshape to (n_heads, N, d_head)
-        q = q.view(N, self.n_heads, self.d_head).transpose(0, 1)  # (H, N, dh)
-        k = k.view(N, self.n_heads, self.d_head).transpose(0, 1)
-        v = v.view(N, self.n_heads, self.d_head).transpose(0, 1)
-
-        scores = torch.bmm(q, k.transpose(1, 2)) / self.attn_scale  # (H, N, N)
+        scores = torch.bmm(q, k.transpose(1, 2)) / self.attn_scale  # (B*H, N, N)
         weights = F.softmax(scores, dim=-1)
         weights = self.dropout(weights)
 
-        attended = torch.bmm(weights, v)  # (H, N, dh)
-        attended = attended.transpose(0, 1).contiguous().view(N, D)  # (N, D)
+        attended = torch.bmm(weights, v)                              # (B*H, N, dh)
+        attended = attended.reshape(B, H, N, dh).permute(0, 2, 1, 3).reshape(B, N, D)
 
         out = self.out_proj(attended)
         out = self.dropout(out)
-        return residual + out
+        result = residual + out
+        return result.squeeze(0) if squeeze else result
 
 
 class MultiHeadCrossAttention(nn.Module):
@@ -116,30 +122,37 @@ class MultiHeadCrossAttention(nn.Module):
 
     def forward(self, workers: torch.Tensor, tasks: torch.Tensor) -> torch.Tensor:
         """
-        workers: (N, d_model) — queries
-        tasks:   (M, d_model) — keys / values
-        Returns: (N, d_model)
+        workers: (N, d_model) or (B, N, d_model) — queries
+        tasks:   (M, d_model) or (B, M, d_model) — keys / values
+        Returns: same shape as workers
         """
+        squeeze = workers.dim() == 2
+        if squeeze:
+            workers = workers.unsqueeze(0)
+            tasks = tasks.unsqueeze(0)
+
+        B, N, D = workers.shape
+        M = tasks.shape[1]
+        H, dh = self.n_heads, self.d_head
+
         residual = workers
         workers_ln = self.norm_q(workers)
 
-        N, D = workers_ln.shape
-        M = tasks.shape[0]
+        q = self.q_proj(workers_ln).view(B, N, H, dh).permute(0, 2, 1, 3).reshape(B * H, N, dh)
+        k = self.k_proj(tasks).view(B, M, H, dh).permute(0, 2, 1, 3).reshape(B * H, M, dh)
+        v = self.v_proj(tasks).view(B, M, H, dh).permute(0, 2, 1, 3).reshape(B * H, M, dh)
 
-        q = self.q_proj(workers_ln).view(N, self.n_heads, self.d_head).transpose(0, 1)  # (H, N, dh)
-        k = self.k_proj(tasks).view(M, self.n_heads, self.d_head).transpose(0, 1)       # (H, M, dh)
-        v = self.v_proj(tasks).view(M, self.n_heads, self.d_head).transpose(0, 1)       # (H, M, dh)
-
-        scores = torch.bmm(q, k.transpose(1, 2)) / self.attn_scale  # (H, N, M)
+        scores = torch.bmm(q, k.transpose(1, 2)) / self.attn_scale  # (B*H, N, M)
         weights = F.softmax(scores, dim=-1)
         weights = self.dropout(weights)
 
-        attended = torch.bmm(weights, v)  # (H, N, dh)
-        attended = attended.transpose(0, 1).contiguous().view(N, D)  # (N, D)
+        attended = torch.bmm(weights, v)                              # (B*H, N, dh)
+        attended = attended.reshape(B, H, N, dh).permute(0, 2, 1, 3).reshape(B, N, D)
 
         out = self.out_proj(attended)
         out = self.dropout(out)
-        return residual + out
+        result = residual + out
+        return result.squeeze(0) if squeeze else result
 
 
 class FeedForward(nn.Module):
@@ -387,6 +400,117 @@ class ClarkActorCritic(nn.Module):
         value = self.value_head(h_t.unsqueeze(0)).squeeze()  # ()
 
         return assignment_logits, hustle_logits, value, new_hidden
+
+    # ── Batched sequence forward (PPO update path) ────────────────────────────
+
+    def forward_sequence(
+        self,
+        state_dicts: list,
+        action_masks: list,
+        lstm_hidden: tuple[torch.Tensor, torch.Tensor],
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, tuple]:
+        """
+        Batched forward over T sequential steps for the PPO update.
+
+        The encoder (SA + CA) processes all T steps simultaneously by treating T
+        as a batch dimension. The LSTM processes the T pooled tokens as a single
+        sequence in one call — mathematically identical to T sequential forward()
+        calls, but far faster because PyTorch's LSTM kernel is optimised for
+        sequences and the attention ops are batched.
+
+        Args:
+            state_dicts:  list[dict] of length T — StateBuilder.build() outputs
+            action_masks: list[ndarray|None] of length T — (N, M) bool per step
+            lstm_hidden:  (h, c) at the start of this chunk
+
+        Returns:
+            assign_logits: (T, N, M) — masked, pre-softmax
+            hustle_logits: (T, N, 2) — pre-softmax
+            values:        (T,)
+            entropies:     (T,) — summed over workers, for PPO entropy bonus
+            new_hidden:    (h, c) after processing all T steps
+        """
+        T = len(state_dicts)
+        device = next(self.parameters()).device
+
+        # Stack all T state dicts into batch tensors
+        worker_feats = torch.tensor(
+            np.stack([sd["worker_feats"] for sd in state_dicts]),
+            dtype=torch.float32, device=device,
+        )  # (T, N, worker_feat_dim)
+        task_feats_raw = torch.tensor(
+            np.stack([sd["task_feats"] for sd in state_dicts]),
+            dtype=torch.float32, device=device,
+        )  # (T, M, 3)
+        env_feats = torch.tensor(
+            np.stack([sd["env_feats"] for sd in state_dicts]),
+            dtype=torch.float32, device=device,
+        )  # (T, env_feat_dim)
+        worker_role_ids = torch.tensor(
+            np.stack([sd["worker_role_ids"] for sd in state_dicts]),
+            dtype=torch.long, device=device,
+        )  # (T, N)
+        task_type_ids = torch.tensor(
+            np.stack([sd["task_type_ids"] for sd in state_dicts]),
+            dtype=torch.long, device=device,
+        )  # (T, M)
+
+        task_feats_cont = task_feats_raw[:, :, :2]  # (T, M, 2) — drop task_type_id col
+
+        # ── Encoder (all T steps batched) ─────────────────────────────────────
+        W = self.worker_linear(worker_feats)                          # (T, N, d_model)
+        W = W + self.role_embed(worker_role_ids)                      # (T, N, d_model)
+
+        task_type_ids_safe = task_type_ids.clamp(
+            0, self.task_type_embed.num_embeddings - 1
+        )
+        T_tokens = self.task_linear(task_feats_cont)                  # (T, M, d_model)
+        T_tokens = T_tokens + self.task_type_embed(task_type_ids_safe)  # (T, M, d_model)
+
+        E = self.env_linear(env_feats)                                # (T, d_model)
+        W = W + E.unsqueeze(1)                                        # (T, N, d_model)
+
+        for sa_layer in self.sa_layers:
+            W = sa_layer(W)                                           # (T, N, d_model)
+
+        for ca_attn, ca_ff in zip(self.ca_layers, self.ca_ff):
+            W = ca_attn(W, T_tokens)                                  # (T, N, d_model)
+            W = ca_ff(W)                                              # (T, N, d_model)
+
+        # ── LSTM as a sequence (one call for all T steps) ─────────────────────
+        g = W.mean(dim=1)                                             # (T, d_model)
+        # nn.LSTM batch_first=False expects (seq_len, batch, input_size)
+        # g is (T, d_model); unsqueeze(1) → (T, 1, d_model): seq_len=T, batch=1
+        lstm_out, new_hidden = self.lstm(g.unsqueeze(1), lstm_hidden)  # (T, 1, lstm_hidden)
+        h_t = lstm_out.squeeze(1)                                     # (T, lstm_hidden)
+
+        # Broadcast temporal context into worker tokens
+        W_final = W + self.lstm_proj(h_t).unsqueeze(1)               # (T, N, d_model)
+
+        # ── Outputs ───────────────────────────────────────────────────────────
+        # Assignment logits via batched matmul: (T, N, d) @ (T, d, M) → (T, N, M)
+        assign_logits = torch.bmm(W_final, T_tokens.transpose(1, 2))  # (T, N, M)
+
+        # Apply per-step action masks
+        N = W_final.shape[1]
+        M = T_tokens.shape[1]
+        full_mask = torch.ones(T, N, M, dtype=torch.bool, device=device)
+        for t_idx, mask in enumerate(action_masks):
+            if mask is not None:
+                full_mask[t_idx] = torch.tensor(mask, dtype=torch.bool, device=device)
+        assign_logits = assign_logits.masked_fill(~full_mask, -1e9)
+
+        hustle_logits = self.hustle_head(W_final)                     # (T, N, 2)
+        values = self.value_head(h_t).squeeze(-1)                     # (T,)
+
+        # Vectorised entropy: sum over workers for each step
+        task_lp = F.log_softmax(assign_logits, dim=-1)                # (T, N, M)
+        task_ent = -(task_lp.exp() * task_lp).sum(dim=-1)            # (T, N)
+        hustle_lp = F.log_softmax(hustle_logits, dim=-1)              # (T, N, 2)
+        hustle_ent = -(hustle_lp.exp() * hustle_lp).sum(dim=-1)      # (T, N)
+        entropies = (task_ent + hustle_ent).sum(dim=-1)               # (T,)
+
+        return assign_logits, hustle_logits, values, entropies, new_hidden
 
     # ── Action selection ──────────────────────────────────────────────────────
 

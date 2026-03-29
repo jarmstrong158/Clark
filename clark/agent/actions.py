@@ -41,7 +41,8 @@ def get_action_mask(env: "FacilityEnv") -> np.ndarray:
     # Support YearEnv wrapper
     day_env = getattr(env, "day_env", env)
     cfg = day_env.facility_config
-    N = day_env._num_workers
+    # Use actual worker list — temp peak-staffing workers may push N above _num_workers
+    N = len(day_env.episode.workers)
     M = day_env._num_tasks
     task_ids: list[str] = day_env._task_ids
     task_to_idx: dict[str, int] = day_env._task_to_idx
@@ -170,7 +171,7 @@ def get_hustle_mask(env: "FacilityEnv") -> np.ndarray:
         np.ndarray of dtype=bool, shape (N, 2)
     """
     day_env = getattr(env, "day_env", env)
-    N = day_env._num_workers
+    N = len(day_env.episode.workers)
     mask = np.zeros((N, 2), dtype=bool)
 
     for w_id in range(N):

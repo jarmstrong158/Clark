@@ -43,32 +43,34 @@ class StateBuilder:
             t_id: i for i, t_id in enumerate(self.task_ids)
         }
 
-        # Pre-compute per-worker role IDs (stable; never changes during episode)
-        self._worker_role_ids: np.ndarray = np.array(
-            [self.ROLE_IDS.get(w.role, 3) for w in facility_config.workers],
-            dtype=np.int64,
-        )
-
     # ── Public API ─────────────────────────────────────────────────────────────
 
     def build(self, env: "FacilityEnv") -> dict:
         """
         Build a structured state dict from a live FacilityEnv after reset/step.
 
+        Uses the actual worker list from the env (not self.N) so that peak-staffing
+        temp workers injected at runtime are included without an IndexError.
+
         Returns:
             {
-                "worker_feats":    np.ndarray (N, 14)  float32
-                "task_feats":      np.ndarray (M, 3)   float32
-                "env_feats":       np.ndarray (17,)    float32
-                "worker_role_ids": np.ndarray (N,)     int64
-                "task_type_ids":   np.ndarray (M,)     int64
+                "worker_feats":    np.ndarray (actual_N, 14)  float32
+                "task_feats":      np.ndarray (M, 3)          float32
+                "env_feats":       np.ndarray (17,)            float32
+                "worker_role_ids": np.ndarray (actual_N,)     int64
+                "task_type_ids":   np.ndarray (M,)            int64
             }
         """
+        actual_workers = env.episode.workers
+        worker_role_ids = np.array(
+            [self.ROLE_IDS.get(w.role, 3) for w in actual_workers],
+            dtype=np.int64,
+        )
         return {
             "worker_feats": self._build_worker_feats(env),
             "task_feats": self._build_task_feats(env),
             "env_feats": self._build_env_feats(env),
-            "worker_role_ids": self._worker_role_ids.copy(),
+            "worker_role_ids": worker_role_ids,
             "task_type_ids": np.arange(self.M, dtype=np.int64),
         }
 
@@ -114,9 +116,10 @@ class StateBuilder:
          13  task_oph_normalized — OPH on current task / max_possible_oph, normalized [0,1]
         """
         required = self.config.rules.management_daily_hours_required
-        feats = np.zeros((self.N, WORKER_STATE_SCALARS), dtype=np.float32)
+        actual_workers = env.episode.workers
+        feats = np.zeros((len(actual_workers), WORKER_STATE_SCALARS), dtype=np.float32)
 
-        for i, w in enumerate(env.episode.workers):
+        for i, w in enumerate(actual_workers):
             shift_h = max(0.01, w.shift_hours)
             feats[i, 0] = w.base_oph / 30.0
             feats[i, 1] = w.hours_worked / shift_h
