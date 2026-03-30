@@ -1,0 +1,236 @@
+# Volt Warehouse — Clark facility config
+# Translated from Jack's volt_sim/config.py
+# Fine-tune: clark finetune --config clark/data/configs/volt_warehouse.yaml --base clark_foundation.pt --output volt_agent.pt
+
+facility:
+  name: "Volt Warehouse"
+  timezone: "America/Chicago"
+
+workers:
+  - id: 0
+    name: "Jonathan"
+    base_oph: 17.0
+    shift_hours: 9.75
+    shift_start: 7.75        # 7:45 AM (pre-sim management window)
+    role: manager
+    task_eligibility: all
+    call_off_probability: 0.01
+    hustle_daily_cap: 9.5    # all shift hours eligible
+    individual_debuff:
+      type: family_needs
+      probability: 0.25
+      cooldown_days: 5
+      effect: lose_hours
+      hours_lost_range: [1.0, 2.0]
+    task_oph_overrides: {}
+
+  - id: 1
+    name: "Evan"
+    base_oph: 15.35
+    shift_hours: 8.5
+    shift_start: 9.0
+    role: assistant_manager
+    task_eligibility: all
+    call_off_probability: 0.02
+    hustle_daily_cap: 7.0    # easing in — first hour excluded
+    individual_debuff:
+      type: family_needs
+      probability: 0.25
+      cooldown_days: 5
+      effect: lose_hours
+      hours_lost_range: [1.0, 2.0]
+
+  - id: 2
+    name: "Jonah"
+    base_oph: 16.23
+    shift_hours: 8.5
+    shift_start: 9.0
+    role: warehouse
+    task_eligibility: [pick, pack, restock, side_project, cycle_count, idle]
+    call_off_probability: 0.035
+    hustle_daily_cap: 6.0
+    individual_debuff:
+      type: stomach_issues
+      probability: 0.30
+      cooldown_days: 4
+      effect: oph_penalty
+      oph_multiplier: 0.85
+
+  - id: 3
+    name: "Andrew"
+    base_oph: 18.30
+    shift_hours: 8.5
+    shift_start: 9.0
+    role: warehouse
+    task_eligibility: [pick, pack, restock, side_project, idle]
+    call_off_probability: 0.035
+    hustle_daily_cap: 8.0
+    individual_debuff:
+      type: eoe_muscle_flare
+      probability: null        # season-weighted (see business_rules.andrew_flare_probabilities)
+      cooldown_days: 0
+      effect: pack_only        # restricted to pack only when active
+
+  - id: 4
+    name: "Dan"
+    base_oph: 18.94
+    shift_hours: 8.5
+    shift_start: 9.0
+    role: warehouse
+    task_eligibility: [pick, pack, restock, side_project, idle]
+    call_off_probability: 0.035  # NCNS folded into general call-off (2.5% original, buffered up)
+    hustle_daily_cap: 8.0
+
+  - id: 5
+    name: "Guy"
+    base_oph: 15.28
+    shift_hours: 8.5
+    shift_start: 9.0
+    role: warehouse
+    task_eligibility: [pick, pack, restock, side_project, idle]
+    call_off_probability: 0.035
+    hustle_daily_cap: 3.0       # low endurance
+    individual_debuff:
+      type: soreness
+      probability: 0.167        # ~1-in-6 days
+      cooldown_days: 0
+      effect: soreness          # -50% OPH after 4hrs non-side-project work
+
+  - id: 6
+    name: "Yusef"
+    base_oph: 14.88
+    shift_hours: 8.5
+    shift_start: 9.0
+    role: warehouse
+    task_eligibility: [pick, pack, restock, side_project, idle]
+    call_off_probability: 0.035
+    hustle_daily_cap: 7.0
+    individual_debuff:
+      type: family_needs
+      probability: 0.15
+      cooldown_days: 7
+      effect: lose_hours
+      hours_lost_range: [1.0, 2.0]
+
+tasks:
+  enabled:
+    - pick
+    - pack
+    - restock
+    - side_project
+    - management
+    - cycle_count
+    - idle
+  custom: []
+
+volume:
+  seasonal_ranges:
+    january:    [60, 100]
+    february:   [60, 100]
+    march:      [150, 250]
+    april:      [300, 450]
+    may:        [350, 500]
+    june:       [350, 500]
+    july:       [280, 400]
+    august:     [280, 400]
+    september:  [250, 350]
+    october:    [200, 300]
+    november:   [150, 220]
+    december:   [60, 100]
+
+  weekly_curve:
+    monday:    [0.86, 1.00]
+    tuesday:   [0.71, 0.85]
+    wednesday: [0.56, 0.70]
+    thursday:  [0.41, 0.55]
+    friday:    [0.00, 0.40]
+
+business_rules:
+  management_daily_hours_required: 4.0
+  management_min_daily_hours: 1.5
+  ot_wall_clock_max: 1.0
+  ot_hard_stop_hour: 18.5         # 6:30 PM
+  ot_trigger_orders_remaining: 10
+  cycle_count_weekly_hours: 3.0   # 2 counts × 1.5 hrs each
+  cycle_count_max_overdue_weeks: 4
+  min_staffing_floor: 3
+  high_volume_day_orders: 400
+  high_volume_percentile: 0.75
+  max_call_offs_per_day: 2
+  max_call_offs_high_volume: 1
+
+  # Shift timing
+  day_start_hour: 9.0
+  eod_hour: 17.5                  # 5:30 PM
+  order_cutoff_hour: 17.0         # 5:00 PM
+  carrier_pickup_hour: null
+
+  # Breaks
+  lunch_hour: 13.0
+  lunch_duration: 0.5
+
+  # Morning pick round
+  morning_pick_enabled: true
+  morning_pick_carts_min: 1
+  morning_pick_carts_max: 2
+  morning_pick_per_cart_min: 1
+  morning_pick_per_cart_max: 6
+
+  # Equipment
+  pack_stations: null
+  carts_available: null
+
+  # Picker schedule — fixed by day of week (Mon=Dan, Tue=Andrew, Wed=Jonah, Thu=Yusef, Fri=Guy)
+  picker_assignment: fixed_schedule
+  fixed_picker_schedule:
+    monday:    4     # Dan
+    tuesday:   3     # Andrew
+    wednesday: 2     # Jonah
+    thursday:  6     # Yusef
+    friday:    5     # Guy
+
+  # Andrew's seasonal flare probabilities
+  andrew_flare_probabilities:
+    winter: 0.05
+    spring: 0.20
+    summer: 0.25
+    fall:   0.12
+
+  # Order carryover
+  order_carryover_enabled: false
+  order_carryover_max_days: 3
+  order_carryover_max_backlog: 0
+
+  # Weekend ops
+  work_saturday: false
+  saturday_volume_fraction: 0.0
+
+  # Late orders
+  late_order_exception_rate: 0.0
+
+  # Restock availability
+  restock_availability_hour: 0.0
+
+breaks:
+  - hour: 10.5
+    duration: 0.25
+    staggered: false
+  - hour: 13.0
+    duration: 0.5
+    staggered: false
+
+peak_staffing: null
+
+order_complexity:
+  tiers:
+    - name: standard
+      weight: 1.0
+      oph_multiplier: 1.0
+
+rewards:
+  # Use Clark defaults — they match Jack's reward architecture
+  # Override specific values here if needed after fine-tuning diagnostics
+  management_duty_met: 30.0
+  management_duty_missed: -50.0
+  jonathan_per_order: -0.3
+  evan_per_order: -0.15

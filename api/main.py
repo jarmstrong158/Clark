@@ -346,18 +346,153 @@ def get_plan(
 
     Requires a trained checkpoint at clark/data/facilities/{id}/model.pt.
     """
-    _load_meta(facility_id)
+    import calendar
+    import random
+    from datetime import date as _date, timedelta
 
+    _load_meta(facility_id)
+    config_p = _config_path(facility_id)
+    ckpt_p = _checkpoint_path(facility_id)
+
+    if not config_p.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Config file missing for facility '{facility_id}'.",
+        )
+    if not ckpt_p.exists():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"No trained checkpoint found for facility '{facility_id}'. "
+                "Run POST /facilities/{id}/train first."
+            ),
+        )
+
+    # Parse date
+    try:
+        start_date = _date.fromisoformat(body.date)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid date format: {body.date!r}. Use YYYY-MM-DD.",
+        )
+
+    # Load config + model
+    try:
+        from clark.config.schema import FacilityConfig
+        config = FacilityConfig.from_yaml(str(config_p))
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to load facility config: {exc}",
+        )
+
+    try:
+        from clark.agent.ppo import ClarkAgent
+        agent = ClarkAgent.load(str(ckpt_p))
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to load model checkpoint: {exc}",
+        )
+
+    # Sample order volume for a date using facility volume curves
+    def _sample_volume(target: _date) -> tuple[int, str]:
+        month_name = calendar.month_name[target.month].lower()
+        dow_names = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+        dow_name = dow_names[target.weekday()]
+
+        ranges = config.volume.seasonal_ranges
+        vol_range = ranges.get(month_name, [100, 300])
+        vol_lo, vol_hi = vol_range[0], vol_range[1]
+        vol_spread = vol_hi - vol_lo
+
+        curve = config.volume.weekly_curve
+        pct_lo, pct_hi = curve.get(dow_name, [0.5, 1.0])
+        day_lo = vol_lo + int(vol_spread * pct_lo)
+        day_hi = vol_lo + int(vol_spread * pct_hi)
+        volume = random.randint(day_lo, max(day_lo, day_hi))
+
+        high_threshold = config.rules.high_volume_day_orders
+        label = (
+            "High Volume Day" if volume >= high_threshold
+            else "Moderate Volume Day" if volume >= high_threshold * 0.6
+            else "Normal Day"
+        )
+        return volume, label
+
+    # Run one day through the model, return opening assignments
+    def _run_day(target: _date, volume: int) -> list[dict]:
+        from clark.env.year_env import YearEnv
+        from clark.agent.state import StateBuilder
+        from clark.agent.actions import get_action_mask
+
+        env = YearEnv(config)
+        builder = StateBuilder(config)
+        env.reset()
+        env.day_env.reset(
+            force_month=target.month,
+            force_dow=target.weekday(),
+            force_volume=volume,
+        )
+        agent.reset_hidden()
+
+        state_dict = builder.build(env.day_env)
+        mask = get_action_mask(env.day_env)
+        task_actions, hustle_actions, _lp, _v = agent.select_action_from_dict(state_dict, mask)
+
+        assignments = []
+        for i, worker in enumerate(config.workers):
+            task_idx = task_actions[i]
+            task_name = (
+                config.task_ids[task_idx]
+                if task_idx < len(config.task_ids)
+                else "unknown"
+            )
+            assignments.append({
+                "worker_id": worker.id,
+                "worker_name": worker.name,
+                "task": task_name,
+                "hustle": bool(hustle_actions[i]),
+            })
+        return assignments
+
+    # Generate plan for requested days (skip weekends)
+    days_planned = []
+    for offset in range(max(1, body.n_days)):
+        target = start_date + timedelta(days=offset)
+        if target.weekday() >= 5:
+            continue
+        volume, vol_label = _sample_volume(target)
+        try:
+            assignments = _run_day(target, volume)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Planning failed for {target.isoformat()}: {exc}",
+            )
+        days_planned.append({
+            "date": target.isoformat(),
+            "day_of_week": calendar.day_name[target.weekday()],
+            "forecast_orders": volume,
+            "volume_label": vol_label,
+            "assignments": assignments,
+        })
+
+    if not days_planned:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="No work days in the requested date range (all weekend).",
+        )
+
+    first = days_planned[0]
     return JSONResponse(
         status_code=status.HTTP_200_OK,
         content={
-            "status": "not_implemented",
-            "message": (
-                "Shift planning is stubbed. "
-                "In production: load model.pt, instantiate YearEnv + StateBuilder, "
-                "run one episode day, return assignments. "
-                f"Facility: {facility_id}, date: {body.date}, n_days: {body.n_days}."
-            ),
+            "date": first["date"],
+            "forecast_orders": first["forecast_orders"],
+            "assignments": first["assignments"],
+            "days": days_planned,
         },
     )
 

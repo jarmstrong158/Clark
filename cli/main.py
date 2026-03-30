@@ -421,10 +421,82 @@ def cmd_plan(args: argparse.Namespace):
 
 def cmd_dashboard(args: argparse.Namespace):
     _header()
-    log_dir = args.log_dir
+
+    log_dir = Path(args.log_dir).resolve()
     port = args.port
-    print(f"Dashboard not yet implemented (Phase 6). Logs are at {log_dir}")
-    print(f"(Would have started on port {port})")
+    dashboard_html = Path(__file__).parent.parent / "clark" / "dashboard" / "dashboard.html"
+
+    if not dashboard_html.exists():
+        _die(f"Dashboard HTML not found at {dashboard_html}")
+
+    if not log_dir.exists():
+        _warn(f"Log directory does not exist yet: {log_dir}")
+        _warn("Dashboard will show no data until training produces logs.")
+
+    import http.server
+    import threading
+    import webbrowser
+
+    dashboard_bytes = dashboard_html.read_bytes()
+
+    class DashboardHandler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, fmt, *a):
+            pass  # suppress default access log spam
+
+        def do_GET(self):
+            from urllib.parse import urlparse
+            path = urlparse(self.path).path
+
+            if path in ("/", "/index.html"):
+                self._send(200, "text/html; charset=utf-8", dashboard_bytes)
+            elif path in ("/data/year_snapshot.json", "/clark/data/year_snapshot.json",
+                          "/volt_sim/data/year_snapshot.json"):
+                self._serve_json("year_snapshot.json")
+            elif path == "/data/episode_log.json":
+                self._serve_json("episode_log.json")
+            else:
+                self._send(404, "text/plain", b"Not found")
+
+        def _serve_json(self, filename: str):
+            fpath = log_dir / filename
+            if fpath.exists():
+                try:
+                    data = fpath.read_bytes()
+                    self._send(200, "application/json", data)
+                except Exception:
+                    self._send(500, "text/plain", b"Error reading file")
+            else:
+                # Return empty valid structure so dashboard doesn't error out
+                self._send(200, "application/json",
+                           b'{"episodes":[],"training_stats":{},"year_summary":{}}')
+
+        def _send(self, code: int, ctype: str, body: bytes):
+            self.send_response(code)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(body)
+
+    server = http.server.HTTPServer(("localhost", port), DashboardHandler)
+
+    url = f"http://localhost:{port}"
+    print(f"  Dashboard: {url}")
+    print(f"  Log dir:   {log_dir}")
+    print(f"  Auto-refreshes every 10s while training is running.")
+    print(f"  Press Ctrl+C to stop.\n")
+
+    # Open browser after a short delay
+    def _open():
+        import time
+        time.sleep(0.5)
+        webbrowser.open(url)
+    threading.Thread(target=_open, daemon=True).start()
+
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\nDashboard stopped.")
 
 
 # ── Argument parser ───────────────────────────────────────────────────────────
@@ -487,11 +559,9 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Number of days to plan ahead (default: 1).")
 
     # dashboard
-    p_dash = sub.add_parser("dashboard", help="Launch the Clark dashboard (Phase 6).")
-    p_dash.add_argument("--config", required=True,
-                        help="Path to facility YAML config.")
-    p_dash.add_argument("--log-dir", default="clark/data/logs/",
-                        help="Directory containing training logs.")
+    p_dash = sub.add_parser("dashboard", help="Launch the Clark training dashboard.")
+    p_dash.add_argument("--log-dir", default="clark/data/logs/pretrain",
+                        help="Directory containing episode_log.json / year_snapshot.json.")
     p_dash.add_argument("--port", type=int, default=8080,
                         help="Port to serve the dashboard on (default: 8080).")
 
