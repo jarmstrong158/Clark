@@ -62,14 +62,26 @@ def pretrain(
             return 2
         return 3
 
-    # One foundation agent, no config dependency in the model weights.
-    agent = ClarkAgent()
+    # Resume from checkpoint if one exists at the output path, otherwise start fresh.
+    start_episode = 1
+    if os.path.exists(output_path):
+        try:
+            import torch as _torch
+            _ckpt = _torch.load(output_path, weights_only=False)
+            agent = ClarkAgent.load(output_path)
+            start_episode = int(_ckpt.get("episode", 0)) + 1
+            print(f"  [Resume] Loaded checkpoint — resuming at episode {start_episode}/{n_episodes}")
+        except Exception as e:
+            print(f"  [Resume] Could not load checkpoint ({e}) — starting fresh.")
+            agent = ClarkAgent()
+    else:
+        agent = ClarkAgent()
 
     # Lightweight logger — pretrain mode strips step data to control log size
     logger = EpisodeLogger(log_dir=log_dir, mode="pretrain")
 
     print(f"Pre-training Clark foundation model")
-    print(f"  Episodes (years): {n_episodes}")
+    print(f"  Episodes (years): {n_episodes}  (start: {start_episode})")
     print(f"  Years per config: {years_per_config}")
     print(f"  Total configs:    {total_configs}")
     print(f"  Stage 1 ends at config: {stage1_end} (simple: 2-10 workers, 3-5 tasks)")
@@ -85,10 +97,11 @@ def pretrain(
     )
     print("  " + "-" * 130)
 
-    configs_seen: int = 0
-    years_on_current_config: int = 0
+    # Fast-forward curriculum counters to match resumed episode
+    configs_seen: int = (start_episode - 1) // years_per_config
+    years_on_current_config: int = (start_episode - 1) % years_per_config
     current_config = None
-    current_stage: int = 1
+    current_stage: int = _get_stage(configs_seen)
 
     start_time = time.time()
 
@@ -105,7 +118,7 @@ def pretrain(
         "entropy": 0.0, "clip_fraction": 0.0, "n": 0,
     }
 
-    for ep in range(1, n_episodes + 1):
+    for ep in range(start_episode, n_episodes + 1):
         # Rotate to a new config every `years_per_config` years
         if years_on_current_config == 0 or years_on_current_config >= years_per_config:
             current_stage = _get_stage(configs_seen)
