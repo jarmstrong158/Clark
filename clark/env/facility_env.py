@@ -249,7 +249,7 @@ class FacilityEnv:
         step_reward = 0.0
 
         for worker_id, task_idx, hustle in actions:
-            if 0 <= worker_id < self._num_workers and 0 <= task_idx < self._num_tasks:
+            if 0 <= worker_id < len(self.episode.workers) and 0 <= task_idx < self._num_tasks:
                 worker = self.episode.workers[worker_id]
                 new_task = self._task_ids[task_idx]
 
@@ -696,7 +696,7 @@ class FacilityEnv:
 
     def _get_state(self) -> np.ndarray:
         num_tasks = self._num_tasks
-        total_size = self._num_workers * (num_tasks + WORKER_STATE_SCALARS) + ENV_STATE_SIZE
+        total_size = len(self.episode.workers) * (num_tasks + WORKER_STATE_SCALARS) + ENV_STATE_SIZE
         state = np.zeros(total_size, dtype=np.float32)
         idx = 0
 
