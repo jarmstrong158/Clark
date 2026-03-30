@@ -9,9 +9,9 @@ specific facility — the shared backbone stays frozen.
 
 Usage:
     python -m clark.training.finetune \\
-        --config clark/data/configs/volt_warehouse.yaml \\
+        --config clark/data/configs/my_facility.yaml \\
         --base-model clark/data/checkpoints/clark_foundation.pt \\
-        --output clark/data/checkpoints/volt_finetuned.pt
+        --output clark/data/checkpoints/my_facility_agent.pt
 """
 from __future__ import annotations
 
@@ -45,7 +45,7 @@ def finetune(
     Fine-tune a foundation checkpoint on a specific facility.
 
     Args:
-        config_path:      Path to facility YAML (e.g. volt_warehouse.yaml).
+        config_path:      Path to facility YAML (e.g. my_facility.yaml).
         base_model_path:  Path to foundation checkpoint (.pt file).
         output_path:      Where to save the fine-tuned checkpoint.
         n_episodes:       Number of fine-tuning episodes.

@@ -71,9 +71,9 @@ def _load_template(template: str, name: str) -> str:
     """Return template YAML text with a header comment and the facility name substituted."""
     clark_root = Path(__file__).parent.parent
     template_map = {
-        "small": clark_root / "clark" / "data" / "configs" / "example_small.yaml",
-        "large": clark_root / "clark" / "data" / "configs" / "example_large.yaml",
-        "volt":  clark_root / "clark" / "data" / "configs" / "volt_warehouse.yaml",
+        "small":    clark_root / "clark" / "data" / "configs" / "example_small.yaml",
+        "large":    clark_root / "clark" / "data" / "configs" / "example_large.yaml",
+        "full":     clark_root / "clark" / "data" / "configs" / "example_1.yaml",
     }
     path = template_map.get(template)
     if path is None or not path.exists():
@@ -118,11 +118,11 @@ def cmd_init(args: argparse.Namespace):
 
     # Prompt: template
     try:
-        tmpl_input = input("Start from template? [small/large/volt] (default: small): ").strip().lower()
+        tmpl_input = input("Start from template? [small/large/full] (default: small): ").strip().lower()
     except (EOFError, KeyboardInterrupt):
         tmpl_input = ""
 
-    tmpl = tmpl_input if tmpl_input in ("small", "large", "volt") else "small"
+    tmpl = tmpl_input if tmpl_input in ("small", "large", "full") else "small"
 
     content = _load_template(tmpl, name)
 
@@ -449,8 +449,7 @@ def cmd_dashboard(args: argparse.Namespace):
 
             if path in ("/", "/index.html"):
                 self._send(200, "text/html; charset=utf-8", dashboard_bytes)
-            elif path in ("/data/year_snapshot.json", "/clark/data/year_snapshot.json",
-                          "/volt_sim/data/year_snapshot.json"):
+            elif path in ("/data/year_snapshot.json", "/clark/data/year_snapshot.json"):
                 self._serve_json("year_snapshot.json")
             elif path == "/data/episode_log.json":
                 self._serve_json("episode_log.json")

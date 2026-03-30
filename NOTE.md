@@ -19,7 +19,7 @@ The result is a CLI tool and eventually a cloud API: give Clark your facility co
 
 ## Relationship to Jack
 
-Jack (`C:\Users\jarms\repos\volt-warehouse\`) is a complete, working RL agent for one specific warehouse (Volt). Clark is the generalization of Jack.
+Jack is a complete, working RL agent for one specific warehouse. Clark is the generalization of Jack.
 
 **What was reused (~70%):**
 - Reward signal architecture (`_add_reward` pattern)
@@ -246,9 +246,6 @@ Docker: separate containers for API and training workers. Scales horizontally.
 
 ## Pointer to Jack
 
-Jack's reference implementations live at:
-- `C:\Users\jarms\repos\volt-warehouse\volt_sim\`
+Jack is the single-facility predecessor to Clark. When in doubt about how a mechanic should work, read Jack's implementation first.
 - Key files: `env/warehouse_env.py`, `env/year_env.py`, `agent/ppo.py`, `agent/actions.py`
-- Jack's config: `volt_sim/config.py` — the hardcoded version of what Clark's YAML schema replaces
-
-When in doubt about how a mechanic should work, read Jack's implementation first.
+- Jack's config: `config.py` — the hardcoded version of what Clark's YAML schema replaces

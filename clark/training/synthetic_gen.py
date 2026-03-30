@@ -573,8 +573,8 @@ def _sample_random_complexity(cs: CurriculumStage) -> OrderComplexityConfig:
 
 # ── Convenience loader ─────────────────────────────────────────────────────────
 
-def get_volt_config() -> FacilityConfig:
-    """Load the example_1.yaml config (formerly volt_warehouse.yaml) from the standard data directory."""
+def get_example1_config() -> FacilityConfig:
+    """Load the example_1.yaml config from the standard data directory."""
     config_path = (
         Path(__file__).parent.parent / "data" / "configs" / "example_1.yaml"
     )

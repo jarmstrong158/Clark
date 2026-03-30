@@ -1,7 +1,7 @@
 # Example Facility 1 — Clark facility config
-# Derived from the original Volt Warehouse parameters.
-# Demonstrates full use of all new operational fields.
-# Reference: formerly volt_warehouse.yaml
+# Full-featured example: 7 workers, all standard tasks, seasonal volume curve.
+# Demonstrates use of debuffs, hustle caps, fixed picker schedule, and cycle counts.
+# Copy and adjust to match your real facility.
 
 facility:
   name: "Example Facility 1"
@@ -9,7 +9,7 @@ facility:
 
 workers:
   - id: 0
-    name: "Jonathan"
+    name: "Manager"
     base_oph: 17.0
     shift_hours: 9.75
     shift_start: 9.0
@@ -26,12 +26,11 @@ workers:
       cooldown_days: 5
       effect: lose_hours
       hours_lost_range: [1.0, 2.0]
-    # Manager picks at ~2.5x base rate when jumping on the floor
     task_oph_overrides:
       pick: 42.5
 
   - id: 1
-    name: "Evan"
+    name: "Asst Manager"
     base_oph: 15.35
     shift_hours: 8.5
     shift_start: 9.0
@@ -53,8 +52,8 @@ workers:
       pick: 34.5
 
   - id: 2
-    name: "Jonah"
-    base_oph: 16.23
+    name: "Worker A"
+    base_oph: 16.0
     shift_hours: 8.5
     shift_start: 9.0
     role: warehouse
@@ -67,14 +66,14 @@ workers:
       default: 0.90
     individual_debuff:
       type: stomach_issues
-      probability: 0.30
+      probability: 0.20
       cooldown_days: 4
       effect: oph_penalty
       oph_multiplier: 0.85
 
   - id: 3
-    name: "Andrew"
-    base_oph: 18.30
+    name: "Worker B"
+    base_oph: 18.0
     shift_hours: 8.5
     shift_start: 9.0
     role: warehouse
@@ -87,7 +86,6 @@ workers:
       default: 0.90
     individual_debuff:
       type: eoe_muscle_flare
-      # probability is season-weighted — see season_weights below
       probability: 0.0
       cooldown_days: 0
       effect: pack_only
@@ -97,11 +95,11 @@ workers:
         summer: 0.25
         fall: 0.12
     task_oph_overrides:
-      pick: 45.75  # strong picker
+      pick: 45.0
 
   - id: 4
-    name: "Dan"
-    base_oph: 18.94
+    name: "Worker C"
+    base_oph: 18.5
     shift_hours: 8.5
     shift_start: 9.0
     role: warehouse
@@ -110,13 +108,13 @@ workers:
     max_ot_hours: 1.0
     hustle_daily_cap: 8.0
     bad_headspace_effects:
-      default: 1.00  # immune to bad headspace
+      default: 1.00
     task_oph_overrides:
-      pick: 47.35  # fastest picker
+      pick: 46.0
 
   - id: 5
-    name: "Guy"
-    base_oph: 15.28
+    name: "Worker D"
+    base_oph: 15.0
     shift_hours: 8.5
     shift_start: 9.0
     role: warehouse
@@ -129,13 +127,13 @@ workers:
       default: 0.90
     individual_debuff:
       type: soreness
-      probability: 0.16667  # 1/6 ≈ 16.7%
+      probability: 0.16667
       cooldown_days: 0
       effect: soreness
 
   - id: 6
-    name: "Yusef"
-    base_oph: 14.88
+    name: "Worker E"
+    base_oph: 15.0
     shift_hours: 8.5
     shift_start: 9.0
     role: warehouse
@@ -165,20 +163,20 @@ tasks:
   custom: []
 
 volume:
-  # Volt's real seasonal order ranges
+  # Example seasonal ranges — replace with your real order volumes
   seasonal_ranges:
-    january:   [60, 100]
-    february:  [60, 100]
-    march:     [150, 250]
-    april:     [300, 450]
-    may:       [350, 500]
-    june:      [350, 500]
-    july:      [280, 400]
-    august:    [280, 400]
-    september: [250, 350]
-    october:   [200, 300]
-    november:  [150, 220]
-    december:  [60, 100]
+    january:   [50, 90]
+    february:  [50, 90]
+    march:     [120, 220]
+    april:     [250, 400]
+    may:       [300, 450]
+    june:      [300, 450]
+    july:      [240, 360]
+    august:    [240, 360]
+    september: [200, 300]
+    october:   [160, 260]
+    november:  [120, 200]
+    december:  [50, 90]
   weekly_curve:
     monday:    [0.86, 1.00]
     tuesday:   [0.71, 0.85]
@@ -197,7 +195,7 @@ business_rules:
   cycle_count_weekly_hours: 3.0
   cycle_count_max_overdue_weeks: 4
   min_staffing_floor: 2
-  high_volume_day_orders: 400
+  high_volume_day_orders: 380
   high_volume_percentile: 0.75
   target_daily_orders: null
   order_incomplete_threshold: 0
@@ -254,5 +252,4 @@ order_complexity:
       weight: 1.0
       oph_multiplier: 1.0
 
-# No reward overrides — use Clark defaults (which match Jack exactly)
 rewards: {}
