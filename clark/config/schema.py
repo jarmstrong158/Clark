@@ -196,18 +196,53 @@ class BusinessRules:
 
 @dataclass
 class RewardOverrides:
-    """Optional per-facility reward signal overrides. Unset = Clark defaults."""
+    """Optional per-facility reward signal overrides. Unset = Clark defaults.
+
+    Every key in DEFAULT_REWARDS has a matching field here so any reward
+    component can be tuned per facility without touching code.
+    """
+    # Order shipping / completion
     per_order_shipped: Optional[float] = None
     all_orders_complete_bonus: Optional[float] = None
     per_order_incomplete: Optional[float] = None
+
+    # Overtime
     per_ot_hour: Optional[float] = None
+    ot_incomplete_flat: Optional[float] = None
+    ot_per_order_incomplete: Optional[float] = None
+
+    # Restock
     per_restock_completed: Optional[float] = None
+    all_restock_bonus: Optional[float] = None
+    per_restock_bleed: Optional[float] = None
+    restock_pick_interruption: Optional[float] = None
+    restock_level_low: Optional[float] = None
+    restock_level_empty: Optional[float] = None
+
+    # Side projects
+    per_filler_unit: Optional[float] = None
+    filler_completion_bonus: Optional[float] = None
+    per_deliberate_unit: Optional[float] = None
+    deliberate_completion_bonus: Optional[float] = None
+    side_project_during_crunch: Optional[float] = None
+
+    # Worker hours / utilization
+    per_productive_hour: Optional[float] = None
+    per_management_hour: Optional[float] = None
+    per_idle_hour: Optional[float] = None
+    packers_starved: Optional[float] = None
+    picked_backlog: Optional[float] = None
+
+    # Management duty
+    management_duty_met: Optional[float] = None
+    management_duty_minimum_met: Optional[float] = None
+    management_duty_missed: Optional[float] = None
+
+    # Cycle count
     per_cycle_count_hour: Optional[float] = None
     cycle_count_week_complete: Optional[float] = None
     cycle_count_week_missed: Optional[float] = None
     cycle_count_critical_overdue: Optional[float] = None
-    management_duty_met: Optional[float] = None
-    management_duty_missed: Optional[float] = None
 
     def apply(self, defaults: dict) -> dict:
         """Merge overrides into a defaults dict, returning merged copy."""
@@ -222,7 +257,10 @@ class RewardOverrides:
 
 DEFAULT_REWARDS: dict[str, float] = {
     "per_order_shipped":              1.0,
-    "all_orders_complete_bonus":     50.0,
+    # Completion bonus is the biggest single carrot — bumped from +50 to +200
+    # so the gradient signal for "ship every order" dominates the per-step
+    # bleed and properly aligns with the binary completion grade gate.
+    "all_orders_complete_bonus":    200.0,
     "per_order_incomplete":         -10.0,
     "per_ot_hour":                   -0.5,
     "ot_incomplete_flat":           -25.0,
@@ -243,7 +281,12 @@ DEFAULT_REWARDS: dict[str, float] = {
     "per_idle_hour":                 -0.5,
     "packers_starved":               -1.0,
     "picked_backlog":                -2.0,
+    # Management has THREE tiers now: full required hours (+30), bare minimum
+    # met (+10), or missed entirely (-50). The middle tier closes the
+    # "blind zone" where the agent does just enough to avoid F-via-mgmt but
+    # gets no reward signal that the choice was correct.
     "management_duty_met":           30.0,
+    "management_duty_minimum_met":   10.0,
     "management_duty_missed":       -50.0,
     "per_cycle_count_hour":           0.5,
     "cycle_count_week_complete":     20.0,
@@ -521,6 +564,14 @@ class FacilityConfig:
         # Task count
         if self.num_tasks < 2:
             errors.append("Need at least 2 active tasks (pick + pack minimum).")
+        # Hard cap matches the model's task_type_embed size (transformer._MAX_TASKS = 20).
+        # Beyond this, the embedding clamp would collapse high task IDs onto the same
+        # row, silently corrupting the per-task representation.
+        if self.num_tasks > 20:
+            errors.append(
+                f"num_tasks={self.num_tasks} exceeds the model's task embedding capacity "
+                f"(20). Reduce the enabled task list or retrain with a larger embedding."
+            )
 
         # At least one manager if management task is enabled
         if "management" in self.task_ids and not self.manager_worker_ids():

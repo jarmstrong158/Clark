@@ -22,7 +22,7 @@ from pathlib import Path
 
 from torch.optim import Adam
 
-from clark.agent.actions import get_action_mask
+from clark.agent.actions import get_action_mask, get_hustle_mask
 from clark.agent.ppo import ClarkAgent
 from clark.agent.state import StateBuilder
 from clark.config.schema import FacilityConfig
@@ -135,23 +135,32 @@ def finetune(
         while not done:
             state_dict = builder.build(env.day_env)
             mask = get_action_mask(env.day_env)
+            hmask = get_hustle_mask(env.day_env)
 
-            task_actions, hustle_actions, log_prob, value = (
-                agent.select_action_from_dict(state_dict, mask)
+            (task_actions, hustle_actions,
+             task_lp, hustle_lp, value) = (
+                agent.select_action_from_dict(state_dict, mask, hustle_mask=hmask)
             )
 
+            # Use len(task_actions) — temp peak-staffing workers may push N
+            # above config.num_workers mid-year.
             actions = [
                 (i, task_actions[i], bool(hustle_actions[i]))
-                for i in range(config.num_workers)
+                for i in range(len(task_actions))
             ]
 
             _, reward, done, info = env.step(actions)
+            # Same per-worker normalization + tighter clip as pretrain (see
+            # pretrain.py for rationale).
+            reward = float(max(-5000.0, min(5000.0, reward)))
+            n_workers = max(1, state_dict["worker_feats"].shape[0])
+            reward = reward / n_workers
             episode_reward += reward
             steps += 1
 
             agent.store_transition(
                 state_dict, task_actions, hustle_actions,
-                log_prob, value, reward, done, mask
+                task_lp, hustle_lp, value, reward, done, mask, hmask,
             )
 
             if info.get("new_day") or done:

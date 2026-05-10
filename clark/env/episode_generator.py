@@ -156,8 +156,19 @@ def generate_episode(
     total_orders = volume if volume is not None else random.randint(vol_range[0], vol_range[1])
     is_high_vol = _is_high_volume_day(total_orders, vol_range, facility_config)
 
-    # Arrival schedule
-    arrival = _generate_arrival_schedule(total_orders, is_high_vol)
+    # Arrival schedule. Use the facility's ACTUAL day_start / cutoff so all
+    # orders land before the cutoff window — otherwise post-cutoff arrivals
+    # are dropped at simulation time but stay counted in total_orders, which
+    # makes the episode's order_completion target mathematically unreachable
+    # and forces grade=F regardless of policy.
+    rules = facility_config.rules
+    sched_day_start = float(getattr(rules, "day_start_hour", DAY_START_HOUR))
+    sched_cutoff = float(getattr(rules, "order_cutoff_hour", ORDER_CUTOFF_HOUR))
+    arrival = _generate_arrival_schedule(
+        total_orders, is_high_vol,
+        day_start=sched_day_start,
+        order_cutoff=sched_cutoff,
+    )
 
     # Restock hours
     noise = random.uniform(*RESTOCK_NOISE_RANGE)
@@ -323,20 +334,40 @@ def _find_day_for_dow(year: int, month: int, target_dow: int) -> int:
 
 # ─── Order arrival schedule ───────────────────────────────────────────────────
 
-def _generate_arrival_schedule(total_orders: int, is_high_volume: bool) -> dict[float, int]:
+def _generate_arrival_schedule(
+    total_orders: int,
+    is_high_volume: bool,
+    day_start: float = DAY_START_HOUR,
+    order_cutoff: float = ORDER_CUTOFF_HOUR,
+) -> dict[float, int]:
     """
     Generate {simulated_hour: num_orders_arriving} for each 10-min step.
     High-volume days front-load heavier.
+
+    All arrivals land in [day_start, arrival_end] where arrival_end is just
+    before the facility's order_cutoff_hour — so every order in the schedule
+    is admissible to the queue before cutoff and therefore reachable for
+    completion. Without this, post-cutoff arrivals get dropped silently while
+    still being counted in episode.total_orders, which forces grade=F.
     """
+    # Reserve one step before cutoff so the last arrival has time to enter
+    # the queue and be counted in the same tick as `current_hour < cutoff`.
+    arrival_end = max(day_start + STEP_DURATION, order_cutoff - STEP_DURATION)
     buckets = ORDER_ARRIVAL_BUCKETS_HIGH_VOLUME if is_high_volume else ORDER_ARRIVAL_BUCKETS
-    return _curved_distribution(total_orders, ORDER_ARRIVAL_END_HOUR, buckets)
+    return _curved_distribution(total_orders, day_start, arrival_end, buckets)
 
 
 def _curved_distribution(
     total_orders: int,
+    day_start: float,
     arrival_end: float,
     buckets: list,
 ) -> dict[float, int]:
+    """Distribute `total_orders` across the day in 10-min buckets, scaled to
+    fit between `day_start` and `arrival_end`. Bucket fractions follow the
+    canonical morning-heavy / afternoon-slow / late-trickle shape; absolute
+    times are rescaled per-facility so a 7am-start warehouse and an 11am-start
+    warehouse both get a sensibly-shaped curve inside their own shift."""
     fractions = []
     for _, lo, hi in buckets:
         fractions.append(random.uniform(lo, hi))
@@ -344,11 +375,21 @@ def _curved_distribution(
     total_frac = sum(fractions)
     fractions = [f / total_frac for f in fractions]
 
+    # Scale the canonical 9am/14h/16.25h/16.83h shape to the actual window.
+    # The fraction-of-window for each split point matches the original layout
+    # (9→14 = 71% of original 9→16.83 window).
+    canonical_window = ORDER_ARRIVAL_END_HOUR - DAY_START_HOUR  # = 7.83h
+    morning_frac = (MORNING_END_HOUR - DAY_START_HOUR) / canonical_window         # ≈ 0.638
+    afternoon_frac = (AFTERNOON_END_HOUR - DAY_START_HOUR) / canonical_window     # ≈ 0.926
+    actual_window = arrival_end - day_start
+    morning_end = day_start + morning_frac * actual_window
+    afternoon_end = day_start + afternoon_frac * actual_window
+
     bucket_boundaries = [
-        (DAY_START_HOUR, DAY_START_HOUR),        # instant at day start
-        (DAY_START_HOUR, MORNING_END_HOUR),       # morning flow
-        (MORNING_END_HOUR, AFTERNOON_END_HOUR),   # afternoon slow
-        (AFTERNOON_END_HOUR, arrival_end),        # late trickle
+        (day_start, day_start),                # instant at day start
+        (day_start, morning_end),              # morning flow
+        (morning_end, afternoon_end),          # afternoon slow
+        (afternoon_end, arrival_end),          # late trickle
     ]
 
     schedule: dict[float, int] = {}
@@ -362,11 +403,11 @@ def _curved_distribution(
             remaining -= bucket_orders
 
         if i == 0:
-            schedule[DAY_START_HOUR] = bucket_orders
+            schedule[round(day_start, 2)] = bucket_orders
         else:
             steps = _get_steps_in_range(start, end)
             if not steps:
-                schedule[DAY_START_HOUR] = schedule.get(DAY_START_HOUR, 0) + bucket_orders
+                schedule[round(day_start, 2)] = schedule.get(round(day_start, 2), 0) + bucket_orders
                 continue
             _distribute_to_steps(schedule, steps, bucket_orders)
 

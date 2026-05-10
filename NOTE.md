@@ -71,8 +71,11 @@ Outputs:
 ```
 
 Key parameters: `d_model = 256`, 2 SA layers, 1 CA layer, 8 attention heads, TBPTT chunk = 16.
-Estimated ~8–12M parameters (vs Jack's ~800K).
-Architecture version: `clark-v1`
+Estimated ~18M parameters (vs Jack's ~800K).
+Architecture version: `clark-v2`
+
+**v2 vs v1:** d_model 256 → 512, self-attention layers 2 → 4, LSTM hidden 256 → 512.
+v1 checkpoints are not loadable under v2 (strict arch_version check at load time).
 
 ---
 
@@ -221,7 +224,7 @@ clark dashboard                   — launch local dashboard server
 3. **Action masking**: Applied as `-1e9` fill before softmax, not by zeroing logits. Ensures valid action probabilities sum to 1.
 4. **Hustle flag**: Separate `(N, 2)` head, independent of task assignment. A worker can hustle any task (unless task is hustle-blocked).
 5. **Padding**: Variable-length batches padded to `max_N` / `max_M`; `key_padding_mask` prevents attention to pad tokens.
-6. **Checkpoint versioning**: Every checkpoint includes `arch_version = "clark-v1"` and `facility_config` metadata. Stale checkpoints are rejected at load time.
+6. **Checkpoint versioning**: Every checkpoint includes `arch_version = "clark-v2"` and `facility_config` metadata. Stale checkpoints are rejected at load time.
 7. **FP epsilon**: OT hard stop uses `>= OT_HARD_STOP - 1e-9` to guard against float accumulation (learned from Jack's bug).
 8. **State dimensions**: `ENV_FEAT_DIM = 17` (was 15 — added `carrier_urgency` at index 15, `order_complexity_load` at index 16). `WORKER_FEAT_DIM = 14` (was 13 — added `task_oph_normalized` at index 13).
 9. **Clark limits**: `clark/config/clark_limits.yaml` defines the absolute bounds for all configurable parameters. The synthetic pre-training generator samples within these bounds — everything outside this envelope is out-of-distribution. Expand bounds before retraining when adding new facilities with unusual parameters.

@@ -96,6 +96,7 @@ class YearEnv:
 
         # Reset order carryover state
         self.order_backlog = 0
+        self._base_daily_volume = 0
         self.backlog_ages = []
 
         return self._start_new_day()
@@ -216,13 +217,25 @@ class YearEnv:
         return schedule
 
     def _inject_temp_workers(self, peak) -> None:
-        """Append temporary WorkerState objects to the day env for peak staffing."""
+        """Append temporary WorkerState objects to the day env for peak staffing.
+
+        Temps inherit a default hustle daily cap so the action mask's hustle-cap
+        check fires correctly on them; without an explicit cap they'd inherit
+        whatever WorkerState's default is and could hustle indefinitely.
+        """
         from clark.env.worker import WorkerState
         if self.day_env.episode is None:
             return
         # Find the highest existing worker ID
         existing_ids = [w.worker_id for w in self.day_env.episode.workers]
         next_id = max(existing_ids) + 1 if existing_ids else 0
+
+        # Inherit the facility's regular hustle cap so temps face the same
+        # exhaustion contract as permanent workers.
+        if self.facility_config.workers:
+            hustle_cap = self.facility_config.workers[0].hustle_daily_cap
+        else:
+            hustle_cap = None
 
         oph_lo, oph_hi = peak.temp_oph_range
         for i in range(peak.extra_workers):
@@ -237,6 +250,7 @@ class YearEnv:
                 role="warehouse",
                 task_eligibility_set={"pick", "pack", "idle"},
                 is_absent=is_absent,
+                _hustle_daily_cap=hustle_cap,
             )
             temp_worker.current_task = "idle" if is_absent else "pack"
             self.day_env.episode.workers.append(temp_worker)
@@ -268,9 +282,12 @@ class YearEnv:
             force_volume=day_info["volume"],
         )
 
-        # Inject carried backlog into today's order count
+        # Remember the clean base volume before any backlog injection
+        self._base_daily_volume = day_info["volume"] or self.day_env.episode.total_orders
+
+        # Inject carried backlog into today's queue (but NOT into total_orders,
+        # which must stay at the base daily volume for reward/state normalization).
         if self.facility_config.rules.order_carryover_enabled and self.order_backlog > 0:
-            self.day_env.episode.total_orders += self.order_backlog
             self.day_env.orders_in_queue += self.order_backlog
             # Don't reset backlog here — it carries until shipped or expired
 
@@ -367,6 +384,12 @@ class YearEnv:
             if remaining > 0:
                 self.backlog_ages.append((self.current_day_idx, remaining))
                 self.order_backlog += remaining
+                # Hard cap: use the BASE daily volume (from schedule), not the
+                # potentially-inflated total_orders, to prevent feedback loops.
+                _base_vol = self._base_daily_volume or 1000
+                _backlog_hard_cap = _base_vol * max(1, rules.order_carryover_max_days) * 3
+                if self.order_backlog > _backlog_hard_cap:
+                    self.order_backlog = _backlog_hard_cap
 
             # Expire orders older than max_carryover_days
             if rules.order_carryover_max_days > 0:
@@ -515,11 +538,3 @@ class YearEnv:
             "daily_summaries": self.daily_summaries,
         }
 
-    @property
-    def state_size(self) -> int:
-        """Total state size: daily worker+env state + year features."""
-        cfg = self.facility_config
-        daily_size = (
-            cfg.num_workers * (cfg.num_tasks + 13) + 15
-        )
-        return daily_size + self.YEAR_STATE_SIZE

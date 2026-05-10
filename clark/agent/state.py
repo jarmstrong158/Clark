@@ -75,12 +75,21 @@ class StateBuilder:
         }
 
     def validate(self, state_dict: dict) -> bool:
-        """Check shapes and that no NaN values are present."""
+        """Check shapes and that no NaN values are present.
+
+        N is read FROM the state itself, not from the config-time `self.N`,
+        because peak-staffing days inject temp workers that push the actual
+        worker count above the config baseline.
+        """
+        wf = state_dict.get("worker_feats")
+        if wf is None or wf.ndim != 2 or wf.shape[1] != WORKER_STATE_SCALARS:
+            return False
+        actual_N = wf.shape[0]
         expected_shapes = {
-            "worker_feats": (self.N, WORKER_STATE_SCALARS),
+            "worker_feats": (actual_N, WORKER_STATE_SCALARS),
             "task_feats": (self.M, 3),
             "env_feats": (ENV_STATE_SIZE,),
-            "worker_role_ids": (self.N,),
+            "worker_role_ids": (actual_N,),
             "task_type_ids": (self.M,),
         }
         for key, shape in expected_shapes.items():

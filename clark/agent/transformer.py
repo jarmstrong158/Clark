@@ -29,20 +29,38 @@ import torch.nn.functional as F
 from torch.distributions import Categorical
 from typing import Optional
 
-ARCH_VERSION = "clark-v1"
+ARCH_VERSION = "clark-v2"
 
 # ── Hyperparameter defaults ───────────────────────────────────────────────────
+# v2 bump (2026-04): d_model 256→512, n_sa_layers 2→4, lstm_hidden 256→512.
+# At v1 the model was 2.9M params and the GPU was kernel-launch-bound for a
+# batched-forward workload — compute per kernel was so small that launch
+# overhead dominated. v2 is ~18M params: forward compute now dominates on
+# modern GPUs and the Tier-2 batched path finally gets its full speedup.
 
-_DEFAULT_D_MODEL = 256
+_DEFAULT_D_MODEL = 512
 _DEFAULT_N_HEADS = 8
-_DEFAULT_N_SA_LAYERS = 2
+_DEFAULT_N_SA_LAYERS = 4
 _DEFAULT_N_CA_LAYERS = 1
-_DEFAULT_LSTM_HIDDEN = 256
-_DEFAULT_DROPOUT = 0.1
+_DEFAULT_LSTM_HIDDEN = 512
+_DEFAULT_DROPOUT = 0.0  # See PPO compatibility note below.
+# Dropout is disabled because PPO's importance-sampling correction relies on
+# old_log_prob and new_log_prob being computed from the SAME stochastic policy.
+# With dropout > 0, every forward call resamples masks, so the ratio
+# exp(new_log_prob - old_log_prob) drifts on the order of clip_epsilon (0.2)
+# even when the underlying weights have not changed — saturating PPO's clip
+# threshold and silencing the learning signal. The model is small and
+# regularised by the diversity of synthetic facility configs during pretrain;
+# explicit dropout buys nothing here and breaks PPO correctness.
 
 # Vocab sizes
 _NUM_ROLES = 4       # manager=0, assistant_manager=1, lead=2, warehouse=3
 _MAX_TASKS = 20      # len(STANDARD_VOCAB)=12 + 5 custom + 3 buffer
+                    # If you bump this, retrain — it changes the
+                    # task_type_embed shape and invalidates checkpoints.
+                    # FacilityConfig.validate() rejects configs with
+                    # num_tasks > _MAX_TASKS to prevent silent embedding
+                    # collisions at the clamp in forward().
 
 # Feature dimensions — must match WORKER_STATE_SCALARS and ENV_STATE_SIZE in facility_env.py
 _WORKER_FEAT_DIM = 14  # 13 base scalars + task_oph_normalized (index 13)
@@ -70,8 +88,17 @@ class MultiHeadSelfAttention(nn.Module):
         self.dropout = nn.Dropout(dropout)
         self.attn_scale = math.sqrt(self.d_head)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """x: (N, d_model) or (B, N, d_model). Returns same shape."""
+    def forward(
+        self,
+        x: torch.Tensor,
+        key_padding_mask: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        """x: (N, d_model) or (B, N, d_model). Returns same shape.
+
+        key_padding_mask: optional (B, N) bool tensor. True = VALID, False = pad.
+        Pad positions are excluded from attention via -inf fill before softmax.
+        Only meaningful when x has a batch dimension.
+        """
         squeeze = x.dim() == 2
         if squeeze:
             x = x.unsqueeze(0)           # → (1, N, D)
@@ -90,7 +117,21 @@ class MultiHeadSelfAttention(nn.Module):
         v = v.view(B, N, H, dh).permute(0, 2, 1, 3).reshape(B * H, N, dh)
 
         scores = torch.bmm(q, k.transpose(1, 2)) / self.attn_scale  # (B*H, N, N)
+
+        if key_padding_mask is not None:
+            # Mask shape: (B, N). Broadcast to (B*H, 1, N) so padded *keys* are
+            # excluded from attention for every query in that batch element.
+            # True = valid → keep; False = pad → mask to -inf.
+            m = key_padding_mask.unsqueeze(1).unsqueeze(1)              # (B, 1, 1, N)
+            m = m.expand(B, H, 1, N).reshape(B * H, 1, N)               # (B*H, 1, N)
+            scores = scores.masked_fill(~m, float("-inf"))
+
         weights = F.softmax(scores, dim=-1)
+        # If an ENTIRE row was masked (a padded query attending to all-padded
+        # keys) softmax produces NaNs. Clean them up — those rows will be
+        # discarded by downstream masking anyway.
+        if key_padding_mask is not None:
+            weights = torch.nan_to_num(weights, nan=0.0)
         weights = self.dropout(weights)
 
         attended = torch.bmm(weights, v)                              # (B*H, N, dh)
@@ -120,10 +161,19 @@ class MultiHeadCrossAttention(nn.Module):
         self.dropout = nn.Dropout(dropout)
         self.attn_scale = math.sqrt(self.d_head)
 
-    def forward(self, workers: torch.Tensor, tasks: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        workers: torch.Tensor,
+        tasks: torch.Tensor,
+        task_key_padding_mask: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
         """
         workers: (N, d_model) or (B, N, d_model) — queries
         tasks:   (M, d_model) or (B, M, d_model) — keys / values
+
+        task_key_padding_mask: optional (B, M) bool tensor. True = valid task,
+        False = pad. Padded tasks are excluded from cross-attention.
+
         Returns: same shape as workers
         """
         squeeze = workers.dim() == 2
@@ -143,7 +193,15 @@ class MultiHeadCrossAttention(nn.Module):
         v = self.v_proj(tasks).view(B, M, H, dh).permute(0, 2, 1, 3).reshape(B * H, M, dh)
 
         scores = torch.bmm(q, k.transpose(1, 2)) / self.attn_scale  # (B*H, N, M)
+
+        if task_key_padding_mask is not None:
+            m = task_key_padding_mask.unsqueeze(1).unsqueeze(1)         # (B, 1, 1, M)
+            m = m.expand(B, H, 1, M).reshape(B * H, 1, M)               # (B*H, 1, M)
+            scores = scores.masked_fill(~m, float("-inf"))
+
         weights = F.softmax(scores, dim=-1)
+        if task_key_padding_mask is not None:
+            weights = torch.nan_to_num(weights, nan=0.0)
         weights = self.dropout(weights)
 
         attended = torch.bmm(weights, v)                              # (B*H, N, dh)
@@ -173,6 +231,100 @@ class FeedForward(nn.Module):
         return x + self.ff(self.norm(x))
 
 
+class PopArtValueHead(nn.Module):
+    """
+    Value head with PopArt (Preserving Outputs Precisely while Adaptively
+    Rescaling Targets) — DeepMind 2018, https://arxiv.org/abs/1809.04474.
+
+    The head outputs DENORMALIZED values (raw target scale) to external
+    callers, so GAE / advantage math sees real-magnitude returns. Internally
+    it learns NORMALIZED predictions (zero mean, unit variance) against
+    normalized targets, which makes the value loss well-scaled regardless of
+    how reward magnitudes vary across configs.
+
+    The "Preserving Outputs Precisely" part: every time the running statistics
+    update, the output linear's weight + bias are rescaled by the inverse
+    transformation, so the *denormalized* output stays unchanged. Without
+    this, value predictions would jump every time stats moved, fighting the
+    PPO update.
+
+    For Clark, the value head sees per-config rewards spanning an order of
+    magnitude (per-worker normalized reward varies with N, plus event rewards
+    don't scale with N). Per-batch standardization smoothed within-batch
+    variance but config-to-config drift was uncontained. PopArt's running
+    stats (with EMA at beta=3e-4) smooth this over many batches.
+    """
+
+    def __init__(self, in_dim: int, hidden_dim: Optional[int] = None,
+                 beta: float = 3e-4):
+        super().__init__()
+        if hidden_dim is None:
+            hidden_dim = max(1, in_dim // 2)
+        self.body = nn.Sequential(
+            nn.Linear(in_dim, hidden_dim),
+            nn.Tanh(),
+        )
+        self.out = nn.Linear(hidden_dim, 1)
+        self.beta = beta
+        # Running stats — buffers so they save/load with the model.
+        self.register_buffer("mu", torch.zeros(1))
+        self.register_buffer("sigma", torch.ones(1))
+        self.register_buffer("initialized", torch.zeros(1))
+
+    def forward_normalized(self, x: torch.Tensor) -> torch.Tensor:
+        """Internal predictions (unit-scale) — used by the PPO value loss."""
+        return self.out(self.body(x)).squeeze(-1)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """External predictions (raw target scale) — used by GAE / rollout."""
+        return self.forward_normalized(x) * self.sigma + self.mu
+
+    @torch.no_grad()
+    def update_stats(self, targets: torch.Tensor) -> None:
+        """
+        Update running mu/sigma (EMA at beta) and rescale the output linear
+        so the *denormalized* prediction is preserved across the stat shift.
+        Call once per PPO update cycle (not per epoch).
+        """
+        target_mean = targets.mean()
+        target_var = targets.var(unbiased=False)
+        target_std = torch.sqrt(target_var + 1e-8)
+
+        if self.initialized.item() < 1:
+            # First call: snap to batch stats so the value head isn't suddenly
+            # asked to predict against mu=0 / sigma=1 when targets are at
+            # totally different scale. Subsequent calls EMA from here.
+            self.mu.copy_(target_mean.unsqueeze(0))
+            self.sigma.copy_(target_std.unsqueeze(0))
+            self.initialized.fill_(1.0)
+            return
+
+        old_mu = self.mu.clone()
+        old_sigma = self.sigma.clone()
+
+        new_mu = (1.0 - self.beta) * old_mu + self.beta * target_mean.unsqueeze(0)
+        new_var = (
+            (1.0 - self.beta) * old_sigma ** 2
+            + self.beta * target_std.unsqueeze(0) ** 2
+        )
+        new_sigma = torch.sqrt(new_var + 1e-8)
+
+        self.mu.copy_(new_mu)
+        self.sigma.copy_(new_sigma)
+
+        # Rescale output projection so denormalized output is unchanged:
+        #   pre-update:  out_raw = (W_old * h + b_old) * sigma_old + mu_old
+        #   post-update: out_raw = (W_new * h + b_new) * sigma_new + mu_new
+        #   solve for W_new, b_new keeping out_raw equal:
+        #     W_new = W_old * (sigma_old / sigma_new)
+        #     b_new = (sigma_old * b_old + mu_old - mu_new) / sigma_new
+        scale = old_sigma / new_sigma
+        self.out.weight.data.mul_(scale)
+        self.out.bias.data.copy_(
+            (old_sigma * self.out.bias.data + (old_mu - new_mu)) / new_sigma
+        )
+
+
 class TransformerBlock(nn.Module):
     """Self-attention + feed-forward (one full transformer encoder layer)."""
 
@@ -181,8 +333,12 @@ class TransformerBlock(nn.Module):
         self.sa = MultiHeadSelfAttention(d_model, n_heads, dropout)
         self.ff = FeedForward(d_model, dropout)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.sa(x)
+    def forward(
+        self,
+        x: torch.Tensor,
+        key_padding_mask: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        x = self.sa(x, key_padding_mask=key_padding_mask)
         x = self.ff(x)
         return x
 
@@ -260,11 +416,11 @@ class ClarkActorCritic(nn.Module):
 
         # ── Output heads ──────────────────────────────────────────────────────
         self.hustle_head = nn.Linear(d_model, 2)
-        self.value_head = nn.Sequential(
-            nn.Linear(lstm_hidden, lstm_hidden // 2),
-            nn.Tanh(),
-            nn.Linear(lstm_hidden // 2, 1),
-        )
+        # PopArt value head — same MLP shape as before, plus running mu/sigma
+        # state for adaptive target rescaling. Forward returns DENORMALIZED
+        # values (so GAE / rollout still see raw-scale targets); internally
+        # the loss compares forward_normalized() vs (target-mu)/sigma.
+        self.value_head = PopArtValueHead(lstm_hidden, hidden_dim=lstm_hidden // 2)
 
         self._init_weights()
 
@@ -285,7 +441,8 @@ class ClarkActorCritic(nn.Module):
         for module in [self.hustle_head]:
             nn.init.orthogonal_(module.weight, gain=0.01)
             nn.init.constant_(module.bias, 0.0)
-        for module in self.value_head:
+        # PopArt value head — orthogonal init the inner Linears.
+        for module in [*self.value_head.body, self.value_head.out]:
             if isinstance(module, nn.Linear):
                 nn.init.orthogonal_(module.weight, gain=1.0)
                 nn.init.constant_(module.bias, 0.0)
@@ -293,10 +450,16 @@ class ClarkActorCritic(nn.Module):
     # ── Hidden state ─────────────────────────────────────────────────────────
 
     def init_hidden(self, batch_size: int = 1) -> tuple[torch.Tensor, torch.Tensor]:
-        """Return zeroed (h0, c0) for a fresh episode."""
+        """Return zeroed (h0, c0) for a fresh episode, on the model's device."""
+        # Resolve device from the model's own parameters so callers don't have
+        # to pass it in. Works for CPU, CUDA, and any future backends.
+        try:
+            device = next(self.parameters()).device
+        except StopIteration:
+            device = torch.device("cpu")
         return (
-            torch.zeros(1, batch_size, self.lstm_hidden),
-            torch.zeros(1, batch_size, self.lstm_hidden),
+            torch.zeros(1, batch_size, self.lstm_hidden, device=device),
+            torch.zeros(1, batch_size, self.lstm_hidden, device=device),
         )
 
     # ── Forward ───────────────────────────────────────────────────────────────
@@ -306,6 +469,7 @@ class ClarkActorCritic(nn.Module):
         state_dict: dict,
         action_mask: Optional[np.ndarray] = None,
         lstm_hidden: Optional[tuple[torch.Tensor, torch.Tensor]] = None,
+        hustle_mask: Optional[np.ndarray] = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, tuple]:
         """
         Single-step forward pass.
@@ -395,8 +559,13 @@ class ClarkActorCritic(nn.Module):
 
         # Hustle logits: (N, 2)
         hustle_logits = self.hustle_head(W_final)
+        if hustle_mask is not None:
+            hmask_t = torch.tensor(hustle_mask, dtype=torch.bool, device=device)
+            hustle_logits = hustle_logits.masked_fill(~hmask_t, -1e9)
 
-        # Value: scalar
+        # Value: scalar. PopArtValueHead already does .squeeze(-1) so the
+        # output of value_head((1, lstm_hidden)) is shape (1,); .squeeze()
+        # then collapses to ().
         value = self.value_head(h_t.unsqueeze(0)).squeeze()  # ()
 
         return assignment_logits, hustle_logits, value, new_hidden
@@ -408,6 +577,7 @@ class ClarkActorCritic(nn.Module):
         state_dicts: list,
         action_masks: list,
         lstm_hidden: tuple[torch.Tensor, torch.Tensor],
+        hustle_masks: Optional[list] = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, tuple]:
         """
         Batched forward over T sequential steps for the PPO update.
@@ -501,7 +671,20 @@ class ClarkActorCritic(nn.Module):
         assign_logits = assign_logits.masked_fill(~full_mask, -1e9)
 
         hustle_logits = self.hustle_head(W_final)                     # (T, N, 2)
-        values = self.value_head(h_t).squeeze(-1)                     # (T,)
+
+        # Apply per-step hustle masks (only steps that have one)
+        if hustle_masks is not None:
+            hfull = torch.ones(T, N, 2, dtype=torch.bool, device=device)
+            for t_idx, hm in enumerate(hustle_masks):
+                if hm is not None:
+                    hfull[t_idx] = torch.tensor(hm, dtype=torch.bool, device=device)
+            hustle_logits = hustle_logits.masked_fill(~hfull, -1e9)
+
+        # PopArtValueHead already squeezes the trailing 1-dim, so for
+        # h_t shape (T, lstm_hidden) we get values shape (T,). The outer
+        # .squeeze(-1) was a no-op when T>1 but collapsed (1,)→() when
+        # T==1, breaking torch.cat downstream — removed.
+        values = self.value_head(h_t)                                 # (T,)
 
         # Vectorised entropy: sum over workers for each step
         task_lp = F.log_softmax(assign_logits, dim=-1)                # (T, N, M)
@@ -512,6 +695,209 @@ class ClarkActorCritic(nn.Module):
 
         return assign_logits, hustle_logits, values, entropies, new_hidden
 
+    # ── Batched multi-env forward (Tier-2 fast rollout) ──────────────────────
+
+    def forward_batched(
+        self,
+        state_dicts: list,
+        action_masks: list,
+        lstm_hidden: tuple[torch.Tensor, torch.Tensor],
+        hustle_masks: Optional[list] = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, list, list, tuple]:
+        """
+        Single-step forward over B parallel environments with variable N_i, M_i.
+
+        This is the Tier-2 hot path: one batched kernel launch feeds data from
+        all envs through the model at once. Per-env shapes are padded to
+        `max_N × max_M` and key_padding_masks exclude the pad positions from
+        attention.
+
+        Args:
+            state_dicts: list[dict] of length B — one StateBuilder output per env
+            action_masks: list[ndarray|None] length B — (N_i, M_i) valid-action masks
+            lstm_hidden: (h, c) each shaped (1, B, lstm_hidden) — one slot per env
+
+        Returns:
+            assign_logits: (B, max_N, max_M) — pad positions set to -1e9
+            hustle_logits: (B, max_N, 2)
+            values:        (B,)
+            n_workers_list: list[int] length B — per-env real worker count
+            n_tasks_list:   list[int] length B — per-env real task count
+            new_hidden:    (h, c) each (1, B, lstm_hidden)
+        """
+        device = next(self.parameters()).device
+        B = len(state_dicts)
+
+        # Extract real per-env sizes.
+        n_workers_list = [int(sd["worker_feats"].shape[0]) for sd in state_dicts]
+        n_tasks_list   = [int(sd["task_feats"].shape[0])   for sd in state_dicts]
+        max_N = max(n_workers_list)
+        max_M = max(n_tasks_list)
+
+        worker_feat_dim = state_dicts[0]["worker_feats"].shape[1]
+        # Task continuous features exclude the task_type_id column (see forward())
+        task_feat_cont_dim = state_dicts[0]["task_feats"].shape[1] - 1
+        env_feat_dim = state_dicts[0]["env_feats"].shape[0]
+
+        # Padded host-side buffers; one H→D transfer per tensor.
+        wf_buf = np.zeros((B, max_N, worker_feat_dim), dtype=np.float32)
+        tf_buf = np.zeros((B, max_M, task_feat_cont_dim), dtype=np.float32)
+        ef_buf = np.zeros((B, env_feat_dim), dtype=np.float32)
+        rid_buf = np.zeros((B, max_N), dtype=np.int64)
+        ttid_buf = np.zeros((B, max_M), dtype=np.int64)
+        worker_pad_np = np.zeros((B, max_N), dtype=bool)
+        task_pad_np = np.zeros((B, max_M), dtype=bool)
+
+        for b, sd in enumerate(state_dicts):
+            Ni = n_workers_list[b]
+            Mi = n_tasks_list[b]
+            wf_buf[b, :Ni]   = sd["worker_feats"]
+            # Drop the task_type_id column (index 2) from the continuous slice
+            tf_buf[b, :Mi]   = sd["task_feats"][:, :task_feat_cont_dim]
+            ef_buf[b]        = sd["env_feats"]
+            rid_buf[b, :Ni]  = sd["worker_role_ids"]
+            ttid_buf[b, :Mi] = sd["task_type_ids"]
+            worker_pad_np[b, :Ni] = True
+            task_pad_np[b, :Mi]   = True
+
+        worker_feats = torch.from_numpy(wf_buf).to(device, non_blocking=True)
+        task_feats_c = torch.from_numpy(tf_buf).to(device, non_blocking=True)
+        env_feats    = torch.from_numpy(ef_buf).to(device, non_blocking=True)
+        worker_role_ids = torch.from_numpy(rid_buf).to(device, non_blocking=True)
+        task_type_ids   = torch.from_numpy(ttid_buf).to(device, non_blocking=True)
+        worker_pad_mask = torch.from_numpy(worker_pad_np).to(device, non_blocking=True)
+        task_pad_mask   = torch.from_numpy(task_pad_np).to(device, non_blocking=True)
+
+        # ── Encoder ───────────────────────────────────────────────────────────
+        W = self.worker_linear(worker_feats)                        # (B, max_N, d)
+        W = W + self.role_embed(worker_role_ids)
+
+        task_type_ids_safe = task_type_ids.clamp(
+            0, self.task_type_embed.num_embeddings - 1
+        )
+        T_tokens = self.task_linear(task_feats_c)                   # (B, max_M, d)
+        T_tokens = T_tokens + self.task_type_embed(task_type_ids_safe)
+
+        # Zero out task embeddings at padded positions so they can't leak
+        # contribution into the mean pool or downstream ops.
+        T_tokens = T_tokens * task_pad_mask.unsqueeze(-1).to(T_tokens.dtype)
+
+        E = self.env_linear(env_feats)                              # (B, d)
+        W = W + E.unsqueeze(1)                                      # broadcast
+
+        for sa_layer in self.sa_layers:
+            W = sa_layer(W, key_padding_mask=worker_pad_mask)
+
+        for ca_attn, ca_ff in zip(self.ca_layers, self.ca_ff):
+            W = ca_attn(W, T_tokens, task_key_padding_mask=task_pad_mask)
+            W = ca_ff(W)
+
+        # Mean-pool workers with mask so padded slots don't bias the pool.
+        wmask = worker_pad_mask.to(W.dtype).unsqueeze(-1)           # (B, max_N, 1)
+        denom = wmask.sum(dim=1).clamp(min=1.0)                     # (B, 1)
+        g = (W * wmask).sum(dim=1) / denom                          # (B, d)
+
+        # LSTM expects (seq_len, batch, input_size) — seq_len=1, batch=B.
+        lstm_out, new_hidden = self.lstm(g.unsqueeze(0), lstm_hidden)  # (1, B, lstm_hidden)
+        h_t = lstm_out.squeeze(0)                                      # (B, lstm_hidden)
+
+        W_final = W + self.lstm_proj(h_t).unsqueeze(1)              # (B, max_N, d)
+
+        # Logits via batched matmul (B, max_N, d) @ (B, d, max_M) → (B, max_N, max_M)
+        assign_logits = torch.bmm(W_final, T_tokens.transpose(1, 2))
+
+        # Apply combined mask: per-env action_mask (if given) AND exclude
+        # padded N or M positions. Start from pad mask, then AND the action mask.
+        valid = worker_pad_mask.unsqueeze(-1) & task_pad_mask.unsqueeze(1)  # (B,max_N,max_M)
+        for b, am in enumerate(action_masks):
+            if am is None:
+                continue
+            Ni = n_workers_list[b]
+            Mi = n_tasks_list[b]
+            am_t = torch.as_tensor(am, dtype=torch.bool, device=device)
+            valid[b, :Ni, :Mi] &= am_t
+
+        assign_logits = assign_logits.masked_fill(~valid, -1e9)
+
+        hustle_logits = self.hustle_head(W_final)                   # (B, max_N, 2)
+
+        # Apply per-env hustle masks. Padded worker rows stay unmasked since
+        # they're never sampled (the per-env loop uses Ni from n_workers_list).
+        if hustle_masks is not None:
+            hvalid = torch.ones(B, max_N, 2, dtype=torch.bool, device=device)
+            for b, hm in enumerate(hustle_masks):
+                if hm is None:
+                    continue
+                Ni = n_workers_list[b]
+                hm_t = torch.as_tensor(hm, dtype=torch.bool, device=device)
+                hvalid[b, :Ni] = hm_t
+            hustle_logits = hustle_logits.masked_fill(~hvalid, -1e9)
+
+        values = self.value_head(h_t)                               # (B,)
+
+        return assign_logits, hustle_logits, values, n_workers_list, n_tasks_list, new_hidden
+
+    # ── Batched action selection ─────────────────────────────────────────────
+
+    @torch.no_grad()
+    def select_action_batched(
+        self,
+        state_dicts: list,
+        action_masks: list,
+        lstm_hidden: tuple[torch.Tensor, torch.Tensor],
+        hustle_masks: Optional[list] = None,
+    ):
+        """
+        Sample actions for B parallel envs in one forward pass.
+
+        Returns PER-WORKER log-probs as a list of per-env tensors — see
+        select_action() docstring for why the joint sum-over-workers ratio is
+        wrong for PPO.
+
+        Returns:
+            task_actions_list:    list[list[int]] length B
+            hustle_actions_list:  list[list[int]] length B
+            task_log_probs_list:  list[(N_b,) tensor] length B
+            hustle_log_probs_list:list[(N_b,) tensor] length B
+            values:               (B,) tensor
+            new_hidden:           updated (h, c) LSTM state
+        """
+        assign_logits, hustle_logits, values, n_w_list, n_t_list, new_hidden = (
+            self.forward_batched(
+                state_dicts, action_masks, lstm_hidden, hustle_masks=hustle_masks,
+            )
+        )
+        B = assign_logits.shape[0]
+
+        task_actions_list: list[list[int]] = []
+        hustle_actions_list: list[list[int]] = []
+        task_log_probs_list: list[torch.Tensor] = []
+        hustle_log_probs_list: list[torch.Tensor] = []
+
+        # Per-env sample — B is small (typically 4-32) so the Python loop
+        # is cheap compared to the (now batched) forward pass.
+        for b in range(B):
+            Ni = n_w_list[b]
+            Mi = n_t_list[b]
+            logits_b = assign_logits[b, :Ni, :Mi]                  # (Ni, Mi)
+            h_logits_b = hustle_logits[b, :Ni]                     # (Ni, 2)
+
+            task_dist = Categorical(logits=logits_b)
+            task_idx = task_dist.sample()                          # (Ni,)
+            task_actions_list.append(task_idx.tolist())
+            task_log_probs_list.append(task_dist.log_prob(task_idx))
+
+            hustle_dist = Categorical(logits=h_logits_b)
+            hustle_flag = hustle_dist.sample()                     # (Ni,)
+            hustle_actions_list.append(hustle_flag.tolist())
+            hustle_log_probs_list.append(hustle_dist.log_prob(hustle_flag))
+
+        return (
+            task_actions_list, hustle_actions_list,
+            task_log_probs_list, hustle_log_probs_list,
+            values, new_hidden,
+        )
+
     # ── Action selection ──────────────────────────────────────────────────────
 
     @torch.no_grad()
@@ -520,45 +906,40 @@ class ClarkActorCritic(nn.Module):
         state_dict: dict,
         action_mask: Optional[np.ndarray] = None,
         lstm_hidden: Optional[tuple[torch.Tensor, torch.Tensor]] = None,
-    ) -> tuple[list[int], list[int], torch.Tensor, torch.Tensor, tuple]:
+        hustle_mask: Optional[np.ndarray] = None,
+    ) -> tuple[list[int], list[int], torch.Tensor, torch.Tensor, torch.Tensor, tuple]:
         """
         Sample actions for one environment step.
 
-        Args:
-            state_dict:   Output of StateBuilder.build().
-            action_mask:  (N, M) bool ndarray. True = valid task.
-            lstm_hidden:  Previous LSTM hidden state.
+        Returns PER-WORKER log-probs separately for the two action heads — NOT
+        summed. PPO must compute the importance-sampling ratio per worker (and
+        clip per worker), otherwise the joint ratio variance scales with N
+        and PPO's clip threshold saturates regardless of weight changes.
 
         Returns:
-            task_actions:   list[int] length N — task index per worker
-            hustle_actions: list[int] length N — 0 or 1 per worker
-            log_probs:      scalar tensor — sum of log-probs across all workers (for PPO)
-            value:          scalar tensor
-            new_hidden:     (h, c) updated LSTM state
+            task_actions:    list[int] length N — task index per worker
+            hustle_actions:  list[int] length N — 0 or 1 per worker
+            task_log_probs:  (N,) tensor — per-worker log P(task_i)
+            hustle_log_probs:(N,) tensor — per-worker log P(hustle_i)
+            value:           scalar tensor
+            new_hidden:      (h, c) updated LSTM state
         """
         assignment_logits, hustle_logits, value, new_hidden = self.forward(
-            state_dict, action_mask, lstm_hidden
+            state_dict, action_mask, lstm_hidden, hustle_mask=hustle_mask,
         )
 
-        task_actions = []
-        hustle_actions = []
-        log_prob_sum = torch.tensor(0.0, device=assignment_logits.device)
+        task_dist = Categorical(logits=assignment_logits)   # batch_shape (N,)
+        task_idx = task_dist.sample()                       # (N,)
+        task_log_probs = task_dist.log_prob(task_idx)       # (N,)
 
-        N = assignment_logits.shape[0]
-        for i in range(N):
-            # Task assignment
-            task_dist = Categorical(logits=assignment_logits[i])
-            task_idx = task_dist.sample()
-            task_actions.append(task_idx.item())
-            log_prob_sum = log_prob_sum + task_dist.log_prob(task_idx)
+        hustle_dist = Categorical(logits=hustle_logits)     # batch_shape (N,)
+        hustle_flag = hustle_dist.sample()                  # (N,)
+        hustle_log_probs = hustle_dist.log_prob(hustle_flag)  # (N,)
 
-            # Hustle decision
-            hustle_dist = Categorical(logits=hustle_logits[i])
-            hustle_flag = hustle_dist.sample()
-            hustle_actions.append(hustle_flag.item())
-            log_prob_sum = log_prob_sum + hustle_dist.log_prob(hustle_flag)
+        task_actions = task_idx.tolist()
+        hustle_actions = hustle_flag.tolist()
 
-        return task_actions, hustle_actions, log_prob_sum, value, new_hidden
+        return task_actions, hustle_actions, task_log_probs, hustle_log_probs, value, new_hidden
 
     # ── Entropy (for PPO entropy bonus) ───────────────────────────────────────
 
@@ -577,9 +958,7 @@ class ClarkActorCritic(nn.Module):
         Returns:
             scalar tensor — sum of entropies across all workers
         """
-        N = assignment_logits.shape[0]
-        total_entropy = torch.tensor(0.0, device=assignment_logits.device)
-        for i in range(N):
-            total_entropy = total_entropy + Categorical(logits=assignment_logits[i]).entropy()
-            total_entropy = total_entropy + Categorical(logits=hustle_logits[i]).entropy()
-        return total_entropy
+        # Vectorized: one Categorical per distribution with batch_shape (N,).
+        task_entropy = Categorical(logits=assignment_logits).entropy().sum()
+        hustle_entropy = Categorical(logits=hustle_logits).entropy().sum()
+        return task_entropy + hustle_entropy

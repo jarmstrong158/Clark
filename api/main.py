@@ -421,11 +421,16 @@ def get_plan(
         )
         return volume, label
 
-    # Run one day through the model, return opening assignments
+    # Run one day through the model, return opening assignments.
+    # Note: this returns the model's first-step assignment for the requested
+    # date. We do NOT replay any prior days from the live facility — the LSTM
+    # hidden state starts from zeros each call. Cross-day hidden persistence
+    # would require a session store keyed by facility_id and is out of scope
+    # for this MVP planning endpoint.
     def _run_day(target: _date, volume: int) -> list[dict]:
         from clark.env.year_env import YearEnv
         from clark.agent.state import StateBuilder
-        from clark.agent.actions import get_action_mask
+        from clark.agent.actions import get_action_mask, get_hustle_mask
 
         env = YearEnv(config)
         builder = StateBuilder(config)
@@ -439,7 +444,10 @@ def get_plan(
 
         state_dict = builder.build(env.day_env)
         mask = get_action_mask(env.day_env)
-        task_actions, hustle_actions, _lp, _v = agent.select_action_from_dict(state_dict, mask)
+        hmask = get_hustle_mask(env.day_env)
+        task_actions, hustle_actions, _lp, _v = agent.select_action_from_dict(
+            state_dict, mask, hustle_mask=hmask,
+        )
 
         assignments = []
         for i, worker in enumerate(config.workers):
@@ -450,7 +458,7 @@ def get_plan(
                 else "unknown"
             )
             assignments.append({
-                "worker_id": worker.id,
+                "worker_id": worker.worker_id,
                 "worker_name": worker.name,
                 "task": task_name,
                 "hustle": bool(hustle_actions[i]),

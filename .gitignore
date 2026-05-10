@@ -1,12 +1,38 @@
+# Python
 __pycache__/
 *.py[cod]
-*.pth
-*.pt
-clark/data/checkpoints/
-clark/data/logs/
-.env
 *.egg-info/
 dist/
 build/
+
+# Virtualenvs
 .venv/
 venv/
+
+# Secrets
+.env
+
+# Trained model weights — license separately
+*.pth
+*.pt
+*.bak
+
+# Runtime data — facility configs, logs, checkpoints, per-facility state
+clark/data/checkpoints/
+clark/data/logs/
+clark/data/facilities/
+
+# IDE / editor noise
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Tooling local state
+.context/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local-only test outputs
+*.log

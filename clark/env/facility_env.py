@@ -36,6 +36,7 @@ if TYPE_CHECKING:
 PICK_MULTIPLIER_MAIN = 2.5
 PICK_MULTIPLIER_SUPPLEMENT = 2.25
 TASK_OPH_MULTIPLIERS = {
+    "pick": PICK_MULTIPLIER_MAIN,  # picker baseline; supplement pickers handled separately
     "pack": 1.0,
     "restock": 1.0,
     "side_project": 1.0,
@@ -75,9 +76,16 @@ class FacilityEnv:
         self.episode: Optional[EpisodeParams] = None
         self.cooldown_tracker: dict = {}
 
-        # OT config from rules
-        self._eod_hour: float = facility_config.rules.ot_hard_stop_hour - facility_config.rules.ot_wall_clock_max
-        self._ot_hard_stop: float = facility_config.rules.ot_hard_stop_hour
+        # OT config from rules. Prefer the configured eod_hour when present;
+        # fall back to derived value (ot_hard_stop_hour - ot_wall_clock_max)
+        # so old configs that don't set eod_hour still work.
+        rules = facility_config.rules
+        configured_eod = getattr(rules, "eod_hour", None)
+        if configured_eod is not None:
+            self._eod_hour: float = float(configured_eod)
+        else:
+            self._eod_hour: float = rules.ot_hard_stop_hour - rules.ot_wall_clock_max
+        self._ot_hard_stop: float = rules.ot_hard_stop_hour
 
         # Order complexity mix for the current day: {tier_name: count}
         self.today_complexity_mix: dict[str, int] = {}
@@ -129,6 +137,11 @@ class FacilityEnv:
         self._mgmt_eligible_ids: set[int] = set(facility_config.management_eligible_ids())
         self._cycle_count_eligible_ids: set[int] = set(facility_config.cycle_count_eligible_ids())
 
+        # Restock is only active when the task is enabled in this facility.
+        # Without it, the agent cannot refill, so draining the level and firing
+        # restock penalties turns picking into a 5%-speed death spiral.
+        self._restock_enabled: bool = "restock" in self._task_ids
+
         # Management fallback worker (first non-management warehouse worker)
         self._mgmt_fallback_id: Optional[int] = self._resolve_mgmt_fallback()
 
@@ -159,7 +172,7 @@ class FacilityEnv:
         self.orders_in_queue = 0
         self.orders_completed = 0
         self.orders_picked_not_audited = 0
-        self.restock_remaining = self.episode.restock_hours
+        self.restock_remaining = self.episode.restock_hours if self._restock_enabled else 0.0
         self.deliberate_progress = 0.0
         self.filler_progress = 0.0
         self.deliberate_complete = False
@@ -174,8 +187,13 @@ class FacilityEnv:
         # Restock level
         self.restock_level = RESTOCK_STARTING_LEVEL
         total = max(1, self.episode.total_orders)
-        self.restock_drain_per_order = RESTOCK_DRAIN_FACTOR / total
-        self.restock_refill_per_hour = 1.0 / max(0.1, self.episode.restock_hours)
+        if self._restock_enabled:
+            self.restock_drain_per_order = RESTOCK_DRAIN_FACTOR / total
+            self.restock_refill_per_hour = 1.0 / max(0.1, self.episode.restock_hours)
+        else:
+            # No restock task: drain disabled, level stays at 1.0 forever.
+            self.restock_drain_per_order = 0.0
+            self.restock_refill_per_hour = 0.0
 
         self.step_log = []
 
@@ -268,6 +286,13 @@ class FacilityEnv:
                         and new_task not in HUSTLE_BLOCKED_TASKS
                     )
                     worker.hustle_mode = can_hustle
+                else:
+                    # Rejected assignment: explicitly clear hustle so a stale
+                    # hustle_mode from a prior step can't cross-contaminate
+                    # this step's behavior. The action mask should prevent
+                    # this branch in the normal path, but make the contract
+                    # robust either way.
+                    worker.hustle_mode = False
 
         # Check breaks — generalized break processor
         active_breaks = self._get_active_breaks()
@@ -481,11 +506,12 @@ class FacilityEnv:
                 if w.hustle_hours_today >= w.hustle_daily_cap:
                     w.hustle_mode = False
 
-        # Restock level penalties
-        if self.restock_level <= 0.001:
-            reward += self._add_reward("restock_level_empty")
-        elif self.restock_level < RESTOCK_PICK_PENALTY_THRESHOLD:
-            reward += self._add_reward("restock_level_low")
+        # Restock level penalties — skip entirely when facility has no restock task.
+        if self._restock_enabled:
+            if self.restock_level <= 0.001:
+                reward += self._add_reward("restock_level_empty")
+            elif self.restock_level < RESTOCK_PICK_PENALTY_THRESHOLD:
+                reward += self._add_reward("restock_level_low")
 
         return reward
 
@@ -570,12 +596,15 @@ class FacilityEnv:
                 self._process_arrivals()
                 self.current_hour += STEP_DURATION
         else:
-            # Non-staggered: all workers idle for break duration
+            # Non-staggered: all workers idle for break duration. Set the
+            # idle task BEFORE advancing time so per-step logging during the
+            # break correctly reflects "idle" instead of the pre-break task.
+            # (Matches the staggered branch's ordering above.)
+            for w in self.episode.workers:
+                w.current_task = "idle"
             for _ in range(steps_for_break):
                 self._process_arrivals()
                 self.current_hour += STEP_DURATION
-            for w in self.episode.workers:
-                w.current_task = "idle"
 
     # ── Order arrivals ─────────────────────────────────────────────────────────
 
@@ -586,18 +615,32 @@ class FacilityEnv:
         late_exception_rate = self.facility_config.rules.late_order_exception_rate
         current = round(self.current_hour, 2)
         to_remove = []
+        dropped_after_cutoff = 0
         for key, count in self.episode.arrival_schedule.items():
             if key >= cutoff:
                 # Late order exceptions: some post-cutoff orders still count
+                admitted = 0
                 if late_exception_rate > 0 and self.current_hour > cutoff:
                     if random.random() < late_exception_rate:
-                        self.orders_in_queue += count
+                        admitted = count
+                        self.orders_in_queue += admitted
+                # Anything we couldn't admit is permanently unshippable —
+                # exclude from the episode's order target so the completion
+                # gate (shipped >= total) stays mathematically reachable.
+                # Without this, an episode generated under the legacy
+                # hardcoded arrival grid (or any future scenario where
+                # arrivals slip past the configured cutoff) auto-fails.
+                dropped_after_cutoff += (count - admitted)
                 to_remove.append(key)
             elif key <= current + 0.01:
                 self.orders_in_queue += count
                 to_remove.append(key)
         for key in to_remove:
             del self.episode.arrival_schedule[key]
+        if dropped_after_cutoff > 0:
+            self.episode.total_orders = max(
+                0, self.episode.total_orders - dropped_after_cutoff
+            )
 
     # ── End of day ─────────────────────────────────────────────────────────────
 
@@ -639,18 +682,28 @@ class FacilityEnv:
             if self.ot_hours > 0:
                 reward += self._add_reward("ot_incomplete_flat")
 
-        # Restock EOD check
-        if self.restock_remaining <= 0:
-            reward += self._add_reward("all_restock_bonus")
-        else:
-            restock_tasks_remaining = max(1, int(self.restock_remaining / STEP_DURATION))
-            reward += self._add_reward("per_restock_bleed", restock_tasks_remaining)
+        # Restock EOD check — only when the facility actually has a restock task.
+        if self._restock_enabled:
+            if self.restock_remaining <= 0:
+                reward += self._add_reward("all_restock_bonus")
+            else:
+                restock_tasks_remaining = max(1, int(self.restock_remaining / STEP_DURATION))
+                reward += self._add_reward("per_restock_bleed", restock_tasks_remaining)
 
-        # Management check
+        # Management check — three tiers so the agent gets a real signal in
+        # the "did just enough to avoid F" middle ground:
+        #   full required → +management_duty_met        (the carrot)
+        #   minimum met   → +management_duty_minimum_met (smaller carrot, was 0)
+        #   below minimum → -management_duty_missed     (the stick)
+        # Without the middle tier, the gradient saw "all-or-nothing" and the
+        # agent had no way to learn that "barely passing" was a valid choice.
         total_mgmt = self._get_effective_management_hours()
         required = self.facility_config.rules.management_daily_hours_required
+        min_hours = self.facility_config.rules.management_min_daily_hours
         if total_mgmt >= required:
             reward += self._add_reward("management_duty_met")
+        elif total_mgmt >= min_hours:
+            reward += self._add_reward("management_duty_minimum_met")
         elif self.episode.total_orders >= self.facility_config.rules.high_volume_day_orders:
             pass  # heavy day — management backlog acceptable
         else:
@@ -946,8 +999,13 @@ class FacilityEnv:
         min_hours = self.facility_config.rules.management_min_daily_hours
 
         all_orders = (shipped >= total)
-        restock_pct_raw = max(0.0, min(1.0, 1.0 - (self.restock_remaining / max(0.01, ep.restock_hours))))
-        all_restock = (restock_pct_raw >= 0.95)
+        if self._restock_enabled:
+            restock_pct_raw = max(0.0, min(1.0, 1.0 - (self.restock_remaining / max(0.01, ep.restock_hours))))
+            all_restock = (restock_pct_raw >= 0.95)
+        else:
+            # No restock task in this facility — never a demerit.
+            restock_pct_raw = 1.0
+            all_restock = True
 
         total_mgmt_grade = self._get_effective_management_hours()
         mgmt_full = (total_mgmt_grade >= required)
@@ -972,7 +1030,10 @@ class FacilityEnv:
             grades = ["A", "B", "C", "D", "F"]
             grade = grades[min(demerits, 4)]
 
-        restock_pct = max(0.0, min(1.0, 1.0 - (self.restock_remaining / max(0.01, ep.restock_hours))))
+        if self._restock_enabled:
+            restock_pct = max(0.0, min(1.0, 1.0 - (self.restock_remaining / max(0.01, ep.restock_hours))))
+        else:
+            restock_pct = 1.0
 
         day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
         picker_worker = next((w for w in ep.workers if w.worker_id == ep.picker_id), None)

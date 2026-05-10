@@ -48,7 +48,10 @@ class CurriculumStage:
 
 STAGE_1 = CurriculumStage(
     stage_num=1,
-    min_workers=2, max_workers=10,
+    # min_workers=3 — 2 workers can't cover pick+pack+restock+management; that
+    # caused a ~100% OT rate at the start of pretraining and gave the model an
+    # unwinnable signal to learn from.
+    min_workers=3, max_workers=10,
     max_tasks=5,
     carryover_prob=0.0,
     peak_staffing_prob=0.0,
@@ -250,23 +253,32 @@ def _sample_task_oph_overrides(exclude: list[str] = []) -> dict[str, float]:
 
 def _generate_tasks(cs: CurriculumStage) -> TasksConfig:
     """
-    Always include pick/pack/idle (core). Sample n_tasks-3 additional tasks
-    from standard vocab. Always include management to enable business-rule
-    reward paths.
+    Always include pick/pack/idle (core) plus restock and management. Sample
+    any remaining optional tasks from standard vocab.
+
+    `restock` is force-included because the env's restock drain/refill system
+    runs unconditionally — a facility without a restock task is structurally
+    unwinnable (pick speed decays to 5% once the restock level drains).
+
+    `management` is force-included so the business-rule reward path is
+    reachable during training.
     """
-    # n_tasks = how many total tasks (including core 3)
     max_optional = len(_OPTIONAL_TASK_IDS)
-    # Stage constrains max total tasks
-    n_tasks = random.randint(3, min(cs.max_tasks, 3 + max_optional))
+    # Bump the minimum to 5 (core 3 + restock + management) so both
+    # force-included tasks always fit inside n_tasks.
+    min_tasks = min(5, 3 + max_optional)
+    n_tasks = random.randint(min_tasks, min(cs.max_tasks, 3 + max_optional))
+    n_tasks = max(n_tasks, min_tasks)
     n_optional = n_tasks - 3  # number of optional tasks to add
 
-    optional_selected = random.sample(_OPTIONAL_TASK_IDS, min(n_optional, max_optional))
+    # Start with the two mandatory optional tasks, then fill the rest randomly.
+    mandatory = [t for t in ("restock", "management") if t in _OPTIONAL_TASK_IDS]
+    remaining_pool = [t for t in _OPTIONAL_TASK_IDS if t not in mandatory]
 
-    # Always include management if we're adding optional tasks — this ensures
-    # the business-rule reward path is reachable during training.
-    if n_optional > 0 and "management" not in optional_selected:
-        # Replace the last selected optional with management
-        optional_selected[-1] = "management"
+    n_extra = max(0, n_optional - len(mandatory))
+    extras = random.sample(remaining_pool, min(n_extra, len(remaining_pool)))
+
+    optional_selected = mandatory + extras
 
     enabled = list(optional_selected)  # core tasks are auto-added by TasksConfig
 
