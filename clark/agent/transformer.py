@@ -256,7 +256,13 @@ class PopArtValueHead(nn.Module):
     """
 
     def __init__(self, in_dim: int, hidden_dim: Optional[int] = None,
-                 beta: float = 3e-4):
+                 # β bumped from 3e-4 → 1e-2: per-day buffers are tiny and
+                 # highly correlated, so EMA at 3e-4 was chasing noise from
+                 # individual buffers (audit found μ swinging 5× per update).
+                 # Higher β tracks recent run-level distribution faster
+                 # without overshooting; standard PopArt papers use 1e-3 to
+                 # 1e-1 depending on update cadence.
+                 beta: float = 1e-2):
         super().__init__()
         if hidden_dim is None:
             hidden_dim = max(1, in_dim // 2)
@@ -415,12 +421,28 @@ class ClarkActorCritic(nn.Module):
             self.lstm_proj = nn.Identity()
 
         # ── Output heads ──────────────────────────────────────────────────────
+        # Assignment logits come from W_final @ T.T. With both factors at
+        # gain=√2 orthogonal init, the raw matmul output magnitude scales
+        # with √d_model (~22 at d_model=512) — producing near-deterministic
+        # softmax at init and immediate entropy collapse.
+        # Fix: divide by √d_model (same trick attention uses for its scores)
+        # so initial logits are O(1), softmax is well-tempered, and the
+        # model has room to commit OR back off as training progresses.
+        # No learnable scaler — that just throttled gradients in either
+        # direction (small init = frozen, large init = saturated).
+        self._assign_scale: float = 1.0 / math.sqrt(d_model)
         self.hustle_head = nn.Linear(d_model, 2)
-        # PopArt value head — same MLP shape as before, plus running mu/sigma
-        # state for adaptive target rescaling. Forward returns DENORMALIZED
-        # values (so GAE / rollout still see raw-scale targets); internally
-        # the loss compares forward_normalized() vs (target-mu)/sigma.
-        self.value_head = PopArtValueHead(lstm_hidden, hidden_dim=lstm_hidden // 2)
+        # Simple 2-layer MLP value head. PopArt was tried and removed — see
+        # the PopArtValueHead docstring above for why the multi-task design
+        # didn't fit our single-policy / per-day update / single-trajectory-
+        # buffer setting. PPO with per-batch return standardization in the
+        # value loss (see _update_single_buffer) handles our bounded reward
+        # range without the cross-update instability PopArt was introducing.
+        self.value_head = nn.Sequential(
+            nn.Linear(lstm_hidden, lstm_hidden // 2),
+            nn.Tanh(),
+            nn.Linear(lstm_hidden // 2, 1),
+        )
 
         self._init_weights()
 
@@ -441,8 +463,7 @@ class ClarkActorCritic(nn.Module):
         for module in [self.hustle_head]:
             nn.init.orthogonal_(module.weight, gain=0.01)
             nn.init.constant_(module.bias, 0.0)
-        # PopArt value head — orthogonal init the inner Linears.
-        for module in [*self.value_head.body, self.value_head.out]:
+        for module in self.value_head:
             if isinstance(module, nn.Linear):
                 nn.init.orthogonal_(module.weight, gain=1.0)
                 nn.init.constant_(module.bias, 0.0)
@@ -550,7 +571,10 @@ class ClarkActorCritic(nn.Module):
 
         # ── Outputs ───────────────────────────────────────────────────────────
         # Task assignment logits: (N, M)
-        assignment_logits = W_final @ T.t()               # (N, M)
+        # Small-init scale (0.05) keeps initial logits ~0.5–1.5, so softmax
+        # is near-uniform at epoch 0 and entropy starts high. The policy
+        # learns to grow this scalar as it commits to specific assignments.
+        assignment_logits = self._assign_scale * (W_final @ T.t())   # (N, M)
 
         # Apply action mask: invalid actions get -1e9
         if action_mask is not None:
@@ -563,9 +587,7 @@ class ClarkActorCritic(nn.Module):
             hmask_t = torch.tensor(hustle_mask, dtype=torch.bool, device=device)
             hustle_logits = hustle_logits.masked_fill(~hmask_t, -1e9)
 
-        # Value: scalar. PopArtValueHead already does .squeeze(-1) so the
-        # output of value_head((1, lstm_hidden)) is shape (1,); .squeeze()
-        # then collapses to ().
+        # Value: scalar.
         value = self.value_head(h_t.unsqueeze(0)).squeeze()  # ()
 
         return assignment_logits, hustle_logits, value, new_hidden
@@ -659,7 +681,9 @@ class ClarkActorCritic(nn.Module):
 
         # ── Outputs ───────────────────────────────────────────────────────────
         # Assignment logits via batched matmul: (T, N, d) @ (T, d, M) → (T, N, M)
-        assign_logits = torch.bmm(W_final, T_tokens.transpose(1, 2))  # (T, N, M)
+        assign_logits = self._assign_scale * torch.bmm(
+            W_final, T_tokens.transpose(1, 2)
+        )  # (T, N, M) — small-init scale; see forward() for rationale.
 
         # Apply per-step action masks
         N = W_final.shape[1]
@@ -680,18 +704,22 @@ class ClarkActorCritic(nn.Module):
                     hfull[t_idx] = torch.tensor(hm, dtype=torch.bool, device=device)
             hustle_logits = hustle_logits.masked_fill(~hfull, -1e9)
 
-        # PopArtValueHead already squeezes the trailing 1-dim, so for
-        # h_t shape (T, lstm_hidden) we get values shape (T,). The outer
-        # .squeeze(-1) was a no-op when T>1 but collapsed (1,)→() when
-        # T==1, breaking torch.cat downstream — removed.
-        values = self.value_head(h_t)                                 # (T,)
+        # value_head returns (T, 1); use .reshape(-1) instead of .squeeze(-1)
+        # so a single-step chunk (T==1) doesn't collapse to a 0-d tensor
+        # which would break torch.cat downstream.
+        values = self.value_head(h_t).reshape(-1)                     # (T,)
 
-        # Vectorised entropy: sum over workers for each step
+        # Vectorised entropy: MEAN over workers (not sum) so the entropy
+        # bonus is invariant to N. With sum-over-workers, entropy term
+        # scaled with N and dwarfed the policy gradient (entropy ~7 vs
+        # policy_loss ~0.005), pushing the optimizer toward "spread the
+        # policy" instead of "improve it". Per-worker mean keeps the
+        # bonus magnitude consistent across N=3 vs N=10 facilities.
         task_lp = F.log_softmax(assign_logits, dim=-1)                # (T, N, M)
         task_ent = -(task_lp.exp() * task_lp).sum(dim=-1)            # (T, N)
         hustle_lp = F.log_softmax(hustle_logits, dim=-1)              # (T, N, 2)
         hustle_ent = -(hustle_lp.exp() * hustle_lp).sum(dim=-1)      # (T, N)
-        entropies = (task_ent + hustle_ent).sum(dim=-1)               # (T,)
+        entropies = (task_ent + hustle_ent).mean(dim=-1)              # (T,) — per-worker mean
 
         return assign_logits, hustle_logits, values, entropies, new_hidden
 
@@ -804,7 +832,9 @@ class ClarkActorCritic(nn.Module):
         W_final = W + self.lstm_proj(h_t).unsqueeze(1)              # (B, max_N, d)
 
         # Logits via batched matmul (B, max_N, d) @ (B, d, max_M) → (B, max_N, max_M)
-        assign_logits = torch.bmm(W_final, T_tokens.transpose(1, 2))
+        assign_logits = self._assign_scale * torch.bmm(
+            W_final, T_tokens.transpose(1, 2)
+        )  # small-init scale (see forward())
 
         # Apply combined mask: per-env action_mask (if given) AND exclude
         # padded N or M positions. Start from pad mask, then AND the action mask.
@@ -833,7 +863,7 @@ class ClarkActorCritic(nn.Module):
                 hvalid[b, :Ni] = hm_t
             hustle_logits = hustle_logits.masked_fill(~hvalid, -1e9)
 
-        values = self.value_head(h_t)                               # (B,)
+        values = self.value_head(h_t).reshape(-1)                   # (B,)
 
         return assign_logits, hustle_logits, values, n_workers_list, n_tasks_list, new_hidden
 

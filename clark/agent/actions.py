@@ -125,9 +125,15 @@ def get_action_mask(env: "FacilityEnv") -> np.ndarray:
         # ── Normal case: apply per-task eligibility ──────────────────────────
         for j, t_id in enumerate(task_ids):
             if t_id == "idle":
-                # Idle allowed for any non-absent, non-exhausted worker
-                # (agent can choose to idle; it may be suboptimal but valid)
-                mask[w_id, j] = True
+                # Idle is INVALID in the normal branch — matches Jack's
+                # action mask. Idle is only available via the absent /
+                # shift-exhausted special-case branches above. Without
+                # this constraint, a deterministic-at-init policy can
+                # commit to "everyone idle" as the lowest-penalty path
+                # and never escape, since idle never accumulates the
+                # reward signals (per_order_shipped, per_productive_hour)
+                # that would push it toward better behaviors.
+                mask[w_id, j] = False
                 continue
 
             if t_id == "management":

@@ -45,6 +45,12 @@ class YearEnv:
 
         # Carryover mechanics
         self.restock_level: float = RESTOCK_STARTING_LEVEL
+        # Hours of restock work left over from yesterday — added to today's
+        # fresh restock_remaining so under-restocking compounds visibly.
+        # Without this, the agent could "skip restock" today and tomorrow
+        # gets a fresh-full quota plus the penalty for low level — a
+        # one-sided cost that confuses credit assignment.
+        self.restock_carryover_hours: float = 0.0
         self.management_backlog: float = 0.0
         self.mgmt_carryover_hours: float = 0.0
         self.cycle_counts_done_this_week: int = 0
@@ -78,6 +84,7 @@ class YearEnv:
         self.current_day_idx = 0
 
         self.restock_level = RESTOCK_STARTING_LEVEL
+        self.restock_carryover_hours = 0.0
         self.management_backlog = 0.0
         self.mgmt_carryover_hours = 0.0
         self.cycle_counts_done_this_week = 0
@@ -276,10 +283,24 @@ class YearEnv:
         if day_info["day_of_week"] == 0:
             self._process_new_week()
 
+        # Morning catchup OT — trigger when there's real rollover from
+        # yesterday: depleted restock OR unfulfilled management duty. The
+        # extra morning hour gives workers time to catch up before order
+        # arrivals begin (which still start at the configured day_start_hour).
+        rules = self.facility_config.rules
+        morning_catchup = (
+            rules.morning_catchup_enabled
+            and (
+                self.restock_level < rules.morning_catchup_restock_threshold
+                or self.mgmt_carryover_hours > 0.0
+            )
+        )
+
         state = self.day_env.reset(
             force_month=day_info["month"],
             force_dow=day_info["day_of_week"],
             force_volume=day_info["volume"],
+            morning_catchup=morning_catchup,
         )
 
         # Remember the clean base volume before any backlog injection
@@ -300,6 +321,12 @@ class YearEnv:
 
         # Apply carryover restock level from previous day
         self.day_env.restock_level = self.restock_level
+        # Carry uncompleted restock WORK to today's quota — yesterday's slack
+        # becomes today's burden so the agent can't game the system by
+        # skipping restock on easy days.
+        if self.restock_carryover_hours > 0:
+            self.day_env.restock_remaining += self.restock_carryover_hours
+            self.restock_carryover_hours = 0.0
 
         # Pass backlog so management cap logic can lift it
         self.day_env._mgmt_backlog = self.management_backlog
@@ -329,8 +356,13 @@ class YearEnv:
         reward = 0.0
         rules = self.facility_config.rules
 
-        # Carry restock level
+        # Carry restock level only (matches Jack). The previously-added
+        # `restock_carryover_hours` was asymmetric: bad days compounded the
+        # next day's quota but good days got no relief, creating a within-
+        # year spiral that taught the policy to "give up when behind."
+        # Restock_level alone is enough carryover signal.
         self.restock_level = self.day_env.restock_level
+        self.restock_carryover_hours = 0.0
 
         # Management backlog
         total_mgmt = self.day_env._get_effective_management_hours()

@@ -20,6 +20,7 @@ import time
 
 from clark.agent.actions import get_action_mask, get_hustle_mask
 from clark.agent.ppo import ClarkAgent
+from clark.sim_logging.training_metrics_logger import TrainingMetricsLogger
 from clark.agent.state import StateBuilder
 from clark.env.year_env import YearEnv
 from clark.training.synthetic_gen import generate_random_facility, CURRICULUM_STAGES
@@ -170,14 +171,9 @@ def pretrain(
             ]
 
             _, reward, done, info = env.step(actions)
-            # Tighter clip + per-worker normalization. The previous ±1e6 clamp
-            # only protected against the carryover-explosion bug; with normal
-            # carryover penalties bounded, clip can be much tighter and rewards
-            # can be normalized per-worker so configs of different sizes feed
-            # the value head + advantage signal on the same scale.
+            # Reward clip kept as safety ceiling; per-N normalization removed
+            # (squashed the positive learning signal — see batched path).
             reward = float(max(-5000.0, min(5000.0, reward)))
-            n_workers = max(1, state_dict["worker_feats"].shape[0])
-            reward = reward / n_workers
             episode_reward += reward
             steps += 1
 
@@ -402,6 +398,12 @@ def pretrain_batched(
         )
 
     logger = EpisodeLogger(log_dir=log_dir, mode="pretrain")
+    metrics = TrainingMetricsLogger(log_dir=log_dir)
+    metrics.update_status(
+        n_episodes_target=n_episodes,
+        current_episode=start_episode - 1,
+        alive=True,
+    )
 
     runner_kind = "MP" if use_mp else "in-proc"
     print(f"Pre-training Clark foundation model — BATCHED (n_envs={n_envs}, runner={runner_kind})")
@@ -438,14 +440,19 @@ def pretrain_batched(
 
     tick = 0
     last_heartbeat = 0.0
-    heartbeat_interval_s = 2.0   # refresh the tick-counter line every 2 seconds
-    # Rolling buffer of completed-day digests across all envs — surfaces
-    # mid-episode grade signal that would otherwise be invisible until
-    # year-end (~30-60 min into a fresh start). Drained from the runner
-    # every heartbeat and reported every `intra_year_report_interval_s`.
+    heartbeat_interval_s = 10.0  # one terse in-place line every 10s
+    # Rolling buffer of completed-day digests for the periodic detailed report.
     intra_year_days: list[dict] = []
     last_intra_report = 0.0
-    intra_year_report_interval_s = 30.0
+    intra_year_report_interval_s = 60.0
+    last_metrics_write = 0.0
+    metrics_write_interval_s = 30.0
+    # Tick-rate computation (rolling)
+    tick_rate_window_start = 0.0
+    tick_rate_window_ticks = 0
+    last_tick_rate = 0.0
+    # Last seen PPO health (for heartbeat one-liner)
+    last_clip = 0.0; last_vloss = 0.0; last_entropy = 0.0
 
     # ── Pipelined warmup ──────────────────────────────────────────────────────
     # Pre-fill prev_* with the very first tick's data and kick the workers off
@@ -479,53 +486,105 @@ def pretrain_batched(
         now = time.time()
         if now - last_heartbeat >= heartbeat_interval_s:
             elapsed = now - start_time
-            # Per-env day progress across the batch, so you can see motion
-            # even within a single year. May be one tick stale in MP mode.
             day_idxs = runner.current_day_idxs()
             avg_day = sum(day_idxs) / max(1, len(day_idxs))
             max_day = max(day_idxs) if day_idxs else 0
             total_days = runner.total_work_days
-            msg = (f"  ... tick {tick:6d} | ep {ep}/{n_episodes} "
-                   f"| avg day {avg_day:5.1f}/{total_days} (max {max_day}) "
-                   f"| {elapsed:6.0f}s")
+            # Tick rate over this heartbeat window.
+            if tick_rate_window_start > 0:
+                window_dt = now - tick_rate_window_start
+                if window_dt > 0:
+                    last_tick_rate = (tick - tick_rate_window_ticks) / window_dt
+            tick_rate_window_start = now
+            tick_rate_window_ticks = tick
+            # Quick-glance window for the heartbeat — last 100 days from
+            # this run's intra_year buffer.
+            recent_days = intra_year_days[-100:]
+            if recent_days:
+                wins = sum(1 for d in recent_days if d.get("grade") in ("A", "B"))
+                ots = sum(1 for d in recent_days if d.get("ot"))
+                cmps = sum(d.get("completion", 0.0) for d in recent_days) / len(recent_days)
+                last_summary = (f"last{len(recent_days):>3}: "
+                                f"win {wins*100//len(recent_days):>3d}% "
+                                f"OT {ots*100//len(recent_days):>3d}% "
+                                f"Cmp {int(cmps*100):>3d}%")
+            else:
+                last_summary = "last  0: (waiting for first day)"
+            msg = (f"  >> tick {tick:>6} | "
+                   f"day {avg_day:4.1f}/{total_days} "
+                   f"| {last_tick_rate:4.1f}t/s "
+                   f"| clip {last_clip*100:4.1f}% V {last_vloss:5.2f} H {last_entropy:5.2f} "
+                   f"| {last_summary} "
+                   f"| {int(elapsed/60):>2}m")
             print(msg + " " * 10, end="\r", flush=True)
             last_heartbeat = now
+
+            # Update status every heartbeat (cheap, just dict assignment),
+            # but throttle the on-disk write so we're not re-serializing
+            # the entire metrics file every 2s. Dashboard polls every 5s
+            # so 30s write cadence is plenty for "live" feel.
+            metrics.update_status(
+                current_episode=ep,
+                ticks=tick,
+                elapsed_s=elapsed,
+                alive=True,
+            )
+            if now - last_metrics_write >= metrics_write_interval_s:
+                metrics.write()
+                last_metrics_write = now
 
             # Drain every heartbeat (cheap) so the buffer doesn't grow
             # unbounded between intra-year reports.
             drained = runner.drain_recent_days() if hasattr(runner, "drain_recent_days") else []
             intra_year_days.extend(drained)
+            # Also push them into the metrics file so the dashboard can
+            # show day-level grade trend long before any year completes.
+            if drained:
+                metrics.record_day_grades(drained)
 
-            # Intra-year grade report — fires every ~30s so we can see
-            # signal long before the first year completes (~45-60 min in).
+            # Intra-year grade report — fires every ~60s with three
+            # fixed-size sliding windows so we can see whether the recent
+            # trend is up, flat, or spiraling. Older window on the left,
+            # newer window on the right; eyeball direction = improvement.
             if (now - last_intra_report >= intra_year_report_interval_s
                     and intra_year_days):
-                # Cap to last 500 days so window stays meaningful.
-                window_days = intra_year_days[-500:]
-                gd = {g: 0 for g in "ABCDF"}
-                ot_count = 0
-                cmp_sum = 0.0
-                for d in window_days:
-                    gd[d.get("grade", "?")] = gd.get(d.get("grade", "?"), 0) + 1
-                    if d.get("ot"): ot_count += 1
-                    cmp_sum += d.get("completion", 0.0)
-                n = len(window_days)
-                wins = gd.get("A", 0) + gd.get("B", 0)
-                gd_str = " ".join(
-                    f"{g}={gd[g]}" for g in "ABCDF" if gd[g] > 0
-                )
-                # Newline before so it doesn't get clobbered by the heartbeat
-                # \r overwrite.
+
+                def _window_summary(days_slice: list[dict]) -> str:
+                    if not days_slice:
+                        return "n=0"
+                    gd = {g: 0 for g in "ABCDF"}
+                    ot_count = 0
+                    cmp_sum = 0.0
+                    for d in days_slice:
+                        g = d.get("grade", "?")
+                        gd[g] = gd.get(g, 0) + 1
+                        if d.get("ot"): ot_count += 1
+                        cmp_sum += d.get("completion", 0.0)
+                    n = len(days_slice)
+                    wins = gd.get("A", 0) + gd.get("B", 0)
+                    return (f"n={n:>3} win {wins*100//n:>3d}% "
+                            f"OT {ot_count*100//n:>3d}% "
+                            f"Cmp {int(cmp_sum/n*100):>3d}% "
+                            f"A{gd.get('A',0)}/B{gd.get('B',0)}/"
+                            f"C{gd.get('C',0)}/D{gd.get('D',0)}/F{gd.get('F',0)}")
+
+                w100 = intra_year_days[-100:]
+                w50 = intra_year_days[-50:]
+                w25 = intra_year_days[-25:]
+                # Newline first so we don't clobber the \r heartbeat line.
                 print(
-                    f"\n  ... [intra-year] last {n} days: "
-                    f"win {wins/n:4.0%} | OT {ot_count/n:4.0%} | "
-                    f"Cmp {cmp_sum/n:4.0%} | grades {gd_str}",
+                    f"\n  ... [trend] 100d: {_window_summary(w100)}"
+                    f"\n  ... [trend]  50d: {_window_summary(w50)}"
+                    f"\n  ... [trend]  25d: {_window_summary(w25)}"
+                    f"\n  ... [ppo]   clip {last_clip*100:5.2f}% "
+                    f"V {last_vloss:6.3f} H {last_entropy:5.3f} "
+                    f"tick/s {last_tick_rate:5.1f}",
                     flush=True,
                 )
                 last_intra_report = now
-                # Trim to keep memory bounded.
-                if len(intra_year_days) > 1000:
-                    intra_year_days = intra_year_days[-500:]
+                # Trim to keep memory bounded but keep enough for 100d window.
+                if len(intra_year_days) > 400:
+                    intra_year_days = intra_year_days[-200:]
 
         # Block until workers finish the previously-sent step.
         results = runner.step_recv()
@@ -561,14 +620,17 @@ def pretrain_batched(
 
         # ── Bookkeeping for the PREVIOUS tick (overlaps with worker stepping) ──
         # Store transitions for the prev (state, action, log_prob, value, reward, done).
-        # Tighter clip + per-worker normalization (matches single-env path).
-        # Use prev_states[b].N — the worker count the action was decided for —
-        # so configs of different sizes feed the value head + advantage signal
-        # on the same scale.
+        # Per-N normalization REMOVED — Jack doesn't do it and works; for us
+        # it preferentially squashed the +per_order_shipped positive signal
+        # while leaving fixed event penalties relatively dominant.
+        # Reward clip loosened ±5000 → ±20000: end-of-day single-step
+        # penalties (per_order_incomplete = -10 × N_unshipped) can hit
+        # -7000 on N=4 disasters with 700 unshipped. Tighter clip was
+        # masking the catastrophic-day signal so the value head couldn't
+        # distinguish a normal failure from a 4×-worse one.
         rewards = [
-            float(max(-5000.0, min(5000.0, r["reward"])))
-            / max(1, prev_states[b]["worker_feats"].shape[0])
-            for b, r in enumerate(results)
+            float(max(-20_000.0, min(20_000.0, r["reward"])))
+            for r in results
         ]
         dones = [r["done"] for r in results]
         agent.store_transition_batched(
@@ -588,6 +650,31 @@ def pretrain_batched(
                     loss_accum["entropy"]      += m["entropy"]
                     loss_accum["clip_fraction"]+= m["clip_fraction"]
                     loss_accum["n"] += 1
+                    # Cache for terminal heartbeat.
+                    last_clip = m["clip_fraction"]
+                    last_vloss = m["value_loss"]
+                    last_entropy = m["entropy"]
+                    # Per-update PPO metrics for the dashboard's PPO-health
+                    # panel. Recording every update would be too noisy; we
+                    # record one in 16 to keep the file small while still
+                    # tracking trends over thousands of updates.
+                    if tick % 16 == 0:
+                        metrics.record_ppo_update(
+                            episode=ep,
+                            clip_fraction=m["clip_fraction"],
+                            policy_loss=m["policy_loss"],
+                            value_loss=m["value_loss"],
+                            entropy=m["entropy"],
+                            n_updates=m["n_updates"],
+                        )
+                        # PopArt removed — only call record_popart if a future
+                        # value head re-introduces .mu / .sigma attributes.
+                        if hasattr(agent.model.value_head, "mu"):
+                            metrics.record_popart(
+                                episode=ep,
+                                mu=float(agent.model.value_head.mu.item()),
+                                sigma=float(agent.model.value_head.sigma.item()),
+                            )
                 agent.snapshot_entry_hidden_for_slot(b)
 
         # Handle episode completions: log them and advance ep counter.
@@ -642,6 +729,21 @@ def pretrain_batched(
             # in the windowed display.
             episode_year_win_rates.append(year_win)
             episode_year_grades_flat.extend(year_grades)
+
+            # Per-episode metrics for the dashboard (curriculum scatter,
+            # per-config performance, cross-config trend).
+            metrics.record_episode(
+                episode=ep,
+                stage=_get_stage(configs_seen_state["count"]),
+                n_workers=cfg.num_workers,
+                n_tasks=cfg.num_tasks,
+                win_rate_year=year_win,
+                ot_rate_year=year_ot_rate,
+                completion_rate_year=year_ord_pct,
+                reward_per_worker=fin["reward"] / max(1, cfg.num_workers),
+                last_grade=last_grade,
+                config_name=cfg.name,
+            )
             episode_reward_per_worker.append(
                 fin["reward"] / max(1, cfg.num_workers)
             )
@@ -715,6 +817,28 @@ def pretrain_batched(
                     f"{elapsed:6.0f}s",
                     flush=True,
                 )
+                # Record this window's metrics for the dashboard. Includes
+                # avg reward per worker, win/OT/cmp rates, top reward
+                # contributors, and per-day grade distribution across the
+                # window's full years.
+                metrics.record_window(
+                    episode=ep,
+                    avg_reward_per_worker=avg_rw,
+                    win_rate=win_rate,
+                    ot_rate=ot_rate,
+                    completion_rate=avg_ord_pct,
+                    reward_dominance=reward_breakdown_window,
+                    grade_distribution=grade_counts,
+                )
+                metrics.update_status(
+                    current_episode=ep,
+                    current_stage=stage,
+                    ticks=tick,
+                    elapsed_s=elapsed,
+                    alive=True,
+                )
+                metrics.write()
+
                 # Per-day grade distribution across this window's full years
                 # (not just the last day). One line per window — gives a far
                 # more honest view of "is the model learning" than a single
@@ -768,6 +892,11 @@ def pretrain_batched(
             print(f"  [Emergency checkpoint saved at ep {emergency_ep} -> {output_path}]")
         except Exception as save_err:
             print(f"  [Emergency save ALSO failed: {save_err}]")
+        # Mark training as not alive so the dashboard can show it.
+        try:
+            metrics.update_status(alive=False); metrics.write()
+        except Exception:
+            pass
         raise
 
     agent.save(output_path, n_episodes,
@@ -776,6 +905,9 @@ def pretrain_batched(
           f"{n_episodes} episodes in {time.time() - start_time:.0f}s "
           f"({tick} ticks, n_envs={n_envs})")
     print(f"Foundation model saved to: {output_path}")
+
+    # Mark complete in the dashboard status.
+    metrics.update_status(alive=False, current_episode=n_episodes); metrics.write()
 
     # Clean up worker procs if we used the MP runner.
     close = getattr(runner, "close", None)

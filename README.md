@@ -73,7 +73,7 @@ Outputs
 | Cross-attention layers | 1 |
 | Attention heads | 8 |
 | LSTM hidden size | 512 |
-| TBPTT chunk size | 16 |
+| TBPTT chunk size | 64 |
 | Discount factor `γ` | 0.999 |
 | GAE `λ` | 0.98 |
 | Clip `ε` | 0.2 |
@@ -87,11 +87,13 @@ Key design points:
 - **Variable-shape architecture.** Workers and tasks are token sequences; the model has no hardcoded dependence on N or M.
 - **Action masks for both heads.** Both task-assignment masks (eligibility, OT-only-pick-and-pack, management quota gating, restock gating) and hustle masks (per-worker absent / cap-exhausted) are applied as `-1e9` fills before softmax in both rollout AND PPO update. Invalid actions never receive gradient, and the importance-sampling math stays consistent across rollout and update.
 - **Per-worker PPO ratio.** The policy importance-sampling ratio is computed and clipped *per-worker per-head* rather than as a sum across all 2N decisions. Without this, ratio variance scales linearly with N (a 25-worker config produces ratio stdev ~0.35 from harmless replay drift, which alone saturates `clip_eps=0.2`). This is the standard fix for factored / multi-agent action spaces (IPPO).
-- **PopArt value head.** Maintains running `mu`/`sigma` of returns via EMA and trains the value head against normalized targets. After each update the output projection is rescaled so denormalized predictions are preserved across stat shifts. Solves the cross-config variance problem (per-worker normalized rewards still vary an order of magnitude across facility shapes).
-- **TBPTT** with `chunk_size = 16` truncates LSTM gradients across the full simulated year (~13,050 steps). Chunks are split at any worker-count change (peak-staffing arrivals) so the per-step state stack stays homogeneous.
+- **Assignment logits scaled by `1/√d_model`.** The `W_final @ T.T` matmul is divided by `√d_model` (~22 at d_model=512) so logits at init are O(1) and softmax is well-tempered. Without this scaling the matmul outputs O(20) magnitudes, causing immediate near-argmax collapse and entropy crash. Same trick scaled-dot-product attention uses for its scores.
+- **EMA running return normalization for the value loss.** The value head trains against returns normalized by a global EMA of `mean`/`var` (not per-batch stats). Per-batch standardization on a 64-step TBPTT chunk produced tiny / unstable σ — value loss exploded and the head chased moving targets across chunks. Replaced an earlier PopArt experiment that didn't fit the per-day single-trajectory update setting.
+- **Per-worker mean entropy.** The entropy bonus is averaged over workers, not summed. Sum-over-workers made the bonus magnitude scale with N, swamping the policy gradient at large facilities and collapsing exploration at small ones. `entropy_coeff=0.10` keeps healthy exploration without dominating the policy gradient.
+- **TBPTT** with `chunk_size = 64` truncates LSTM gradients across the full simulated year (~13,050 steps). 64 covers ~half a day's gradient horizon and keeps per-batch correlation low enough that the value-loss running stats stay stable. Chunks are split at any worker-count change (peak-staffing arrivals) so the per-step state stack stays homogeneous.
+- **Loose reward / return clips.** Per-step reward clipped at ±20k; GAE returns clipped at ±500k. End-of-day single-step penalties (`per_order_incomplete = -10 × N_unshipped`) can legitimately hit -7000 on small-facility disasters; tighter clips were masking the catastrophic-day signal so the value head couldn't distinguish a normal failure from a 4×-worse one.
 - **Dropout disabled** in the policy network. The cross-rollout/update dropout-mask difference would create importance-ratio noise on the order of `clip_epsilon` even with frozen weights — saturating the clip threshold structurally.
 - **fp32 log-prob storage.** Old log-probs are cast to fp32 before storing (rollout runs under bf16 autocast). bf16 quantization noise on a sum-over-workers log-prob is comparable to `clip_eps` itself.
-- **Per-worker reward normalization.** Rewards are divided by the active worker count `N` at storage time. Configs of any size feed the optimizer on the same scale.
 - **bf16 AMP** on CUDA with explicit fp16 fallback for hardware without bf16 support.
 
 Full architectural detail in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). Full per-feature reference in [`NOTE.md`](NOTE.md).
@@ -255,7 +257,8 @@ clark/
     batched_runner.py       # In-process N-env runner
     mp_runner.py            # Multi-process N-env runner
   sim_logging/
-    episode_logger.py       # JSON episode logs for dashboard
+    episode_logger.py            # JSON episode logs for dashboard
+    training_metrics_logger.py   # Live PPO / day-grade metrics for dashboard
     log_schema.py
   dashboard/
     dashboard.html          # Single-file browser dashboard
@@ -336,17 +339,19 @@ Clark is a successor to Jack, not a wrapper around it. The two share design DNA 
 - [x] Synthetic facility generator with 3-stage curriculum
 - [x] Pre-train + fine-tune CLI (`clark pretrain`, `clark finetune`)
 - [x] Per-worker PPO ratio + per-(worker, head) clipping (IPPO-style)
-- [x] PopArt value head with running normalization + weight-preserving rescale
+- [x] EMA running return normalization for the value loss (replaced PopArt — see Architecture for rationale)
+- [x] Assignment logits scaled by `1/√d_model` (well-tempered softmax at init)
+- [x] Per-worker mean entropy (N-invariant exploration bonus)
 - [x] Hustle action masks threaded through rollout AND PPO update
-- [x] Per-worker reward normalization at storage
 - [x] fp32 log-prob storage (eliminates bf16 ratio noise)
 - [x] Dropout disabled in the policy network (PPO consistency)
-- [x] `γ=0.999`, `λ=0.98` tuned for the 13k-step horizon
+- [x] `γ=0.999`, `λ=0.98`, `chunk_size=64` tuned for the 13k-step horizon
+- [x] Reward / return clips wide enough to preserve catastrophic-day signal
 - [x] Vectorized PPO update (single GPU sync per cycle)
 - [x] Facility-aware order-arrival schedule (no silent drops)
-- [x] Reward shape: `+200` order completion bonus, `+10` mgmt-minimum tier
 - [x] Multi-process env runner with pipelined CPU/GPU overlap
 - [x] N-split TBPTT chunker for peak-staffing days
+- [x] Live training metrics + dashboard (PPO health, day-grade trends, sliding windows)
 
 ### Infrastructure
 

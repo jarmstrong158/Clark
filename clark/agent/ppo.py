@@ -43,11 +43,22 @@ PPO_DEFAULTS: dict = {
     "gamma": 0.999,
     "gae_lambda": 0.98,
     "clip_epsilon": 0.2,
-    "entropy_coeff": 0.02,
+    # entropy_coeff bumped 0.02 → 0.10 to compensate for the entropy
+    # sum→mean change in transformer.py. Old code summed per-worker entropy
+    # so the bonus magnitude scaled with N (~8× at average N=8); new mean-
+    # over-workers makes the bonus N-invariant but ~8× smaller in absolute
+    # terms. Without this bump the policy committed to near-deterministic
+    # actions within ~250 PPO updates and stopped exploring.
+    "entropy_coeff": 0.10,
     "value_loss_coeff": 0.5,
     "max_grad_norm": 0.5,
     "epochs_per_update": 4,
-    "tbptt_chunk_size": 16,
+    # chunk_size 16 → 64: a "day" in this sim spans many ticks. With chunk=16
+    # the LSTM gradient was truncated 3-4 times per day, so the agent could
+    # not learn that an 8AM pick-heavy assignment causes packer-starvation
+    # at 11AM. 64 covers ~half a day's gradient horizon and reduces the
+    # per-update batch correlation that was poisoning value-loss stats.
+    "tbptt_chunk_size": 64,
 }
 
 
@@ -123,11 +134,12 @@ class RolloutBuffer:
         advantages = np.zeros(n, dtype=np.float32)
         last_gae = 0.0
 
-        # Clamp rewards before GAE. Stored rewards have already been clipped
-        # tighter and per-worker-normalized at storage time (see pretrain.py);
-        # this is a defense-in-depth guard against any caller that bypasses
-        # that path.
-        rewards = [float(max(-5000.0, min(5000.0, r))) for r in self.rewards]
+        # Clamp rewards before GAE. Loosened from ±5000 → ±20000 because end-
+        # of-day single-step penalties (per_order_incomplete = -10 × N_unshipped)
+        # can legitimately hit -7000 on N=4 disasters with 700 unshipped. The
+        # tighter clip was masking the catastrophic-day signal, making the
+        # value head think bad days were ordinary.
+        rewards = [float(max(-20_000.0, min(20_000.0, r))) for r in self.rewards]
 
         # Batch-sync values: if they are tensors, stack them once and
         # convert to a single numpy array. If they are already floats, this
@@ -218,6 +230,18 @@ class ClarkAgent:
         self.model = ClarkActorCritic().to(self.device)
         self.optimizer = Adam(self.model.parameters(), lr=self.hparams["lr"])
         self.buffer = RolloutBuffer()
+
+        # Running return statistics for value-loss normalization. Per-batch
+        # standardization on TBPTT chunks of 64 correlated steps was producing
+        # tiny / unstable σ → value-loss explosion + value head chasing
+        # moving targets across chunks. A single running mean/σ updated by
+        # EMA gives a stable normalizer the value head can actually learn
+        # against. Welford-style would be more accurate but EMA tracks
+        # distribution drift better as the policy improves.
+        self._ret_mean: float = 0.0
+        self._ret_var: float = 1.0
+        self._ret_initialized: bool = False
+        self._ret_beta: float = 0.01  # ~100-update half-life
 
         # AMP config — only meaningful on CUDA. CPU autocast works for bf16 too
         # but the RL hot path is tiny per-step and AMP overhead dominates there.
@@ -510,12 +534,36 @@ class ClarkAgent:
             self.hparams["gamma"], self.hparams["gae_lambda"]
         )
 
-        # Normalize advantages (per-batch — independent of value head scale).
+        # Defense-in-depth: clamp returns. Raised again from ±50k → ±500k.
+        # An N=4 catastrophic year accumulates rw_per_worker around -700k.
+        # At ±50k the value head saw "moderate failure" instead of the real
+        # catastrophe, so the policy gradient never received the signal
+        # "N=4 → AVOID this assignment pattern". The 500k bound just guards
+        # against a numerical blow-up while letting the legitimate worst-
+        # case signal through.
+        returns = np.clip(returns, -500_000.0, 500_000.0)
+
+        # Normalize advantages (per-batch).
         adv_std = advantages.std() + 1e-8
         advantages = (advantages - advantages.mean()) / adv_std
 
         advantages_t = torch.as_tensor(advantages, dtype=torch.float32, device=self.device)
         returns_t = torch.as_tensor(returns, dtype=torch.float32, device=self.device)
+
+        # Update running return stats ONCE per update (not per epoch). On
+        # the very first call, snap to batch stats so the value head isn't
+        # asked to predict against μ=0/σ=1 when returns are at totally
+        # different scale. Subsequent calls EMA toward batch stats.
+        batch_mean = float(returns.mean())
+        batch_var  = float(returns.var() + 1e-8)
+        if not self._ret_initialized:
+            self._ret_mean = batch_mean
+            self._ret_var  = batch_var
+            self._ret_initialized = True
+        else:
+            b = self._ret_beta
+            self._ret_mean = (1.0 - b) * self._ret_mean + b * batch_mean
+            self._ret_var  = (1.0 - b) * self._ret_var  + b * batch_var
 
         # Old per-worker log-probs are already fp32 tensors on device (cast at
         # storage time in select_action_*). We keep them as a list of per-step
@@ -618,19 +666,21 @@ class ClarkAgent:
                     (r - 1.0).abs() > clip_eps
                 ).float().mean().item()
 
-                # PopArt value loss: normalize both predictions and targets
-                # by the value head's RUNNING mu/sigma (not per-batch stats).
-                # This gives a stable, well-scaled gradient regardless of
-                # how reward magnitudes vary across configs. The value head
-                # outputs denormalized values to external callers (so GAE
-                # math sees raw scale), but inside the loss we re-normalize
-                # — equivalent to calling forward_normalized() but cheaper
-                # since we already have values_f32 from forward_sequence.
-                pa_mu = self.model.value_head.mu
-                pa_sigma = self.model.value_head.sigma
-                norm_preds = (values_f32 - pa_mu) / pa_sigma
-                norm_targets = (returns_t - pa_mu) / pa_sigma
-                value_loss = F.mse_loss(norm_preds, norm_targets)
+                # Running-stats return standardization for value loss.
+                # Per-batch standardization on a 64-step correlated chunk
+                # was the previous approach and destabilized the value head:
+                # σ within a chunk is tiny (correlated samples), so MSE
+                # divided by tiny σ blew up; μ moves chunk-to-chunk, so the
+                # value head chased a moving target. We instead maintain a
+                # single global EMA of return mean/var (updated below per
+                # update call, NOT per epoch) — a stable normalizer the
+                # value head can actually learn against.
+                ret_mean = float(self._ret_mean)
+                ret_std  = float(self._ret_var) ** 0.5 + 1e-8
+                value_loss = F.mse_loss(
+                    (values_f32 - ret_mean) / ret_std,
+                    (returns_t  - ret_mean) / ret_std,
+                )
                 entropy_loss = -entropies_f32.mean()
 
                 loss = policy_loss + val_coeff * value_loss + ent_coeff * entropy_loss
@@ -652,12 +702,6 @@ class ClarkAgent:
         n = max(1, metrics["n_updates"])
         for k in ("policy_loss", "value_loss", "entropy", "clip_fraction"):
             metrics[k] /= n
-
-        # Update PopArt running stats ONCE per update cycle (not per epoch).
-        # This advances the running mu/sigma based on this buffer's returns
-        # and rescales the value head's output projection so denormalized
-        # outputs are preserved across the stat shift.
-        self.model.value_head.update_stats(returns_t.detach())
 
         buf.clear()
         return metrics
@@ -864,19 +908,20 @@ class ClarkAgent:
         hparams = data.get("hparams", {})
         agent = cls(device=dev, **agent_kwargs, **hparams)
 
-        # Migrate legacy value_head keys (pre-PopArt) to PopArtValueHead
-        # layout. Old: value_head.0.{weight,bias}, value_head.2.{weight,bias}.
-        # New: value_head.body.0.{weight,bias}, value_head.out.{weight,bias},
-        #      plus running mu/sigma/initialized buffers (default to fresh).
+        # Migrate legacy PopArt-era checkpoints (had value_head.body.* /
+        # value_head.out.*) back to the simple nn.Sequential layout
+        # (value_head.0.* / value_head.2.*). PopArt buffers (mu/sigma/
+        # initialized) are dropped — they no longer exist in the model.
         msd = dict(data["model_state_dict"])
-        if "value_head.0.weight" in msd and "value_head.body.0.weight" not in msd:
-            msd["value_head.body.0.weight"] = msd.pop("value_head.0.weight")
-            msd["value_head.body.0.bias"] = msd.pop("value_head.0.bias")
-            msd["value_head.out.weight"] = msd.pop("value_head.2.weight")
-            msd["value_head.out.bias"] = msd.pop("value_head.2.bias")
-            # Buffers stay at constructor defaults (mu=0, sigma=1, init=0).
-            # First call to update_stats() will snap them to the actual
-            # batch stats and rescale weights to preserve outputs.
+        if "value_head.body.0.weight" in msd and "value_head.0.weight" not in msd:
+            msd["value_head.0.weight"] = msd.pop("value_head.body.0.weight")
+            msd["value_head.0.bias"] = msd.pop("value_head.body.0.bias")
+            msd["value_head.2.weight"] = msd.pop("value_head.out.weight")
+            msd["value_head.2.bias"] = msd.pop("value_head.out.bias")
+            # Drop the now-defunct PopArt buffers if present.
+            for k in list(msd.keys()):
+                if k.startswith("value_head.") and k.split(".")[-1] in ("mu", "sigma", "initialized"):
+                    msd.pop(k)
         agent.model.load_state_dict(msd, strict=False)
         opt_sd = data.get("optimizer_state_dict")
         if opt_sd is not None:

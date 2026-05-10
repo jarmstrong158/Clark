@@ -492,8 +492,28 @@ def cmd_dashboard(args: argparse.Namespace):
                 self._serve_json("year_snapshot.json")
             elif path == "/data/episode_log.json":
                 self._serve_json("episode_log.json")
+            elif path == "/data/training_metrics.json":
+                self._serve_json("training_metrics.json")
+            elif path == "/status":
+                # Tiny lightweight endpoint — dashboard uses this for the
+                # live-pill liveness check without paying the cost of a
+                # full training_metrics.json fetch.
+                self._serve_status()
             else:
                 self._send(404, "text/plain", b"Not found")
+
+        def _serve_status(self):
+            import json as _json
+            fpath = log_dir / "training_metrics.json"
+            payload = {"alive": False, "current_episode": 0}
+            if fpath.exists():
+                try:
+                    data = _json.loads(fpath.read_text())
+                    payload = data.get("status", payload)
+                except Exception:
+                    pass
+            self._send(200, "application/json",
+                       _json.dumps(payload).encode("utf-8"))
 
         def _serve_json(self, filename: str):
             fpath = log_dir / filename

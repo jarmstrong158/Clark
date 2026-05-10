@@ -108,6 +108,11 @@ class FacilityEnv:
         self.total_reward: float = 0.0
         self.reward_breakdown: dict = {}
         self.ot_hours: float = 0.0
+        # Pre-shift OT credited when the year_env flags this day for morning
+        # catchup (rollover restock backlog and/or unfulfilled mgmt duty).
+        # Stays separate from end-of-day OT in `_check_eod` so the two
+        # accumulate properly into the final ot_hours figure.
+        self._morning_ot_hours: float = 0.0
         self.is_ot: bool = False
         self.is_done: bool = False
 
@@ -160,6 +165,7 @@ class FacilityEnv:
         force_month: int = None,
         force_dow: int = None,
         force_volume: int = None,
+        morning_catchup: bool = False,
     ) -> np.ndarray:
         self.episode = generate_episode(
             facility_config=self.facility_config,
@@ -168,7 +174,25 @@ class FacilityEnv:
             month=force_month,
             cooldown_tracker=self.cooldown_tracker,
         )
-        self.current_hour = self.facility_config.rules.day_start_hour
+        rules = self.facility_config.rules
+        # Morning catchup OT — start `morning_catchup_hours` (default 1.0)
+        # earlier and pre-credit that as OT. Workers' shift_hours are
+        # extended so they actually have the time to use it. Order arrivals
+        # don't shift, so the early window is naturally empty of new pick
+        # work — perfect for restock catch-up + management catch-up + any
+        # carried backlog from yesterday.
+        if morning_catchup and rules.morning_catchup_enabled:
+            extra = float(rules.morning_catchup_hours)
+            self.current_hour = rules.day_start_hour - extra
+            self._morning_ot_hours = extra
+            self.is_ot = True  # marked as in-OT from minute one
+            for w in self.episode.workers:
+                w.shift_hours += extra
+        else:
+            self.current_hour = rules.day_start_hour
+            self._morning_ot_hours = 0.0
+            self.is_ot = False
+
         self.orders_in_queue = 0
         self.orders_completed = 0
         self.orders_picked_not_audited = 0
@@ -179,8 +203,8 @@ class FacilityEnv:
         self.filler_complete = False
         self.total_reward = 0.0
         self.reward_breakdown = {k: 0.0 for k in self._rewards}
-        self.ot_hours = 0.0
-        self.is_ot = False
+        # ot_hours starts at the pre-credited morning catchup amount.
+        self.ot_hours = self._morning_ot_hours
         self.is_done = False
         self.restock_interrupted_pick = False
 
@@ -649,15 +673,29 @@ class FacilityEnv:
         orders_remaining = self.orders_in_queue + self.orders_picked_not_audited
         eod_hour = self._eod_hour
         ot_hard_stop = self._ot_hard_stop
+        ot_trigger = self.facility_config.rules.ot_trigger_orders_remaining
 
         if self.current_hour >= eod_hour:
-            if orders_remaining > 0:
+            # OT only ENTERS at EOD when meaningfully many orders remain
+            # (matches `ot_trigger_orders_remaining`, default 10). Below the
+            # threshold the day finalizes — those few leftover orders count
+            # via `per_order_incomplete` or carry over via order_carryover.
+            # Once IN OT (e.g. from morning catchup), continue working
+            # until orders drain to 0 OR we hit ot_hard_stop.
+            if orders_remaining > ot_trigger:
                 if not self.is_ot:
                     self.is_ot = True
-                self.ot_hours = self.current_hour - eod_hour
+                # End-of-day OT = morning catchup + (current_hour - eod_hour).
+                self.ot_hours = self._morning_ot_hours + (self.current_hour - eod_hour)
                 # Hard stop — use epsilon to guard against FP accumulation
                 # (57 steps of 1/6 from 9.0 can land at 18.4999...93 instead of 18.5)
                 if self.current_hour >= ot_hard_stop - 1e-9:
+                    return self._finalize_episode()
+            elif self.is_ot:
+                # Already in OT (likely from morning catchup or prior EOD step) —
+                # keep going until orders drain or hard stop.
+                self.ot_hours = self._morning_ot_hours + (self.current_hour - eod_hour)
+                if orders_remaining <= 0 or self.current_hour >= ot_hard_stop - 1e-9:
                     return self._finalize_episode()
             else:
                 return self._finalize_episode()

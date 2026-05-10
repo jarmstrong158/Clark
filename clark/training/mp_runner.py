@@ -105,14 +105,36 @@ def _worker_loop(conn, init_config: FacilityConfig) -> None:
                 day_footer = completed_day.get("footer", {})
                 day_header = completed_day.get("header", {})
                 # Send a slim digest, not the full summary — keep IPC cheap.
+                rb = day_footer.get("reward_breakdown", {}) or {}
                 day_just_finished = {
                     "grade": day_footer.get("grade", "?"),
-                    "ot": day_footer.get("ot_hours", 0.0) > 0.0,
+                    "ot":    day_footer.get("ot_hours", 0.0) > 0.0,
+                    "ot_h":  float(day_footer.get("ot_hours", 0.0)),
                     "completion": (
                         max(0.0, (day_header.get("total_orders", 1)
                                   - day_footer.get("orders_remaining", 0))
                             / max(1, day_header.get("total_orders", 1)))
                     ),
+                    "orders_total":     int(day_header.get("total_orders", 0)),
+                    "orders_remaining": int(day_footer.get("orders_remaining", 0)),
+                    "restock_pct":      float(day_footer.get("restock_pct", 0.0)),
+                    "reward":           float(day_footer.get("reward", 0.0)),
+                    # Slim reward breakdown — only the components that
+                    # tend to blow up in spirals. Keep IPC tiny.
+                    "rb": {
+                        "incomplete": float(rb.get("per_order_incomplete", 0.0)),
+                        "ot_flat":    float(rb.get("ot_incomplete_flat", 0.0)),
+                        "backlog":    float(rb.get("picked_backlog", 0.0)),
+                        "rs_low":     float(rb.get("restock_level_low", 0.0)),
+                        "rs_empty":   float(rb.get("restock_level_empty", 0.0)),
+                        "rs_bleed":   float(rb.get("per_restock_bleed", 0.0)),
+                        "rs_intr":    float(rb.get("restock_pick_interruption", 0.0)),
+                        "starved":    float(rb.get("packers_starved", 0.0)),
+                        "idle":       float(rb.get("per_idle_hour", 0.0)),
+                        "prod":       float(rb.get("per_productive_hour", 0.0)),
+                        "mgmt":       float(rb.get("per_management_hour", 0.0)),
+                        "shipped":    float(rb.get("per_order_shipped", 0.0)),
+                    },
                 }
 
             finished = None

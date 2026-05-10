@@ -141,7 +141,20 @@ class BusinessRules:
     management_backlog_weekly_penalty: float = -50.0
     ot_wall_clock_max: float = 1.0
     ot_hard_stop_hour: float = 18.5
+    # Orders-remaining threshold for OT to fire at EOD. If <= this many
+    # orders remain when current_hour reaches eod_hour, the day finalizes
+    # without OT (those orders carry over via order_carryover_enabled or
+    # incur per_order_incomplete penalty). Above this threshold, OT enters.
     ot_trigger_orders_remaining: int = 10
+    # Morning catchup OT — DISABLED by default. We added it to "let the
+    # facility recover from yesterday's backlog" but it auto-fires every
+    # day with restock<0.5, extending shifts → fatigue threshold hits
+    # earlier → -15% throughput penalty → tomorrow needs morning catchup
+    # too → within-year spiral. Jack has no equivalent and runs sustained.
+    # Keep the config so users CAN enable per-facility if they want it.
+    morning_catchup_enabled: bool = False
+    morning_catchup_restock_threshold: float = 0.5
+    morning_catchup_hours: float = 1.0
     cycle_count_weekly_hours: float = 3.0
     cycle_count_max_overdue_weeks: int = 4
     min_staffing_floor: int = 2
@@ -256,21 +269,35 @@ class RewardOverrides:
 # ─── Default reward signals ──────────────────────────────────────────────────
 
 DEFAULT_REWARDS: dict[str, float] = {
-    "per_order_shipped":              1.0,
-    # Completion bonus is the biggest single carrot — bumped from +50 to +200
-    # so the gradient signal for "ship every order" dominates the per-step
-    # bleed and properly aligns with the binary completion grade gate.
-    "all_orders_complete_bonus":    200.0,
+    # Bumped from +1.0 → +5.0 so partial completion has a meaningful positive
+    # gradient. With per_order_incomplete=-10 dominating, the agent was
+    # learning to *abandon* picks because the marginal +1 reward for each
+    # shipped order didn't beat PopArt advantage noise. At +5, shipping 50%
+    # of 500 orders gives +1250 (vs old +250) — comparable in magnitude to
+    # the -2500 from the unshipped half, restoring a real "ship more = good"
+    # signal that survives PopArt normalization.
+    "per_order_shipped":              5.0,
+    # Completion bonus reverted to +50 (was bumped to +200 when grades were
+    # stuck at F pre-env-fix). With the env arrival bug fixed, completion is
+    # actually achievable — making this bonus rare-but-massive caused PopArt
+    # μ to drift on the rare perfect-day spikes, destabilizing the value
+    # head and producing the monotonic regression we saw post-launch.
+    "all_orders_complete_bonus":     50.0,
     "per_order_incomplete":         -10.0,
     "per_ot_hour":                   -0.5,
     "ot_incomplete_flat":           -25.0,
     "ot_per_order_incomplete":      -10.0,
-    "per_restock_completed":          1.0,
-    "all_restock_bonus":             25.0,
-    "per_restock_bleed":             -2.0,
-    "restock_pick_interruption":    -10.0,
-    "restock_level_low":             -2.0,
-    "restock_level_empty":           -5.0,
+    # Restock penalties at Jack's order of magnitude. We tried HARSH values
+    # (-50/-25/-8) earlier in this session — combined with the now-removed
+    # restock_carryover_hours, those created a per-day reward valley of
+    # ~-1600 that the policy learned to "give up" to avoid. Jack-magnitude
+    # values give a learnable signal without making one bad day catastrophic.
+    "per_restock_completed":          2.0,
+    "all_restock_bonus":             50.0,
+    "per_restock_bleed":             -3.0,
+    "restock_pick_interruption":    -15.0,
+    "restock_level_low":             -3.0,
+    "restock_level_empty":           -8.0,
     "per_filler_unit":                0.1,
     "filler_completion_bonus":        5.0,
     "per_deliberate_unit":            0.1,
@@ -455,6 +482,9 @@ class FacilityConfig:
             ot_wall_clock_max=float(d.get("ot_wall_clock_max", 1.0)),
             ot_hard_stop_hour=float(d.get("ot_hard_stop_hour", 18.5)),
             ot_trigger_orders_remaining=int(d.get("ot_trigger_orders_remaining", 10)),
+            morning_catchup_enabled=bool(d.get("morning_catchup_enabled", True)),
+            morning_catchup_restock_threshold=float(d.get("morning_catchup_restock_threshold", 0.5)),
+            morning_catchup_hours=float(d.get("morning_catchup_hours", 1.0)),
             cycle_count_weekly_hours=float(d.get("cycle_count_weekly_hours", 3.0)),
             cycle_count_max_overdue_weeks=int(d.get("cycle_count_max_overdue_weeks", 4)),
             min_staffing_floor=int(d.get("min_staffing_floor", 2)),

@@ -150,11 +150,9 @@ def finetune(
             ]
 
             _, reward, done, info = env.step(actions)
-            # Same per-worker normalization + tighter clip as pretrain (see
-            # pretrain.py for rationale).
+            # Reward clip kept as safety; per-N normalization removed (matches
+            # pretrain — squashed positive learning signal).
             reward = float(max(-5000.0, min(5000.0, reward)))
-            n_workers = max(1, state_dict["worker_feats"].shape[0])
-            reward = reward / n_workers
             episode_reward += reward
             steps += 1
 
