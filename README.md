@@ -1,6 +1,12 @@
 # Clark
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
+[![Architecture](https://img.shields.io/badge/arch-clark--v2-blue)](docs/ARCHITECTURE.md)
+
 **A foundation reinforcement learning model for warehouse workforce scheduling.**
+
+> **TL;DR** — Clark is a transformer + LSTM PPO agent that pre-trains on thousands of synthetic warehouses, then fine-tunes to any specific facility in ~30 minutes on a consumer GPU. One foundation model, many facilities — variable workers, variable tasks, no per-site retrain from scratch. Successor to [Jack](https://github.com/jarmstrong158/Jack), the single-facility reference implementation.
 
 Clark learns the underlying dynamics of warehouse operations — picking and packing throughput, overtime decisions, restock cycles, fatigue and hustle interactions — from thousands of synthetic facility configurations. A single pre-trained foundation model can then be fine-tuned to any specific facility in 200–500 episodes (~30 min on a consumer GPU) instead of being trained from scratch.
 
