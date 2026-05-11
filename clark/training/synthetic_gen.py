@@ -48,10 +48,15 @@ class CurriculumStage:
 
 STAGE_1 = CurriculumStage(
     stage_num=1,
-    # min_workers=3 — 2 workers can't cover pick+pack+restock+management; that
-    # caused a ~100% OT rate at the start of pretraining and gave the model an
-    # unwinnable signal to learn from.
-    min_workers=3, max_workers=10,
+    # min_workers=5 — N=3 and N=4 facilities have a structural near-zero win
+    # ceiling: too few workers to cover pick+pack+restock+management AND
+    # absorb a single absent or debuffed worker. After 1183 eps of training
+    # those configs averaged win 0.6%/8.7% with R/W -437k/-282k while the
+    # model was hitting 28% wins on N=8-10. They were teaching the model
+    # "lose" and dragging the gradient toward defeatist OT-everywhere
+    # behavior. Raised min from 3→5 so stage 1 is still small-facility
+    # focused but every config is at least theoretically winnable.
+    min_workers=5, max_workers=10,
     max_tasks=5,
     carryover_prob=0.0,
     peak_staffing_prob=0.0,
