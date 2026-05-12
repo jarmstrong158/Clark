@@ -407,6 +407,19 @@ def pretrain_batched(
     else:
         agent = ClarkAgent(**agent_kwargs)
 
+    # Fast-forward the curriculum counter to match the resumed episode.
+    # WITHOUT this, every restart resets configs_seen_state to 0 — meaning
+    # the curriculum thinks it's back in stage 1, even at episode 1500+.
+    # The single-env path does this at line ~122; the batched path was
+    # missing the parallel logic, silently capping training at stage 1
+    # across all resumes. Verified by inspecting episode metrics: 520
+    # post-resume episodes all tagged stage=1 despite ep ranging up to
+    # 1695 (well past stage1_end of 1497 episodes-equivalent).
+    if start_episode > 1:
+        resumed_configs = (start_episode - 1) // max(1, years_per_config)
+        configs_seen_state["count"] = resumed_configs
+        print(f"  [Resume] Fast-forward curriculum counter to {resumed_configs} configs (stage {_get_stage(resumed_configs)})")
+
     agent.init_hidden_batched(n_envs=n_envs)
     if use_mp:
         runner = MultiprocessRunner(
