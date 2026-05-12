@@ -50,6 +50,12 @@ class TrainingMetricsLogger:
         # signal long before any year (~13k steps) completes. Drained from
         # the runner's drain_recent_days() at heartbeat time.
         self.day_grades:  list[dict] = []   # {grade, ot, completion, t}
+        # Per-stage N-distribution counter — counts how many episodes the
+        # curriculum sampler actually drew at each (stage, N) pair. Lets us
+        # spot bugs like "stage 2 supposedly samples N=5-25 but never draws
+        # N>10" without waiting hundreds of episodes for it to be obvious
+        # in the by-N table. Structure: {"1": {"5": 12, "6": 8, ...}, "2": {...}}
+        self.n_distribution: dict = {}
 
         # Heartbeat/status — overwritten, not appended.
         self.status: dict = {
@@ -78,6 +84,7 @@ class TrainingMetricsLogger:
             self.windows     = data.get("windows", [])[-self.max_points:]
             self.popart      = data.get("popart", [])[-self.max_points:]
             self.day_grades  = data.get("day_grades", [])[-self.max_points:]
+            self.n_distribution = data.get("n_distribution", {}) or {}
             # Keep the last status's started_at if restoring — useful for
             # cumulative elapsed across resumes.
             prev_status = data.get("status", {})
@@ -138,6 +145,11 @@ class TrainingMetricsLogger:
             "t": time.time(),
         })
         self._trim(self.episodes)
+        # Bump the per-stage N counter — JSON dict keys must be strings.
+        stage_key = str(stage)
+        n_key = str(n_workers)
+        bucket = self.n_distribution.setdefault(stage_key, {})
+        bucket[n_key] = int(bucket.get(n_key, 0)) + 1
 
     def record_window(
         self,
@@ -212,6 +224,7 @@ class TrainingMetricsLogger:
             "windows": self.windows,
             "popart": self.popart,
             "day_grades": self.day_grades,
+            "n_distribution": self.n_distribution,
         }
         tmp = self.path.with_suffix(".json.tmp")
         with open(tmp, "w") as f:
