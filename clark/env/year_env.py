@@ -429,8 +429,15 @@ class YearEnv:
                 expired = [(d, c) for d, c in self.backlog_ages if d <= cutoff]
                 for day_idx, count in expired:
                     self.order_backlog -= count
-                    # Expired unshipped orders = severe penalty
-                    penalty = self.facility_config.rewards["per_order_incomplete"] * count * 1.5
+                    # Expired unshipped orders = severe penalty. Cap the
+                    # per-event multiplier (see INCOMPLETE_CAP rationale
+                    # in facility_env.py) so a single huge expiry can't
+                    # blow up returns by 100×.
+                    from clark.env.facility_env import INCOMPLETE_CAP
+                    penalty = (
+                        self.facility_config.rewards["per_order_incomplete"]
+                        * min(count, INCOMPLETE_CAP) * 1.5
+                    )
                     reward += penalty
                     self._add_year_reward("backlog_expired", penalty)
                 self.backlog_ages = [(d, c) for d, c in self.backlog_ages if d > cutoff]
@@ -439,7 +446,13 @@ class YearEnv:
             # Hard backlog cap penalty
             if rules.order_carryover_max_backlog > 0 and self.order_backlog > rules.order_carryover_max_backlog:
                 excess = self.order_backlog - rules.order_carryover_max_backlog
-                penalty = self.facility_config.rewards["per_order_incomplete"] * excess
+                # Same INCOMPLETE_CAP applies to keep the per-event
+                # penalty bounded.
+                from clark.env.facility_env import INCOMPLETE_CAP
+                penalty = (
+                    self.facility_config.rewards["per_order_incomplete"]
+                    * min(excess, INCOMPLETE_CAP)
+                )
                 reward += penalty
                 self._add_year_reward("backlog_cap_exceeded", penalty)
 
