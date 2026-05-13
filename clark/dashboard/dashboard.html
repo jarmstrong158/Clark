@@ -389,7 +389,7 @@ function renderDayGrades(dayGrades) {
       const pctVal = total ? (n*100/total).toFixed(0) : 0;
       return `<div style="display:flex; align-items:center; gap:8px; margin-bottom:3px">
         <span class="grade-pill ${g}">${g}</span>
-        <div class="ibar"><div style="width:${pctVal}%; background:${COLORS[g]}; left:0"></div></div>
+        <div class="ibar" style="flex:1"><div style="width:${pctVal}%; background:${COLORS[g]}; left:0"></div></div>
         <span class="num" style="min-width:60px; text-align:right; font-family:monospace; font-size:0.7rem">${n} (${pctVal}%)</span>
       </div>`;
     }).join('')}
