@@ -312,19 +312,31 @@ def _generate_volume(n_workers: int, avg_oph: float) -> VolumeConfig:
     seasonal multiplier (up to 3x) stacks on top — so a peak-summer day
     can be physically demanding but never impossible.
     """
-    # Per-worker per-day baseline. Use the actual avg_oph so high-OPH
-    # crews get scaled-up volume and can still demonstrate competence.
-    capacity_per_worker = max(20.0, avg_oph * 9.0 * 0.4)   # ≈ usable orders/day at 100%
-    fraction_lo = random.uniform(0.50, 0.75)               # comfortable
-    fraction_hi = random.uniform(0.85, 1.10)               # tight, possibly needs OT
-    base_lo = int(n_workers * capacity_per_worker * fraction_lo)
+    # Per-worker per-day capacity: base_oph × shift_hours × 0.4 (split across
+    # pick + pack + restock + management; you can't pick while packing).
+    capacity_per_worker = max(20.0, avg_oph * 9.0 * 0.4)
+    # Sample the SUMMER peak multiplier first so we can cap winter to keep
+    # peak-summer achievable. Without this cap winter * peak_mult could
+    # easily exceed 3× capacity, which is physically unwinnable and trains
+    # the model to "panic OT" / "give up" on impossible days. That bad
+    # pattern then bleeds into days that ARE achievable.
+    peak_mult = random.uniform(1.5, 3.0)
+    # Target: even the SUMMER HIGH stays at or under ~110% capacity.
+    # winter_high * peak_mult <= n_workers * capacity * 1.10
+    # → winter_high_max = n_workers * capacity * 1.10 / peak_mult
+    winter_hi_cap = n_workers * capacity_per_worker * 1.10 / peak_mult
+    fraction_hi = random.uniform(0.85, 1.00)
+    fraction_lo = random.uniform(0.50, 0.70)
     base_hi = int(n_workers * capacity_per_worker * fraction_hi)
-    # Honor the existing absolute range so legacy assumptions still hold.
+    base_lo = int(n_workers * capacity_per_worker * fraction_lo)
+    # Apply the peak-aware cap so we don't generate impossible summers.
+    base_hi = min(base_hi, int(winter_hi_cap))
+    base_lo = min(base_lo, max(30, base_hi - 50))
     winter_lo = max(30, base_lo)
     winter_hi = max(winter_lo + 20, min(base_hi, 2000))
 
-    # Spring/summer multiplier
-    peak_mult = random.uniform(1.5, 3.0)
+    # Spring/summer multiplier — peak_mult was sampled above so we could
+    # cap winter accordingly. Don't re-roll it here.
     spring_lo = int(winter_lo * 1.2)
     spring_hi = int(winter_hi * 1.5)
     summer_lo = int(winter_lo * peak_mult * 0.9)
