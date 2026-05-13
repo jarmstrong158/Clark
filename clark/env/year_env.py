@@ -481,10 +481,17 @@ class YearEnv:
                 self.cycle_counts_overdue += 1
                 if self.cycle_counts_overdue <= rules.cycle_count_max_overdue_weeks:
                     penalty = rewards["cycle_count_week_missed"]
+                    label = "cycle_count_week_missed"
                 else:
                     penalty = rewards["cycle_count_critical_overdue"]
+                    # Use the correct label so metrics distinguish ordinary
+                    # weekly-miss penalties (-15 each) from critical-overdue
+                    # blowups (-150 each). Previously both fired under the
+                    # same key, hiding which actually drove the year-end
+                    # penalty share.
+                    label = "cycle_count_critical_overdue"
                 reward += penalty
-                self._add_year_reward("cycle_count_week_missed", penalty)
+                self._add_year_reward(label, penalty)
 
             # Management backlog weekly threshold check
             if self.management_backlog > rules.management_backlog_week_threshold:

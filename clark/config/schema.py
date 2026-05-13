@@ -145,7 +145,14 @@ class BusinessRules:
     # orders remain when current_hour reaches eod_hour, the day finalizes
     # without OT (those orders carry over via order_carryover_enabled or
     # incur per_order_incomplete penalty). Above this threshold, OT enters.
-    ot_trigger_orders_remaining: int = 10
+    # Lowered 10 → 1 after audit found a perverse "leave 9 orders to dodge
+    # OT" incentive: with INCOMPLETE_CAP, leaving 9 orders cost only -90
+    # while OT cost -0.5/hr × ~1hr = -0.5 — but the F-grade fires at ANY
+    # incomplete (grade is binary on shipped >= total), so the model paid
+    # the F penalty WITHOUT taking the OT shot to fix the day. Setting
+    # trigger to 1 aligns the OT-trigger boundary with the grade boundary:
+    # OT only avoided when day is genuinely complete.
+    ot_trigger_orders_remaining: int = 1
     # Morning catchup OT — DISABLED by default. We added it to "let the
     # facility recover from yesterday's backlog" but it auto-fires every
     # day with restock<0.5, extending shifts → fatigue threshold hits
@@ -494,7 +501,9 @@ class FacilityConfig:
             management_backlog_weekly_penalty=float(d.get("management_backlog_weekly_penalty", -50.0)),
             ot_wall_clock_max=float(d.get("ot_wall_clock_max", 1.0)),
             ot_hard_stop_hour=float(d.get("ot_hard_stop_hour", 18.5)),
-            ot_trigger_orders_remaining=int(d.get("ot_trigger_orders_remaining", 10)),
+            # Default matches the dataclass (1) — see rationale on the
+            # ot_trigger_orders_remaining field above.
+            ot_trigger_orders_remaining=int(d.get("ot_trigger_orders_remaining", 1)),
             # Default MUST match the dataclass default (False). Previously
             # defaulted True here, silently re-enabling the within-year
             # spiral on every YAML that didn't explicitly disable it.
