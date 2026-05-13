@@ -476,8 +476,6 @@ def cmd_dashboard(args: argparse.Namespace):
     import threading
     import webbrowser
 
-    dashboard_bytes = dashboard_html.read_bytes()
-
     class DashboardHandler(http.server.BaseHTTPRequestHandler):
         def log_message(self, fmt, *a):
             pass  # suppress default access log spam
@@ -487,7 +485,10 @@ def cmd_dashboard(args: argparse.Namespace):
             path = urlparse(self.path).path
 
             if path in ("/", "/index.html"):
-                self._send(200, "text/html; charset=utf-8", dashboard_bytes)
+                # Re-read on every request so editing the HTML during a run
+                # takes effect on next browser refresh — no need to restart
+                # the server. Cheap (~2KB file, OS page-cached).
+                self._send(200, "text/html; charset=utf-8", dashboard_html.read_bytes())
             elif path in ("/data/year_snapshot.json", "/clark/data/year_snapshot.json"):
                 self._serve_json("year_snapshot.json")
             elif path == "/data/episode_log.json":
