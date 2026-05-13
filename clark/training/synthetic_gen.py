@@ -136,9 +136,10 @@ def generate_random_facility(stage: int = 3) -> FacilityConfig:
 
     n_workers = random.randint(cs.min_workers, cs.max_workers)
     workers = _generate_workers(n_workers, cs)
+    avg_oph = sum(w.base_oph for w in workers) / max(1, len(workers))
 
     tasks = _generate_tasks(cs)
-    volume = _generate_volume()
+    volume = _generate_volume(n_workers, avg_oph)
     rules = _generate_rules(cs)
     complexity = _sample_random_complexity(cs)
 
@@ -290,16 +291,37 @@ def _generate_tasks(cs: CurriculumStage) -> TasksConfig:
     return TasksConfig(enabled=enabled, custom=[])
 
 
-def _generate_volume() -> VolumeConfig:
+def _generate_volume(n_workers: int, avg_oph: float) -> VolumeConfig:
     """
     Sample base volume range and apply seasonal and weekly curves.
 
     Seasonal pattern: spring/summer peaks (1.5-3x winter).
     Weekly pattern: Monday heaviest, Friday lightest.
+
+    Volume scales with N. Previously volume was sampled independently of
+    worker count — a 5-worker facility could randomly draw 600 winter /
+    1800 summer daily orders, the same as a 25-worker facility, which is
+    physically unwinnable. That made small-N look "broken" when the real
+    problem was unfair config generation.
+
+    Per-worker daily order capacity is roughly base_oph × shift_hours × ~0.4
+    (split between pick + pack + restock + management; pickers don't pack
+    while picking, etc.). With base_oph≈16 and 9-hour shifts that's
+    ~58 orders/worker/day realistic max. We sample winter baseline from
+    [30, 60] orders/worker/day (comfortable to needs-OT range), and the
+    seasonal multiplier (up to 3x) stacks on top — so a peak-summer day
+    can be physically demanding but never impossible.
     """
-    # Base winter volume
-    winter_lo = random.randint(30, 600)
-    winter_hi = random.randint(winter_lo + 20, min(winter_lo + 400, 1000))
+    # Per-worker per-day baseline. Use the actual avg_oph so high-OPH
+    # crews get scaled-up volume and can still demonstrate competence.
+    capacity_per_worker = max(20.0, avg_oph * 9.0 * 0.4)   # ≈ usable orders/day at 100%
+    fraction_lo = random.uniform(0.50, 0.75)               # comfortable
+    fraction_hi = random.uniform(0.85, 1.10)               # tight, possibly needs OT
+    base_lo = int(n_workers * capacity_per_worker * fraction_lo)
+    base_hi = int(n_workers * capacity_per_worker * fraction_hi)
+    # Honor the existing absolute range so legacy assumptions still hold.
+    winter_lo = max(30, base_lo)
+    winter_hi = max(winter_lo + 20, min(base_hi, 2000))
 
     # Spring/summer multiplier
     peak_mult = random.uniform(1.5, 3.0)
