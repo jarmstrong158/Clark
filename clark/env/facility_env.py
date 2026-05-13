@@ -638,13 +638,24 @@ class FacilityEnv:
         cutoff = self.facility_config.rules.order_cutoff_hour
         late_exception_rate = self.facility_config.rules.late_order_exception_rate
         current = round(self.current_hour, 2)
+        # Use a small epsilon (smaller than STEP_DURATION/2) for ALL float
+        # comparisons against `cutoff`. STEP_DURATION = 1/6 ≈ 0.1667 and
+        # current_hour accumulates that, so by mid-day it's drifted by
+        # ~5e-5. Without symmetric epsilon, an arrival keyed at exactly
+        # cutoff (e.g. 16.0) gets dropped by the `key >= cutoff` branch
+        # while current_hour is at 15.9999... — silently stranding orders
+        # and inflating both `incomplete` and `backlog` reward terms.
+        # Audit found these were the dominant negative reward components
+        # (-3,233 and -1,237 per day mean), so any silent leak here
+        # directly poisons the policy gradient.
+        EPS = 1e-6
         to_remove = []
         dropped_after_cutoff = 0
         for key, count in self.episode.arrival_schedule.items():
-            if key >= cutoff:
+            if key >= cutoff - EPS:
                 # Late order exceptions: some post-cutoff orders still count
                 admitted = 0
-                if late_exception_rate > 0 and self.current_hour > cutoff:
+                if late_exception_rate > 0 and self.current_hour > cutoff - EPS:
                     if random.random() < late_exception_rate:
                         admitted = count
                         self.orders_in_queue += admitted

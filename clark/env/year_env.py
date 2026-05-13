@@ -505,6 +505,22 @@ class YearEnv:
             reward += penalty
             self._add_year_reward("cycle_count_year_miss", penalty)
 
+        # Year-completion shaping bonus: +N × cmp_year. Pushes the value
+        # head's targets to a wider range (was clustering near 0 under EMA
+        # normalization, audit found value head outputting near-constant)
+        # and gives policy a strong positive gradient toward "ship more"
+        # rather than the negative-dominated "lose less" baseline.
+        bonus_weight = rewards.get("year_completion_bonus", 0.0) or 0.0
+        if bonus_weight > 0 and self.daily_summaries:
+            year_total = sum(s.get("footer", {}).get("orders_total", 0)
+                             for s in self.daily_summaries)
+            year_shipped = sum(s.get("footer", {}).get("orders_shipped", 0)
+                               for s in self.daily_summaries)
+            cmp_year = (year_shipped / year_total) if year_total > 0 else 0.0
+            bonus = bonus_weight * cmp_year
+            reward += bonus
+            self._add_year_reward("year_completion_bonus", bonus)
+
         self.year_reward += reward
         return reward
 

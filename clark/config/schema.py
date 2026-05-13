@@ -218,6 +218,7 @@ class RewardOverrides:
     per_order_shipped: Optional[float] = None
     all_orders_complete_bonus: Optional[float] = None
     per_order_incomplete: Optional[float] = None
+    year_completion_bonus: Optional[float] = None  # +N × year_cmp_rate at year end
 
     # Overtime
     per_ot_hour: Optional[float] = None
@@ -307,7 +308,19 @@ DEFAULT_REWARDS: dict[str, float] = {
     "per_management_hour":            0.5,
     "per_idle_hour":                 -0.5,
     "packers_starved":               -1.0,
-    "picked_backlog":                -2.0,
+    # picked_backlog reduced -2.0 → -0.7 after audit found it was firing
+    # at -1,237/day (cumulative -6.18M). Combined with per_order_incomplete
+    # at -3,233/day, the negative-signal magnitude was 7× the positive
+    # `shipped` reward — the value head learned huge canceling biases to
+    # fit a near-constant near-μ output (saturated Tanh, output std~3000).
+    # Lower weight stops "didn't finish" being double-counted (same orders
+    # also hit per_order_incomplete) and frees gradient for shaping.
+    "picked_backlog":                -0.7,
+    # year_completion_bonus = +500 × cmp_year, applied at year end. Pushes
+    # the value head's targets to a wider range (was clustering near 0
+    # under EMA normalization), and gives the policy a strong positive
+    # gradient toward "ship more" rather than "lose less."
+    "year_completion_bonus":        500.0,
     # Management has THREE tiers now: full required hours (+30), bare minimum
     # met (+10), or missed entirely (-50). The middle tier closes the
     # "blind zone" where the agent does just enough to avoid F-via-mgmt but
