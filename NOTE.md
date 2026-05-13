@@ -27,7 +27,7 @@ Jack is a complete, working RL agent for one specific warehouse. Clark is the ge
 - Restock level system (carry between days)
 - OT logic (wall-clock max + FP epsilon hard stop)
 - Three-phase step loop (pickers first → packers → other workers)
-- PPO loss + GAE + TBPTT (chunk_size=16)
+- PPO loss + GAE + TBPTT (chunk_size=64)
 - Episode logger structure and dashboard visual design
 - Year carryover mechanics (restock, mgmt backlog, cycle count overdue)
 
@@ -35,7 +35,7 @@ Jack is a complete, working RL agent for one specific warehouse. Clark is the ge
 - `config.py` (hardcoded) → `FacilityConfig` YAML schema (variable)
 - `ActorCritic` (LSTM only) → `ClarkActorCritic` (Transformer + LSTM hybrid)
 - Worker debuff system (hardcoded names) → config-driven debuff engine
-- Action masking (fixed 7×14) → variable `(N, M)` bool tensor
+- Action masking (fixed 7×14 in Jack) → variable `(N, M)` bool tensor
 - State builder (flat vector) → structured token dict for transformer input
 - `config.py` hardcoded worker/task IDs → role strings + task_eligibility sets
 
@@ -70,12 +70,18 @@ Outputs:
   value             = Linear(h)            # (1,) — global value estimate
 ```
 
-Key parameters: `d_model = 256`, 2 SA layers, 1 CA layer, 8 attention heads, TBPTT chunk = 16.
+Key parameters: `d_model = 512`, 4 SA layers, 1 CA layer, 8 attention heads, LSTM hidden = 512, TBPTT chunk = 64.
 Estimated ~18M parameters (vs Jack's ~800K).
 Architecture version: `clark-v2`
 
 **v2 vs v1:** d_model 256 → 512, self-attention layers 2 → 4, LSTM hidden 256 → 512.
 v1 checkpoints are not loadable under v2 (strict arch_version check at load time).
+
+**Pseudocode above is illustrative.** Real implementation:
+- Assignment matmul is divided by `√d_model` to keep softmax well-tempered at init (no learnable scaler)
+- Entropy bonus is averaged over workers, not summed (N-invariant)
+- Value-loss return normalization uses an EMA running mean/var (not per-batch, not PopArt)
+- See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for full PPO config + rationale on each piece
 
 ---
 

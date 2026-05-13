@@ -231,105 +231,12 @@ class FeedForward(nn.Module):
         return x + self.ff(self.norm(x))
 
 
-class PopArtValueHead(nn.Module):
-    """
-    Value head with PopArt (Preserving Outputs Precisely while Adaptively
-    Rescaling Targets) — DeepMind 2018, https://arxiv.org/abs/1809.04474.
-
-    The head outputs DENORMALIZED values (raw target scale) to external
-    callers, so GAE / advantage math sees real-magnitude returns. Internally
-    it learns NORMALIZED predictions (zero mean, unit variance) against
-    normalized targets, which makes the value loss well-scaled regardless of
-    how reward magnitudes vary across configs.
-
-    The "Preserving Outputs Precisely" part: every time the running statistics
-    update, the output linear's weight + bias are rescaled by the inverse
-    transformation, so the *denormalized* output stays unchanged. Without
-    this, value predictions would jump every time stats moved, fighting the
-    PPO update.
-
-    For Clark, the value head sees per-config rewards spanning an order of
-    magnitude (per-worker normalized reward varies with N, plus event rewards
-    don't scale with N). Per-batch standardization smoothed within-batch
-    variance but config-to-config drift was uncontained. PopArt's running
-    stats (with EMA at beta=3e-4) smooth this over many batches.
-    """
-
-    def __init__(self, in_dim: int, hidden_dim: Optional[int] = None,
-                 # β bumped from 3e-4 → 1e-2: per-day buffers are tiny and
-                 # highly correlated, so EMA at 3e-4 was chasing noise from
-                 # individual buffers (audit found μ swinging 5× per update).
-                 # Higher β tracks recent run-level distribution faster
-                 # without overshooting; standard PopArt papers use 1e-3 to
-                 # 1e-1 depending on update cadence.
-                 beta: float = 1e-2):
-        super().__init__()
-        if hidden_dim is None:
-            hidden_dim = max(1, in_dim // 2)
-        self.body = nn.Sequential(
-            nn.Linear(in_dim, hidden_dim),
-            nn.Tanh(),
-        )
-        self.out = nn.Linear(hidden_dim, 1)
-        self.beta = beta
-        # Running stats — buffers so they save/load with the model.
-        self.register_buffer("mu", torch.zeros(1))
-        self.register_buffer("sigma", torch.ones(1))
-        self.register_buffer("initialized", torch.zeros(1))
-
-    def forward_normalized(self, x: torch.Tensor) -> torch.Tensor:
-        """Internal predictions (unit-scale) — used by the PPO value loss."""
-        return self.out(self.body(x)).squeeze(-1)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """External predictions (raw target scale) — used by GAE / rollout."""
-        return self.forward_normalized(x) * self.sigma + self.mu
-
-    @torch.no_grad()
-    def update_stats(self, targets: torch.Tensor) -> None:
-        """
-        Update running mu/sigma (EMA at beta) and rescale the output linear
-        so the *denormalized* prediction is preserved across the stat shift.
-        Call once per PPO update cycle (not per epoch).
-        """
-        target_mean = targets.mean()
-        target_var = targets.var(unbiased=False)
-        target_std = torch.sqrt(target_var + 1e-8)
-
-        if self.initialized.item() < 1:
-            # First call: snap to batch stats so the value head isn't suddenly
-            # asked to predict against mu=0 / sigma=1 when targets are at
-            # totally different scale. Subsequent calls EMA from here.
-            self.mu.copy_(target_mean.unsqueeze(0))
-            self.sigma.copy_(target_std.unsqueeze(0))
-            self.initialized.fill_(1.0)
-            return
-
-        old_mu = self.mu.clone()
-        old_sigma = self.sigma.clone()
-
-        new_mu = (1.0 - self.beta) * old_mu + self.beta * target_mean.unsqueeze(0)
-        new_var = (
-            (1.0 - self.beta) * old_sigma ** 2
-            + self.beta * target_std.unsqueeze(0) ** 2
-        )
-        new_sigma = torch.sqrt(new_var + 1e-8)
-
-        self.mu.copy_(new_mu)
-        self.sigma.copy_(new_sigma)
-
-        # Rescale output projection so denormalized output is unchanged:
-        #   pre-update:  out_raw = (W_old * h + b_old) * sigma_old + mu_old
-        #   post-update: out_raw = (W_new * h + b_new) * sigma_new + mu_new
-        #   solve for W_new, b_new keeping out_raw equal:
-        #     W_new = W_old * (sigma_old / sigma_new)
-        #     b_new = (sigma_old * b_old + mu_old - mu_new) / sigma_new
-        scale = old_sigma / new_sigma
-        self.out.weight.data.mul_(scale)
-        self.out.bias.data.copy_(
-            (old_sigma * self.out.bias.data + (old_mu - new_mu)) / new_sigma
-        )
-
+# NOTE: PopArtValueHead was tried earlier in development and removed —
+# the multi-task design didn't fit our single-policy / per-day update /
+# single-trajectory-buffer setting (μ/σ oscillated, value head chased
+# moving targets). Replaced by EMA running mean/var return normalization
+# in ppo.py (_ret_mean / _ret_var). The legacy checkpoint migration in
+# ClarkAgent.load() handles loading any old PopArt-shaped state dicts.
 
 class TransformerBlock(nn.Module):
     """Self-attention + feed-forward (one full transformer encoder layer)."""
@@ -432,12 +339,11 @@ class ClarkActorCritic(nn.Module):
         # direction (small init = frozen, large init = saturated).
         self._assign_scale: float = 1.0 / math.sqrt(d_model)
         self.hustle_head = nn.Linear(d_model, 2)
-        # Simple 2-layer MLP value head. PopArt was tried and removed — see
-        # the PopArtValueHead docstring above for why the multi-task design
-        # didn't fit our single-policy / per-day update / single-trajectory-
-        # buffer setting. PPO with per-batch return standardization in the
-        # value loss (see _update_single_buffer) handles our bounded reward
-        # range without the cross-update instability PopArt was introducing.
+        # Simple 2-layer MLP value head. PopArt was tried and removed
+        # (see note above the class). Return normalization for the value
+        # loss is handled by an EMA running mean/var in ppo.py
+        # (_ret_mean / _ret_var) — stable across the per-day correlated
+        # TBPTT chunks where per-batch standardization was failing.
         self.value_head = nn.Sequential(
             nn.Linear(lstm_hidden, lstm_hidden // 2),
             nn.Tanh(),

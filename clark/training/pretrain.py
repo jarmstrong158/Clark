@@ -704,14 +704,6 @@ def pretrain_batched(
                             entropy=m["entropy"],
                             n_updates=m["n_updates"],
                         )
-                        # PopArt removed — only call record_popart if a future
-                        # value head re-introduces .mu / .sigma attributes.
-                        if hasattr(agent.model.value_head, "mu"):
-                            metrics.record_popart(
-                                episode=ep,
-                                mu=float(agent.model.value_head.mu.item()),
-                                sigma=float(agent.model.value_head.sigma.item()),
-                            )
                 agent.snapshot_entry_hidden_for_slot(b)
 
         # Handle episode completions: log them and advance ep counter.

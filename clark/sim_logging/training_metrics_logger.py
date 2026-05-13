@@ -4,10 +4,11 @@ Writes a rolling JSON file (`training_metrics.json`) containing time-series
 data the dashboard needs but `episode_log.json` doesn't capture:
 
 - PPO update health (clip fraction, P-loss, V-loss, entropy, grad norm)
-- PopArt running stats (mu, sigma) over time
 - Curriculum stage per episode
 - Per-episode facility shape (N workers, M tasks, stage)
 - Reward-component dominance per window
+- Per-day reward breakdown digests (drained from runner mid-episode)
+- Per-stage N-distribution counts (sampler health check)
 
 Designed for live tail by the dashboard. Each `record_*` call appends a
 single point and rewrites the file atomically (small enough that this is
@@ -45,7 +46,6 @@ class TrainingMetricsLogger:
         self.ppo_updates: list[dict] = []   # one entry per PPO update cycle
         self.episodes:    list[dict] = []   # one entry per completed episode
         self.windows:     list[dict] = []   # one entry per log_interval window
-        self.popart:      list[dict] = []   # one entry per stat update
         # Per-day grade digests collected mid-episode — gives the dashboard
         # signal long before any year (~13k steps) completes. Drained from
         # the runner's drain_recent_days() at heartbeat time.
@@ -82,7 +82,6 @@ class TrainingMetricsLogger:
             self.ppo_updates = data.get("ppo_updates", [])[-self.max_points:]
             self.episodes    = data.get("episodes", [])[-self.max_points:]
             self.windows     = data.get("windows", [])[-self.max_points:]
-            self.popart      = data.get("popart", [])[-self.max_points:]
             self.day_grades  = data.get("day_grades", [])[-self.max_points:]
             self.n_distribution = data.get("n_distribution", {}) or {}
             # Keep the last status's started_at if restoring — useful for
@@ -177,15 +176,6 @@ class TrainingMetricsLogger:
         })
         self._trim(self.windows)
 
-    def record_popart(self, episode: int, mu: float, sigma: float) -> None:
-        self.popart.append({
-            "ep": episode,
-            "mu": round(mu, 4),
-            "sigma": round(sigma, 4),
-            "t": time.time(),
-        })
-        self._trim(self.popart)
-
     def record_day_grades(self, day_digests: list[dict]) -> None:
         """Append per-day grade digests drained from the runner. Used by
         the dashboard to show learning signal long before the first year
@@ -222,7 +212,6 @@ class TrainingMetricsLogger:
             "ppo_updates": self.ppo_updates,
             "episodes": self.episodes,
             "windows": self.windows,
-            "popart": self.popart,
             "day_grades": self.day_grades,
             "n_distribution": self.n_distribution,
         }

@@ -167,18 +167,19 @@ A fresh-init Clark can also be trained directly on a single facility (no foundat
 | `gamma` | **0.999** | Effective horizon ~1000 steps (≈2 simulated days) — sized for the 13,050-step year |
 | `gae_lambda` | **0.98** | Effective TD horizon ~50 steps (≈one full day) |
 | `clip_epsilon` | 0.2 | Policy ratio clip — applied per (worker × head), not on the joint sum |
-| `entropy_coeff` | 0.005 | Lower than typical PPO so policy can commit after gradients are well-conditioned |
+| `entropy_coeff` | 0.10 | Compensates for the entropy mean-over-workers normalization (see [Per-worker mean entropy](#per-worker-mean-entropy)) |
 | `value_loss_coeff` | 0.5 | |
 | `max_grad_norm` | 0.5 | |
-| `epochs_per_update` | 2 | |
+| `epochs_per_update` | 4 | |
+| `lr` | **2e-5** | Lowered from 5e-5 after a long run plateaued at clip% ~20%; 2e-5 keeps clip in the healthy 8-15% range |
 | Update cadence | per day boundary | matches Jack's daily-update strategy |
-| Reward clip (per step) | ±5,000 | tight bound; per-worker normalized rewards are usually single digits |
-| Per-worker reward norm | divide by N at storage | configs of any size feed the optimizer on the same scale |
+| Reward clip (per step) | ±20,000 | end-of-day single-step penalties (`per_order_incomplete = -10 × N_unshipped`) can legitimately hit -7000 on small-N disasters; tighter clips were masking catastrophic-day signal |
+| Returns clip (post-GAE) | ±500,000 | guards against numerical blow-up while letting catastrophic-year signals reach the gradient |
 | AMP | bf16 on CUDA | with explicit fp16 fallback for hardware without bf16 |
 | Old log-prob storage | fp32 | bf16 quantization noise is comparable to `clip_epsilon` |
 | Dropout | **0.0** | Cross-rollout/update dropout-mask difference would saturate `clip_epsilon` even with frozen weights |
 
-The LSTM hidden state persists across the full simulated year. Gradients are truncated every `chunk_size = 16` steps via TBPTT. The PPO update walks the rollout buffer in homogeneous-`N` segments (worker counts can change mid-day under peak staffing) — chunks end at either `chunk_size` steps OR the next `N`-change, whichever comes first.
+The LSTM hidden state persists across the full simulated year. Gradients are truncated every `chunk_size = 64` steps via TBPTT. The PPO update walks the rollout buffer in homogeneous-`N` segments (worker counts can change mid-day under peak staffing) — chunks end at either `chunk_size` steps OR the next `N`-change, whichever comes first. (Earlier values of 16 truncated day-long cause→effect 3-4× per day, so the agent could not learn that an 8AM pick-heavy assignment causes packer-starvation at 11AM.)
 
 ### Per-worker PPO ratio
 
@@ -186,22 +187,36 @@ The standard PPO importance-sampling ratio `exp(new_log_prob - old_log_prob)` is
 
 The motivation is variance scaling. A naive joint ratio sums 2N independent log-prob deltas; even if each per-worker delta has tiny stdev (~0.05), the joint sum has stdev `~0.05 × sqrt(2N)`, and `exp` of that exceeds the `clip_epsilon=0.2` boundary at N≥10. The clip threshold then saturates *structurally* — not because of a bad policy update, but because the dimensionality of the action space exceeded the trust region. Per-worker ratio (this is the IPPO formulation; see [Independent Learning All You Need in StarCraft Multi-Agent Challenge](https://arxiv.org/pdf/2011.09533)) keeps the per-decision ratio variance independent of N.
 
-### PopArt value head
+### EMA running return normalization
 
-The value head ([`transformer.PopArtValueHead`](../clark/agent/transformer.py)) maintains running mean and standard deviation of returns via EMA (β=3e-4) and trains the inner network against **normalized** targets `(returns - μ) / σ`. External callers (GAE, rollout) get **denormalized** values back automatically via `forward()`.
-
-After each PPO update, the output projection is rescaled so denormalized predictions are preserved across the stat shift:
+The value head is a simple two-layer MLP (`Linear → Tanh → Linear`). Return normalization for the value loss is handled separately by an EMA of mean/var maintained on the agent (`_ret_mean`, `_ret_var`):
 
 ```
-σ_new ← EMA update from current batch
-μ_new ← EMA update from current batch
-W_new ← W_old × (σ_old / σ_new)
-b_new ← (σ_old × b_old + μ_old - μ_new) / σ_new
+batch_mean ← returns.mean()
+batch_var  ← returns.var()
+_ret_mean  ← (1 - β) × _ret_mean + β × batch_mean
+_ret_var   ← (1 - β) × _ret_var  + β × batch_var
+σ          ← sqrt(_ret_var) + 1e-8
+value_loss ← MSE((values - _ret_mean) / σ, (returns - _ret_mean) / σ)
 ```
 
-This is the standard PopArt trick from [Multi-task Deep Reinforcement Learning with PopArt](https://arxiv.org/abs/1809.04474). Without it, value head outputs would drift every time stats shifted, fighting the gradient. With it, the value loss is well-scaled regardless of cross-config reward variance — important here because each synthetic facility config can have per-episode return magnitudes spanning an order of magnitude (per-worker normalization helps but doesn't eliminate it; event rewards like `management_duty_missed` don't scale with N).
+with β = 0.01 (~100-update half-life), updated **once per PPO update call, not per epoch**.
 
-Replaces the simpler per-batch return standardization that a vanilla PPO implementation would use.
+PopArt was tried earlier in development and removed. The multi-task PopArt design ([DeepMind 2018](https://arxiv.org/abs/1809.04474)) didn't fit our single-policy / per-day update / single-trajectory-buffer setting — μ/σ oscillated chasing per-day batch noise and the value head ended up chasing moving targets across PPO update cycles.
+
+Per-batch standardization (the vanilla PPO default) was also tried and rejected: with TBPTT chunks of 64 correlated steps, σ inside a chunk is tiny (the steps are temporally adjacent and rewards are highly correlated), making the value loss explode and producing μ that moved chunk-to-chunk.
+
+The EMA approach gives the value head a stable normalizer it can actually learn against. The `_ret_mean` / `_ret_var` are intentionally not saved in the checkpoint — they re-warm in ~50-100 updates after a resume, which is fast enough that adding them to the save format isn't worth the migration complexity.
+
+### Per-worker mean entropy
+
+The entropy bonus is averaged over workers, not summed. With sum-over-workers the entropy magnitude scaled with N (~7 for N=8), dwarfing the policy gradient (~0.005) — the optimizer was effectively just being told to spread the policy. Per-worker mean keeps the bonus magnitude consistent across N=5 vs N=25 facilities.
+
+The `entropy_coeff = 0.10` is set ~5× higher than typical PPO defaults to compensate for the mean-over-workers normalization (which is ~Nx smaller in absolute terms than sum-over-workers).
+
+### Assignment logits scaled by `1/√d_model`
+
+Assignment logits come from `W_final @ T.T`. With both factors at gain=√2 orthogonal init, the raw matmul output magnitude scales with √d_model (~22 at d_model=512), producing near-deterministic softmax at init and immediate entropy collapse. The matmul is divided by `√d_model` (the same trick scaled-dot-product attention uses for its scores) so initial logits are O(1) and softmax is well-tempered. No learnable scaler — earlier experiments with one ended up either freezing gradients (small init) or saturating (large init).
 
 ---
 

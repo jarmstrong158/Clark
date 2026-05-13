@@ -482,7 +482,10 @@ class FacilityConfig:
             ot_wall_clock_max=float(d.get("ot_wall_clock_max", 1.0)),
             ot_hard_stop_hour=float(d.get("ot_hard_stop_hour", 18.5)),
             ot_trigger_orders_remaining=int(d.get("ot_trigger_orders_remaining", 10)),
-            morning_catchup_enabled=bool(d.get("morning_catchup_enabled", True)),
+            # Default MUST match the dataclass default (False). Previously
+            # defaulted True here, silently re-enabling the within-year
+            # spiral on every YAML that didn't explicitly disable it.
+            morning_catchup_enabled=bool(d.get("morning_catchup_enabled", False)),
             morning_catchup_restock_threshold=float(d.get("morning_catchup_restock_threshold", 0.5)),
             morning_catchup_hours=float(d.get("morning_catchup_hours", 1.0)),
             cycle_count_weekly_hours=float(d.get("cycle_count_weekly_hours", 3.0)),
