@@ -23,12 +23,13 @@
   .live-pill.dead  { background: #3a1d1d; color: #f44336; }
   .live-pill.stale { background: #3a3a1d; color: #ffc107; }
 
-  /* Tighter grid: more panels, less wasted space */
   .grid { display: grid; gap: 8px; margin-bottom: 8px; }
-  .g-stats { grid-template-columns: repeat(6, 1fr); }
-  .g-charts-3 { grid-template-columns: 1fr 1fr 1fr; }
-  .g-charts-2 { grid-template-columns: 1fr 1fr; }
-  .g-mixed { grid-template-columns: 2fr 1fr; }
+  .g-stats   { grid-template-columns: repeat(7, 1fr); }
+  .g-2       { grid-template-columns: 1fr 1fr; }
+  .g-3       { grid-template-columns: 1fr 1fr 1fr; }
+  .g-4       { grid-template-columns: 1fr 1fr 1fr 1fr; }
+  .g-mixed   { grid-template-columns: 2fr 1fr; }
+  .g-mixed3  { grid-template-columns: 2fr 1fr 1fr; }
 
   .panel {
     background: #1a1d27; border: 1px solid #2a2d37; border-radius: 6px;
@@ -58,16 +59,20 @@
   th, td { padding: 3px 6px; text-align: left; border-bottom: 1px solid #22252f; }
   th { color: #888; font-weight: 500; font-size: 0.65rem; text-transform: uppercase; }
   td.num { text-align: right; font-family: 'Consolas', monospace; }
+  tr:hover { background: #20232c; }
+  td.bar-cell { padding: 2px 6px; }
 
   .empty {
     color: #666; font-style: italic; padding: 12px; text-align: center;
     font-size: 0.75rem;
   }
 
-  /* Force chart canvas to fixed height — Chart.js with maintainAspectRatio:false
-     respects parent height, so we set a tight one to keep panels compact. */
-  .chart-wrap { position: relative; height: 130px; }
-  .chart-wrap.tall { height: 180px; }
+  /* CRITICAL: every canvas lives in a fixed-height wrap.
+     Without this Chart.js with maintainAspectRatio:false stretches forever. */
+  .chart-wrap { position: relative; width: 100%; }
+  .chart-s    { height: 110px; }
+  .chart-m    { height: 150px; }
+  .chart-l    { height: 200px; }
 
   .grade-pill {
     display: inline-block; padding: 1px 6px; border-radius: 3px;
@@ -78,6 +83,23 @@
   .grade-pill.C { background: #ffc10744; color: #ffc107; }
   .grade-pill.D { background: #ff980044; color: #ff9800; }
   .grade-pill.F { background: #f4433644; color: #f44336; }
+
+  /* Inline horizontal bar (used in N-distribution + reward breakdown) */
+  .ibar {
+    position: relative; height: 12px; background: #22252f; border-radius: 2px;
+    overflow: hidden;
+  }
+  .ibar > div { position: absolute; top: 0; bottom: 0; opacity: 0.75; }
+  .ibar.neg > div { background: #f44336; right: 50%; }
+  .ibar.pos > div { background: #4caf50; left: 50%; }
+
+  .scroll { max-height: 240px; overflow-y: auto; }
+
+  details { margin-top: 4px; }
+  details summary {
+    cursor: pointer; color: #8ab4f8; font-size: 0.75rem; padding: 4px 0;
+  }
+  details summary:hover { color: #fff; }
 </style>
 </head>
 <body>
@@ -97,92 +119,121 @@
   </select>
   <input type="file" id="fileInput" accept=".json" style="display:none">
   <button id="refreshNow">Refresh now</button>
+  <span class="subtitle" style="margin-left:auto" id="dataSummary"></span>
 </div>
 
-<!-- Stat row — 6 compact tiles -->
+<!-- Stat row — 7 compact tiles -->
 <div class="grid g-stats">
   <div class="stat"><div class="label">Episode</div><div class="value" id="statEp">—</div><div class="sub" id="statEpTarget"></div></div>
   <div class="stat"><div class="label">Stage</div><div class="value" id="statStage">—</div><div class="sub" id="statStageDesc"></div></div>
-  <div class="stat"><div class="label">Day-grade win</div><div class="value" id="statDayWin">—</div><div class="sub">A+B / total days</div></div>
-  <div class="stat"><div class="label">Recent OT</div><div class="value" id="statOT">—</div><div class="sub">days w/ any OT</div></div>
-  <div class="stat"><div class="label">Clip fraction</div><div class="value" id="statClip">—</div><div class="sub">healthy 5–20%</div></div>
+  <div class="stat"><div class="label">Day win (50d)</div><div class="value" id="statDayWin">—</div><div class="sub">A+B / total</div></div>
+  <div class="stat"><div class="label">Day Cmp% (50d)</div><div class="value" id="statCmp">—</div><div class="sub">order completion</div></div>
+  <div class="stat"><div class="label">OT freq (50d)</div><div class="value" id="statOT">—</div><div class="sub">days w/ any OT</div></div>
+  <div class="stat"><div class="label">Clip frac</div><div class="value" id="statClip">—</div><div class="sub">healthy 5–18%</div></div>
   <div class="stat"><div class="label">Throughput</div><div class="value" id="statTps">—</div><div class="sub">ticks/sec</div></div>
 </div>
 
-<!-- Day-level grade signal — populates within minutes, dominant view in early training -->
+<!-- ROW 1: Day-level signal (the high-frequency view) -->
 <div class="grid g-mixed">
   <div class="panel">
-    <h2>Day-grade roll (last 200 days, rolling)</h2>
-    <div class="chart-wrap tall"><canvas id="dayGradeChart"></canvas></div>
+    <h2>Day-grade roll (rolling 50-day windows over last 200 days)</h2>
+    <div class="chart-wrap chart-l"><canvas id="dayGradeChart"></canvas></div>
   </div>
   <div class="panel">
-    <h2>Day-grade distribution</h2>
+    <h2>Last 200 days — distribution</h2>
     <div id="dayGradeDistribution" class="empty">waiting for first day…</div>
   </div>
 </div>
 
-<!-- PPO health — populates within seconds -->
-<div class="grid g-charts-3">
+<!-- ROW 2: Pipeline-imbalance + reward-component diagnosis -->
+<div class="grid g-2">
   <div class="panel">
-    <h2>PPO clip fraction (last 500 updates)</h2>
-    <div class="chart-wrap"><canvas id="clipChart"></canvas></div>
+    <h2>Reward components — last 100 days (per-day mean)</h2>
+    <div id="rewardComponents" class="empty">waiting for day digests…</div>
+  </div>
+  <div class="panel">
+    <h2>Pipeline trend — last 200 days</h2>
+    <div class="chart-wrap chart-m"><canvas id="pipelineChart"></canvas></div>
+    <div class="subtitle" style="text-align:center;margin-top:4px">incomplete: orders never shipped · backlog: picked but not packed</div>
+  </div>
+</div>
+
+<!-- ROW 3: Per-N performance — the key diagnostic for variable-N training -->
+<div class="grid g-mixed">
+  <div class="panel">
+    <h2>Per-N performance — recent 200 episodes</h2>
+    <table id="perNTable">
+      <thead><tr>
+        <th>N</th><th class="num">eps</th>
+        <th class="num">win%</th><th class="num">Cmp%</th><th class="num">OT%</th>
+        <th class="num">R/W</th><th class="bar-cell">cmp</th>
+      </tr></thead>
+      <tbody><tr><td colspan="7" class="empty">no completed episodes yet</td></tr></tbody>
+    </table>
+  </div>
+  <div class="panel">
+    <h2>Sampler N-distribution per stage</h2>
+    <div id="nDistribution" class="empty">waiting…</div>
+  </div>
+</div>
+
+<!-- ROW 4: PPO health (compact) + episode-level trends -->
+<div class="grid g-3">
+  <div class="panel">
+    <h2>PPO clip frac (last 500 updates)</h2>
+    <div class="chart-wrap chart-s"><canvas id="clipChart"></canvas></div>
   </div>
   <div class="panel">
     <h2>P-loss / V-loss (last 500 updates)</h2>
-    <div class="chart-wrap"><canvas id="lossChart"></canvas></div>
+    <div class="chart-wrap chart-s"><canvas id="lossChart"></canvas></div>
   </div>
   <div class="panel">
     <h2>Entropy (last 500 updates)</h2>
-    <div class="chart-wrap"><canvas id="entropyChart"></canvas></div>
+    <div class="chart-wrap chart-s"><canvas id="entropyChart"></canvas></div>
   </div>
 </div>
 
-<div class="grid g-charts-2">
+<!-- ROW 5: Episode trends -->
+<div class="grid g-3">
   <div class="panel">
-    <h2>PopArt μ / σ drift</h2>
-    <div class="chart-wrap"><canvas id="popartChart"></canvas></div>
+    <h2>Year win-rate per episode (rolling 25)</h2>
+    <div class="chart-wrap chart-m"><canvas id="winRateChart"></canvas></div>
   </div>
   <div class="panel">
-    <h2>Per-config performance (N workers vs year win rate)</h2>
-    <div class="chart-wrap"><canvas id="scatterChart"></canvas></div>
-  </div>
-</div>
-
-<!-- Episode-completion signal — appears after first year (~30-45 min) -->
-<div class="grid g-charts-2">
-  <div class="panel">
-    <h2>Year-level win rate (per completed episode)</h2>
-    <div class="chart-wrap"><canvas id="winRateChart"></canvas></div>
+    <h2>R/W per episode (rolling 25)</h2>
+    <div class="chart-wrap chart-m"><canvas id="rewardChart"></canvas></div>
   </div>
   <div class="panel">
-    <h2>Reward / worker (per completed episode)</h2>
-    <div class="chart-wrap"><canvas id="rewardChart"></canvas></div>
+    <h2>Per-N year win rate (each dot = one episode)</h2>
+    <div class="chart-wrap chart-m"><canvas id="scatterChart"></canvas></div>
   </div>
 </div>
 
-<div class="grid g-mixed">
+<!-- ROW 6: Recent episode list + per-stage rollup -->
+<div class="grid g-mixed3">
   <div class="panel">
-    <h2>Recent episodes</h2>
-    <div style="max-height:240px; overflow-y:auto">
+    <h2>Recent episodes (last 25)</h2>
+    <div class="scroll">
       <table id="recentEpisodesTable">
-        <thead><tr><th>Ep</th><th>Stg</th><th>N</th><th>M</th><th class="num">Win%</th><th class="num">OT%</th><th class="num">Cmp%</th><th>End</th></tr></thead>
-        <tbody><tr><td colspan="8" class="empty">No completed episodes yet (first lands ~30-45 min in)</td></tr></tbody>
+        <thead><tr>
+          <th>Ep</th><th>Stg</th><th class="num">N</th><th class="num">M</th>
+          <th class="num">Win%</th><th class="num">OT%</th><th class="num">Cmp%</th>
+          <th class="num">R/W</th><th>End</th>
+        </tr></thead>
+        <tbody><tr><td colspan="9" class="empty">no completed episodes yet</td></tr></tbody>
       </table>
     </div>
   </div>
   <div class="panel">
-    <h2>Reward dominance</h2>
-    <table id="dominanceTable">
-      <thead><tr><th>Component</th><th class="num">Σ window</th></tr></thead>
-      <tbody><tr><td colspan="2" class="empty">waiting for first window</td></tr></tbody>
+    <h2>Per-stage rollup</h2>
+    <table id="perStageTable">
+      <thead><tr><th>Stage</th><th class="num">eps</th><th class="num">win%</th><th class="num">Cmp%</th></tr></thead>
+      <tbody><tr><td colspan="4" class="empty">—</td></tr></tbody>
     </table>
   </div>
-</div>
-
-<div class="grid">
-  <div class="panel full">
+  <div class="panel">
     <h2>Curriculum stage timeline</h2>
-    <div class="chart-wrap"><canvas id="stageTimelineChart"></canvas></div>
+    <div class="chart-wrap chart-m"><canvas id="stageTimelineChart"></canvas></div>
   </div>
 </div>
 
@@ -190,59 +241,48 @@
 const COLORS = {
   win: '#4caf50', reward: '#8ab4f8', clip: '#ffc107',
   pl: '#ff9800', vl: '#f44336', ent: '#ce93d8',
-  mu: '#8ab4f8', sigma: '#ff8a65',
+  incomplete: '#f44336', backlog: '#ff9800', shipped: '#4caf50',
   A: '#4caf50', B: '#8bc34a', C: '#ffc107', D: '#ff9800', F: '#f44336',
 };
 Chart.defaults.color = '#bbb';
 Chart.defaults.borderColor = '#2a2d37';
 Chart.defaults.font.size = 10;
+Chart.defaults.animation = false;
 
-let charts = {};
+const charts = {};
+
+function destroyChart(id) { if (charts[id]) { charts[id].destroy(); delete charts[id]; } }
+
 function makeLine(id, datasets, opts={}) {
   const ctx = document.getElementById(id);
   if (!ctx) return;
-  if (charts[id]) charts[id].destroy();
+  destroyChart(id);
   charts[id] = new Chart(ctx, {
     type: 'line',
     data: { datasets },
     options: {
-      animation: false, responsive: true, maintainAspectRatio: false, parsing: false,
+      responsive: true, maintainAspectRatio: false, parsing: false,
       plugins: { legend: { display: datasets.length > 1, labels: { boxWidth: 8, font: { size: 9 } } } },
       scales: {
-        x: { type: 'linear', display: true, ticks: { font: { size: 9 }, maxRotation: 0 } },
+        x: { type: 'linear', display: true, ticks: { font: { size: 9 }, maxRotation: 0, maxTicksLimit: 8 } },
         y: opts.yScale || { beginAtZero: opts.beginAtZero || false, ticks: { font: { size: 9 } } }
-      }
+      },
+      elements: { line: { borderWidth: 1.5, tension: 0.2 }, point: { radius: 0 } }
     }
   });
 }
-function makeScatter(id, points) {
+
+function makeStackedBar(id, labels, datasets) {
   const ctx = document.getElementById(id);
   if (!ctx) return;
-  if (charts[id]) charts[id].destroy();
-  charts[id] = new Chart(ctx, {
-    type: 'scatter',
-    data: { datasets: [{ data: points, backgroundColor: '#8ab4f8aa', pointRadius: 3 }] },
-    options: {
-      animation: false, responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { display: false } },
-      scales: {
-        x: { title: { display: true, text: 'N workers', font: { size: 9 } }, ticks: { font: { size: 9 } } },
-        y: { title: { display: true, text: 'Win rate (year)', font: { size: 9 } }, min: 0, max: 1, ticks: { font: { size: 9 } } }
-      }
-    }
-  });
-}
-function makeStackedBar(id, labels, datasets, xLabel='Window') {
-  const ctx = document.getElementById(id);
-  if (!ctx) return;
-  if (charts[id]) charts[id].destroy();
+  destroyChart(id);
   charts[id] = new Chart(ctx, {
     type: 'bar',
     data: { labels, datasets },
     options: {
-      animation: false, responsive: true, maintainAspectRatio: false,
+      responsive: true, maintainAspectRatio: false,
       scales: {
-        x: { stacked: true, ticks: { font: { size: 9 }, maxRotation: 0 } },
+        x: { stacked: true, ticks: { font: { size: 9 }, maxRotation: 0, maxTicksLimit: 10 } },
         y: { stacked: true, ticks: { font: { size: 9 } } }
       },
       plugins: { legend: { labels: { boxWidth: 8, font: { size: 9 } } } }
@@ -250,8 +290,35 @@ function makeStackedBar(id, labels, datasets, xLabel='Window') {
   });
 }
 
+function makeScatter(id, points) {
+  const ctx = document.getElementById(id);
+  if (!ctx) return;
+  destroyChart(id);
+  charts[id] = new Chart(ctx, {
+    type: 'scatter',
+    data: { datasets: [{ data: points, backgroundColor: '#8ab4f8aa', pointRadius: 3 }] },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { title: { display: true, text: 'N workers', font: { size: 9 } }, ticks: { font: { size: 9 } } },
+        y: { title: { display: true, text: 'Year win rate', font: { size: 9 } }, min: 0, max: 1, ticks: { font: { size: 9 } } }
+      }
+    }
+  });
+}
+
 function pct(x) { return (x*100).toFixed(0) + '%'; }
 function pctOne(x) { return (x*100).toFixed(1) + '%'; }
+function rolling(arr, w) {
+  if (!arr.length) return [];
+  const out = []; const buf = [];
+  for (const v of arr) {
+    buf.push(v); if (buf.length > w) buf.shift();
+    out.push(buf.reduce((a,b) => a+b, 0) / buf.length);
+  }
+  return out;
+}
 
 // ── Status ────────────────────────────────────────────────────────────────────
 function renderStatus(status, lastTickRate) {
@@ -267,27 +334,25 @@ function renderStatus(status, lastTickRate) {
   } else {
     pill.className = 'live-pill dead'; pill.textContent = 'Stopped';
   }
-  detail.textContent = `tick ${status.ticks||0} | elapsed ${Math.round(status.elapsed_s||0)}s`;
+  detail.textContent = `tick ${status.ticks||0} · elapsed ${Math.round((status.elapsed_s||0)/60)}m`;
   document.getElementById('statEp').textContent = status.current_episode || '—';
   document.getElementById('statEpTarget').textContent = '/ ' + (status.n_episodes_target || '?');
   document.getElementById('statStage').textContent = status.current_stage || '—';
-  document.getElementById('statStageDesc').textContent = ({1:'small (3-10w)', 2:'mid (5-25w)', 3:'full (5-50w)'})[status.current_stage] || '';
+  document.getElementById('statStageDesc').textContent =
+    ({1:'small (5-10w)', 2:'mid (5-25w)', 3:'full (5-50w)'})[status.current_stage] || '';
   document.getElementById('statTps').textContent = lastTickRate != null ? lastTickRate.toFixed(1) : '—';
 }
 
-// ── Day-grade roll (the big early signal) ─────────────────────────────────────
+// ── Day-grade roll: rolling 50-day windows ────────────────────────────────────
 function renderDayGrades(dayGrades) {
   const distEl = document.getElementById('dayGradeDistribution');
   if (!dayGrades.length) {
-    distEl.innerHTML = '<div class="empty">waiting for first day completion (~5-10 min)</div>';
+    distEl.innerHTML = '<div class="empty">waiting for first day completion (~2-5 min)</div>';
     return;
   }
-  // Rolling counts over the last 200 days (sliding window of length 50)
-  const WINDOW = 50;
-  const STEP = 10;  // sample every 10 days for chart density
+  const WINDOW = 50, STEP = 10;
   const recent = dayGrades.slice(-200);
-  const labels = [];
-  const grades = ['A','B','C','D','F'];
+  const labels = []; const grades = ['A','B','C','D','F'];
   const counts = {A:[], B:[], C:[], D:[], F:[]};
   for (let end = WINDOW; end <= recent.length; end += STEP) {
     const slice = recent.slice(end - WINDOW, end);
@@ -295,7 +360,6 @@ function renderDayGrades(dayGrades) {
     grades.forEach(g => counts[g].push(slice.filter(d => d.grade === g).length));
   }
   if (labels.length < 2) {
-    // Not enough data for a chart yet — show a single-window distribution
     labels.push(recent.length);
     grades.forEach(g => counts[g].push(recent.filter(d => d.grade === g).length));
   }
@@ -305,93 +369,200 @@ function renderDayGrades(dayGrades) {
   }));
   makeStackedBar('dayGradeChart', labels, datasets);
 
-  // Status row: latest day-grade win rate (last 50 days)
+  // Status row stats
   const latest50 = dayGrades.slice(-50);
   const wins = latest50.filter(d => d.grade === 'A' || d.grade === 'B').length;
-  const ots = latest50.filter(d => d.ot).length;
+  const ots  = latest50.filter(d => d.ot).length;
+  const cmpAvg = latest50.reduce((s,d) => s + (d.completion || 0), 0) / Math.max(1, latest50.length);
   document.getElementById('statDayWin').textContent = pctOne(wins / Math.max(1, latest50.length));
-  document.getElementById('statOT').textContent = pctOne(ots / Math.max(1, latest50.length));
+  document.getElementById('statOT').textContent    = pctOne(ots  / Math.max(1, latest50.length));
+  document.getElementById('statCmp').textContent   = pctOne(cmpAvg);
 
-  // Side panel: most recent 200-day distribution
+  // Distribution sidebar
   const dist = {A:0, B:0, C:0, D:0, F:0};
   recent.forEach(d => { dist[d.grade] = (dist[d.grade] || 0) + 1; });
   const total = recent.length;
   distEl.innerHTML = `
-    <div style="font-size:0.7rem; color:#888; margin-bottom:8px">last ${total} days</div>
+    <div style="font-size:0.7rem; color:#888; margin-bottom:6px">last ${total} days</div>
     ${grades.map(g => {
       const n = dist[g] || 0;
       const pctVal = total ? (n*100/total).toFixed(0) : 0;
-      return `<div style="display:flex; align-items:center; gap:8px; margin-bottom:4px">
+      return `<div style="display:flex; align-items:center; gap:8px; margin-bottom:3px">
         <span class="grade-pill ${g}">${g}</span>
-        <div style="flex:1; background:#22252f; height:14px; border-radius:2px; overflow:hidden">
-          <div style="width:${pctVal}%; height:100%; background:${COLORS[g]}; opacity:0.7"></div>
-        </div>
+        <div class="ibar"><div style="width:${pctVal}%; background:${COLORS[g]}; left:0"></div></div>
         <span class="num" style="min-width:60px; text-align:right; font-family:monospace; font-size:0.7rem">${n} (${pctVal}%)</span>
       </div>`;
     }).join('')}
   `;
 }
 
-// ── PPO + PopArt: use update INDEX as x-axis (episodes don't differentiate) ───
+// ── Reward components from rich day_grade.rb ──────────────────────────────────
+function renderRewardComponents(dayGrades) {
+  const el = document.getElementById('rewardComponents');
+  // Older day_grades may not have .rb — only use ones that do
+  const recent = dayGrades.slice(-100).filter(d => d.rb);
+  if (!recent.length) {
+    el.innerHTML = '<div class="empty">no per-day reward breakdown yet (next training restart will populate)</div>';
+    return;
+  }
+  // Average each component across the window
+  const totals = {};
+  for (const d of recent) {
+    for (const [k, v] of Object.entries(d.rb)) totals[k] = (totals[k] || 0) + v;
+  }
+  const n = recent.length;
+  const avgs = Object.entries(totals)
+    .map(([k, v]) => [k, v / n])
+    .filter(([_, v]) => Math.abs(v) >= 0.1)
+    .sort((a,b) => Math.abs(b[1]) - Math.abs(a[1]))
+    .slice(0, 12);
+  if (!avgs.length) { el.innerHTML = '<div class="empty">no significant components</div>'; return; }
+  const maxAbs = Math.max(...avgs.map(a => Math.abs(a[1])));
+
+  el.innerHTML = `<div class="subtitle" style="margin-bottom:4px">per-day mean across last ${n} days</div>` +
+    avgs.map(([k, v]) => {
+      const pctW = (Math.abs(v) / maxAbs * 50).toFixed(1);
+      const isNeg = v < 0;
+      return `<div style="display:flex; align-items:center; gap:8px; margin-bottom:3px">
+        <span style="flex:0 0 130px; font-size:0.7rem; color:#ccc">${k}</span>
+        <div class="ibar" style="flex:1; height:14px;">
+          <div style="position:absolute; left:50%; top:0; bottom:0; width:1px; background:#444"></div>
+          <div style="${isNeg ? `right:50%; width:${pctW}%; background:${COLORS.vl}` : `left:50%; width:${pctW}%; background:${COLORS.win}`}; opacity:0.7"></div>
+        </div>
+        <span class="num" style="flex:0 0 80px; font-family:monospace; font-size:0.7rem; color:${isNeg ? COLORS.vl : COLORS.win}">${v >= 0 ? '+' : ''}${v.toFixed(0)}</span>
+      </div>`;
+    }).join('');
+}
+
+// ── Pipeline trend: incomplete + backlog over last 200 days ──────────────────
+function renderPipeline(dayGrades) {
+  const recent = dayGrades.slice(-200).filter(d => d.rb);
+  if (recent.length < 5) { destroyChart('pipelineChart'); return; }
+  // Rolling 25-day mean per series
+  const incRaw = recent.map(d => -(d.rb.incomplete || 0));   // flip to positive penalty magnitude
+  const bckRaw = recent.map(d => -(d.rb.backlog || 0));
+  const shipRaw = recent.map(d =>  (d.rb.shipped || 0));
+  const W = 25;
+  const inc = rolling(incRaw, W).map((y, i) => ({x: i, y}));
+  const bck = rolling(bckRaw, W).map((y, i) => ({x: i, y}));
+  const shp = rolling(shipRaw, W).map((y, i) => ({x: i, y}));
+  makeLine('pipelineChart', [
+    { label: 'incomplete penalty', data: inc, borderColor: COLORS.incomplete, fill: false },
+    { label: 'backlog penalty', data: bck, borderColor: COLORS.backlog, fill: false },
+    { label: 'shipped reward', data: shp, borderColor: COLORS.shipped, fill: false },
+  ]);
+}
+
+// ── Per-N table (recent 200 episodes) ─────────────────────────────────────────
+function renderPerN(episodes) {
+  const tbody = document.querySelector('#perNTable tbody');
+  if (!episodes.length) { tbody.innerHTML = '<tr><td colspan="7" class="empty">no completed episodes yet</td></tr>'; return; }
+  const recent = episodes.slice(-200);
+  const byN = {};
+  for (const e of recent) {
+    (byN[e.N] = byN[e.N] || []).push(e);
+  }
+  const rows = Object.keys(byN).map(n => parseInt(n)).sort((a,b) => a-b).map(n => {
+    const r = byN[n]; const k = r.length;
+    const win = r.reduce((s,e) => s+e.win_year, 0)/k;
+    const cmp = r.reduce((s,e) => s+e.cmp_year, 0)/k;
+    const ot  = r.reduce((s,e) => s+e.ot_year, 0)/k;
+    const rw  = r.reduce((s,e) => s+e.rw_per_worker, 0)/k;
+    const cmpW = (cmp*100).toFixed(0);
+    const cmpColor = cmp >= 0.85 ? COLORS.A : cmp >= 0.7 ? COLORS.B : cmp >= 0.5 ? COLORS.C : cmp >= 0.3 ? COLORS.D : COLORS.F;
+    return `<tr>
+      <td>${n}</td>
+      <td class="num">${k}</td>
+      <td class="num">${pct(win)}</td>
+      <td class="num">${pct(cmp)}</td>
+      <td class="num">${pct(ot)}</td>
+      <td class="num" style="color:${rw >= 0 ? COLORS.win : COLORS.vl}">${rw.toFixed(0)}</td>
+      <td class="bar-cell"><div class="ibar"><div style="width:${cmpW}%; background:${cmpColor}; left:0"></div></div></td>
+    </tr>`;
+  }).join('');
+  tbody.innerHTML = rows;
+}
+
+// ── N-distribution per stage (sampler health check) ──────────────────────────
+function renderNDistribution(nd) {
+  const el = document.getElementById('nDistribution');
+  if (!nd || !Object.keys(nd).length) {
+    el.innerHTML = '<div class="empty">no n_distribution recorded (need restart with current build)</div>';
+    return;
+  }
+  const stages = Object.keys(nd).sort();
+  el.innerHTML = stages.map(stg => {
+    const bucket = nd[stg];
+    const ns = Object.keys(bucket).map(k => parseInt(k)).sort((a,b) => a-b);
+    if (!ns.length) return '';
+    const total = ns.reduce((s,n) => s + bucket[String(n)], 0);
+    const max = Math.max(...ns.map(n => bucket[String(n)]));
+    const expected = ({1:'5-10', 2:'5-25', 3:'5-50'})[stg] || '?';
+    return `<div style="margin-bottom:8px">
+      <div style="font-size:0.7rem; color:#8ab4f8; margin-bottom:3px">Stage ${stg} · ${total} eps · expect N=${expected}</div>
+      ${ns.map(n => {
+        const c = bucket[String(n)];
+        const w = (c*100/max).toFixed(0);
+        return `<div style="display:flex; align-items:center; gap:6px; margin-bottom:2px">
+          <span style="flex:0 0 22px; font-size:0.65rem; color:#888; font-family:monospace">N=${n}</span>
+          <div class="ibar" style="height:10px"><div style="width:${w}%; background:#8ab4f8; left:0"></div></div>
+          <span class="num" style="flex:0 0 28px; font-family:monospace; font-size:0.65rem">${c}</span>
+        </div>`;
+      }).join('')}
+    </div>`;
+  }).join('');
+}
+
+// ── PPO panels (windowed last 500) ────────────────────────────────────────────
 function renderPpo(ppoUpdates) {
   if (!ppoUpdates.length) return;
   const recent = ppoUpdates.slice(-500);
-  const xs = recent.map((_, i) => i);
   const clipPts = recent.map((u, i) => ({x: i, y: u.clip}));
-  const plPts = recent.map((u, i) => ({x: i, y: u.p_loss}));
-  const vlPts = recent.map((u, i) => ({x: i, y: u.v_loss}));
-  const entPts = recent.map((u, i) => ({x: i, y: u.entropy}));
+  const plPts   = recent.map((u, i) => ({x: i, y: u.p_loss}));
+  const vlPts   = recent.map((u, i) => ({x: i, y: u.v_loss}));
+  const entPts  = recent.map((u, i) => ({x: i, y: u.entropy}));
 
-  makeLine('clipChart', [{
-    label: 'clip', data: clipPts, borderColor: COLORS.clip,
-    backgroundColor: COLORS.clip + '33', borderWidth: 1.5, pointRadius: 0, tension: 0.2
-  }], {yScale: {min: 0, max: 1, ticks: {font:{size:9}}}});
+  makeLine('clipChart', [{ label: 'clip', data: clipPts, borderColor: COLORS.clip,
+    backgroundColor: COLORS.clip + '33', fill: true }],
+    {yScale: {min: 0, max: 0.5, ticks: {font:{size:9}, callback: v => (v*100).toFixed(0)+'%'}}});
   makeLine('lossChart', [
-    { label: 'P', data: plPts, borderColor: COLORS.pl, borderWidth: 1.5, pointRadius: 0 },
-    { label: 'V', data: vlPts, borderColor: COLORS.vl, borderWidth: 1.5, pointRadius: 0 }
+    { label: 'P', data: plPts, borderColor: COLORS.pl },
+    { label: 'V', data: vlPts, borderColor: COLORS.vl }
   ]);
-  makeLine('entropyChart', [{
-    label: 'H', data: entPts, borderColor: COLORS.ent, borderWidth: 1.5, pointRadius: 0
-  }]);
+  makeLine('entropyChart', [{ label: 'H', data: entPts, borderColor: COLORS.ent }]);
 
   document.getElementById('statClip').textContent = pctOne(recent[recent.length - 1].clip);
 }
 
-function renderPopart(popart) {
-  if (!popart.length) return;
-  const recent = popart.slice(-500);
-  const muPts = recent.map((p, i) => ({x: i, y: p.mu}));
-  const sigmaPts = recent.map((p, i) => ({x: i, y: p.sigma}));
-  makeLine('popartChart', [
-    { label: 'μ', data: muPts, borderColor: COLORS.mu, borderWidth: 1.5, pointRadius: 0 },
-    { label: 'σ', data: sigmaPts, borderColor: COLORS.sigma, borderWidth: 1.5, pointRadius: 0 }
-  ]);
-}
-
-// ── Episodes / windows (post first year) ──────────────────────────────────────
+// ── Episode trends (rolling-25 smoothed) ──────────────────────────────────────
 function renderEpisodes(episodes) {
   const tbody = document.querySelector('#recentEpisodesTable tbody');
   if (!episodes.length) {
-    tbody.innerHTML = '<tr><td colspan="8" class="empty">No completed episodes yet (first lands ~30-45 min in)</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="9" class="empty">no completed episodes yet (~30-45 min)</td></tr>';
+    destroyChart('winRateChart'); destroyChart('rewardChart'); destroyChart('scatterChart'); destroyChart('stageTimelineChart');
     return;
   }
-  const winPts = episodes.map(e => ({x: e.ep, y: e.win_year}));
-  makeLine('winRateChart', [{
-    label: 'win/year', data: winPts, borderColor: COLORS.win,
-    backgroundColor: COLORS.win + '33', borderWidth: 1.5, pointRadius: 0, tension: 0.2
-  }], {yScale: {min: 0, max: 1, ticks: {font:{size:9}}}});
+  const W = 25;
+  const winRoll  = rolling(episodes.map(e => e.win_year), W).map((y, i) => ({x: episodes[i].ep, y}));
+  const rwRoll   = rolling(episodes.map(e => e.rw_per_worker), W).map((y, i) => ({x: episodes[i].ep, y}));
+  const winRaw   = episodes.map(e => ({x: e.ep, y: e.win_year}));
+  const rwRaw    = episodes.map(e => ({x: e.ep, y: e.rw_per_worker}));
 
-  const rwPts = episodes.map(e => ({x: e.ep, y: e.rw_per_worker}));
-  makeLine('rewardChart', [{
-    label: 'reward/worker', data: rwPts, borderColor: COLORS.reward, borderWidth: 1.5, pointRadius: 0
-  }]);
+  makeLine('winRateChart', [
+    { label: 'raw', data: winRaw, borderColor: '#8ab4f855', borderWidth: 1, fill: false },
+    { label: 'r25', data: winRoll, borderColor: COLORS.win, fill: false }
+  ], {yScale: {min: 0, max: 1, ticks: {font:{size:9}, callback: v => (v*100).toFixed(0)+'%'}}});
+  makeLine('rewardChart', [
+    { label: 'raw', data: rwRaw, borderColor: '#8ab4f855', borderWidth: 1, fill: false },
+    { label: 'r25', data: rwRoll, borderColor: COLORS.reward, fill: false }
+  ]);
 
-  makeScatter('scatterChart', episodes.map(e => ({x: e.N, y: e.win_year})));
+  makeScatter('scatterChart', episodes.slice(-300).map(e => ({x: e.N, y: e.win_year})));
 
   const stagePts = episodes.map(e => ({x: e.ep, y: e.stage}));
-  makeLine('stageTimelineChart', [{
-    label: 'stage', data: stagePts, borderColor: '#ce93d8', borderWidth: 2, pointRadius: 0, stepped: true
-  }], {yScale: {min: 0.5, max: 3.5, ticks: {stepSize: 1, font:{size:9}}}});
+  makeLine('stageTimelineChart', [
+    { label: 'stage', data: stagePts, borderColor: '#ce93d8', borderWidth: 2, stepped: true }
+  ], {yScale: {min: 0.5, max: 3.5, ticks: {stepSize: 1, font:{size:9}}}});
 
   const recent = episodes.slice(-25).reverse();
   tbody.innerHTML = recent.map(e => `
@@ -401,24 +572,23 @@ function renderEpisodes(episodes) {
       <td class="num">${pct(e.win_year)}</td>
       <td class="num">${pct(e.ot_year)}</td>
       <td class="num">${pct(e.cmp_year)}</td>
+      <td class="num" style="color:${e.rw_per_worker >= 0 ? COLORS.win : COLORS.vl}">${e.rw_per_worker.toFixed(0)}</td>
       <td class="grade-${e.last_grade}">${e.last_grade}</td>
     </tr>`).join('');
+
+  // Per-stage rollup table
+  const byStage = {};
+  for (const e of episodes) (byStage[e.stage] = byStage[e.stage] || []).push(e);
+  const stageRows = Object.keys(byStage).sort().map(stg => {
+    const r = byStage[stg]; const k = r.length;
+    const win = r.reduce((s,e) => s+e.win_year, 0)/k;
+    const cmp = r.reduce((s,e) => s+e.cmp_year, 0)/k;
+    return `<tr><td>${stg}</td><td class="num">${k}</td><td class="num">${pct(win)}</td><td class="num">${pct(cmp)}</td></tr>`;
+  }).join('');
+  document.querySelector('#perStageTable tbody').innerHTML = stageRows || '<tr><td colspan="4" class="empty">—</td></tr>';
 }
 
-function renderWindows(windows) {
-  const dom = document.querySelector('#dominanceTable tbody');
-  if (!windows.length) {
-    dom.innerHTML = '<tr><td colspan="2" class="empty">waiting for first window</td></tr>';
-    return;
-  }
-  const latest = windows[windows.length - 1];
-  const sorted = Object.entries(latest.dominance || {}).sort((a,b) => Math.abs(b[1]) - Math.abs(a[1]));
-  dom.innerHTML = sorted.length
-    ? sorted.map(([k,v]) => `<tr><td>${k}</td><td class="num" style="color:${v<0?'#f44336':'#4caf50'}">${v>=0?'+':''}${v.toFixed(0)}</td></tr>`).join('')
-    : '<tr><td colspan="2" class="empty">no reward data in latest window</td></tr>';
-}
-
-// ── Tick rate computation (from last few status snapshots) ────────────────────
+// ── Tick rate ─────────────────────────────────────────────────────────────────
 let prevTick = null, prevTime = null;
 function computeTickRate(status) {
   const t = status.elapsed_s || 0;
@@ -432,21 +602,36 @@ function computeTickRate(status) {
   return null;
 }
 
-// ── Data fetch + render ───────────────────────────────────────────────────────
+// ── Top-level render ──────────────────────────────────────────────────────────
+function renderAll(m) {
+  const status = m.status || {};
+  const tickRate = computeTickRate(status);
+  renderStatus(status, tickRate);
+
+  const dayGrades = m.day_grades || [];
+  const episodes  = m.episodes   || [];
+  const ppoUpdates = m.ppo_updates || [];
+  const nd = m.n_distribution || {};
+
+  renderDayGrades(dayGrades);
+  renderRewardComponents(dayGrades);
+  renderPipeline(dayGrades);
+  renderPerN(episodes);
+  renderNDistribution(nd);
+  renderPpo(ppoUpdates);
+  renderEpisodes(episodes);
+
+  document.getElementById('dataSummary').textContent =
+    `${dayGrades.length} days · ${episodes.length} eps · ${ppoUpdates.length} PPO updates`;
+  document.getElementById('lastUpdate').textContent = 'updated ' + new Date().toLocaleTimeString();
+}
+
 async function fetchAndRender() {
   try {
     const r = await fetch('/data/training_metrics.json', { cache: 'no-store' });
     if (!r.ok) throw new Error('metrics: ' + r.status);
     const m = await r.json();
-    const status = m.status || {};
-    const tickRate = computeTickRate(status);
-    renderStatus(status, tickRate);
-    renderDayGrades(m.day_grades || []);
-    renderPpo(m.ppo_updates || []);
-    renderPopart(m.popart || []);
-    renderEpisodes(m.episodes || []);
-    renderWindows(m.windows || []);
-    document.getElementById('lastUpdate').textContent = 'updated ' + new Date().toLocaleTimeString();
+    renderAll(m);
   } catch (e) {
     document.getElementById('lastUpdate').textContent = 'error: ' + e.message;
   }
@@ -454,12 +639,7 @@ async function fetchAndRender() {
 
 async function loadFromFile(file) {
   const m = JSON.parse(await file.text());
-  renderStatus(m.status || {}, null);
-  renderDayGrades(m.day_grades || []);
-  renderPpo(m.ppo_updates || []);
-  renderPopart(m.popart || []);
-  renderEpisodes(m.episodes || []);
-  renderWindows(m.windows || []);
+  renderAll(m);
   document.getElementById('lastUpdate').textContent = 'loaded from file ' + new Date().toLocaleTimeString();
 }
 
@@ -469,9 +649,7 @@ function startPoll() {
   fetchAndRender();
   pollInterval = setInterval(fetchAndRender, 5000);
 }
-function stopPoll() {
-  if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
-}
+function stopPoll() { if (pollInterval) { clearInterval(pollInterval); pollInterval = null; } }
 
 document.getElementById('sourceSelect').addEventListener('change', (e) => {
   const fi = document.getElementById('fileInput');
@@ -484,7 +662,6 @@ document.getElementById('fileInput').addEventListener('change', async (e) => {
 });
 document.getElementById('refreshNow').addEventListener('click', fetchAndRender);
 
-// Auto-start in server mode if reachable.
 fetch('/data/training_metrics.json', { cache: 'no-store' })
   .then(r => r.ok ? startPoll() : (document.getElementById('sourceSelect').value = 'file', document.getElementById('fileInput').style.display = 'inline-block'))
   .catch(() => { document.getElementById('sourceSelect').value = 'file'; document.getElementById('fileInput').style.display = 'inline-block'; });
