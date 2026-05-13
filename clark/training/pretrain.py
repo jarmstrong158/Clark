@@ -567,7 +567,14 @@ def pretrain_batched(
                 alive=True,
             )
             if now - last_metrics_write >= metrics_write_interval_s:
-                metrics.write()
+                # Soft-fail on metrics write — never let a Windows file-
+                # locking race or AV scanner stall the actual training loop.
+                # Worst case the dashboard misses a heartbeat update; the
+                # next 30s tick will retry.
+                try:
+                    metrics.write()
+                except Exception as _e:
+                    print(f"  [metrics] write skipped: {_e}", flush=True)
                 last_metrics_write = now
 
             # Drain every heartbeat (cheap) so the buffer doesn't grow

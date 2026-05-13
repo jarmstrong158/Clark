@@ -206,7 +206,17 @@ class TrainingMetricsLogger:
         self.status["last_heartbeat"] = time.time()
 
     def write(self) -> None:
-        """Atomic JSON write. Dashboard polls this file."""
+        """Atomic JSON write. Dashboard polls this file.
+
+        Windows + concurrent reader gotcha: if the dashboard server happens
+        to hold the JSON open for a read at the moment os.replace() fires,
+        Windows raises PermissionError [WinError 5] and the trainer crashes.
+        POSIX is fine with this; Windows isn't. We retry the rename a few
+        times with brief sleeps — the reader's lock is typically held for
+        single-digit ms, so a handful of 50ms backoffs covers it without
+        materially delaying the trainer's write cadence.
+        """
+        import os, time as _time
         out = {
             "status": self.status,
             "ppo_updates": self.ppo_updates,
@@ -218,7 +228,18 @@ class TrainingMetricsLogger:
         tmp = self.path.with_suffix(".json.tmp")
         with open(tmp, "w") as f:
             json.dump(out, f)
-        tmp.replace(self.path)
+        last_err: Exception | None = None
+        for attempt in range(8):
+            try:
+                tmp.replace(self.path)
+                return
+            except PermissionError as e:
+                last_err = e
+                _time.sleep(0.05 * (attempt + 1))   # 50ms, 100ms, ... ~1.8s total worst case
+        # All retries failed — surface the original error rather than crashing
+        # silently. Caller (training loop) already has try/except wrapping the
+        # heartbeat; emergency checkpoint will fire.
+        raise last_err if last_err else RuntimeError("metrics replace failed")
 
     # ── Internal ──────────────────────────────────────────────────────────────
 
