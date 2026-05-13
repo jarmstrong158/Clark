@@ -171,8 +171,18 @@ class StateBuilder:
 
         for j, t_id in enumerate(self.task_ids):
             # --- demand_signal ---
-            if t_id in ("pick", "pack"):
-                demand = min(1.0, orders_pending / orders_total)
+            # Pick and pack demand are SEPARATE signals — previously both got
+            # `(orders_in_queue + orders_picked_not_audited) / total` so the
+            # model could not differentiate "pickers needed" from "packers
+            # needed" at the per-task level. Result: model picked aggressively
+            # then left orders sitting picked-but-not-packed (large
+            # `picked_backlog` penalty in audit). With separate signals the
+            # cross-attention can route workers to whichever stage of the
+            # pipeline is actually backlogged.
+            if t_id == "pick":
+                demand = min(1.0, env.orders_in_queue / orders_total)
+            elif t_id == "pack":
+                demand = min(1.0, env.orders_picked_not_audited / orders_total)
             elif t_id == "restock":
                 demand = max(0.0, 1.0 - env.restock_level)
             elif t_id == "management":
