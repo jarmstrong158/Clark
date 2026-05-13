@@ -300,6 +300,34 @@ See [`clark/data/configs/example_small.yaml`](clark/data/configs/example_small.y
 
 ---
 
+## Live training dashboard
+
+A single-file HTML dashboard ships with the repo. Double-click [`clark/dashboard/dashboard.bat`](clark/dashboard/dashboard.bat) to launch the local server and open it in your browser at `http://localhost:8080/`. It reads the same `training_metrics.json` the trainer is writing — no contention, no extra overhead.
+
+![Dashboard top — status tiles, day-grade roll, reward components, pipeline trend, per-N performance, sampler N-distribution, PPO health](clark/dashboard/top.png)
+
+The top half shows everything that matters during a run:
+
+- **Status tiles** — episode / stage / day-level win, completion, OT frequency, PPO clip fraction, throughput
+- **Day-grade roll** — rolling 50-day windows of A/B/C/D/F across the last 200 simulated days. The high-frequency learning signal that populates within minutes of starting
+- **Reward components panel** — per-day mean magnitude of every reward signal, sorted, divergent-bar visualization. This is how you spot which penalty is dominating
+- **Pipeline trend** — `per_order_incomplete` (orders never shipped) vs `picked_backlog` (picked but not packed) vs `per_order_shipped` over the last 200 days. Direct visualization of whether the model is balancing pickers and packers correctly
+- **Per-N performance table** — eps / win% / Cmp% / OT% / R/W broken down by worker count. The single most useful diagnostic for variable-N training: lets you see at a glance "the model is competent at N=8-10 but struggling at N=15"
+- **Sampler N-distribution per stage** — verifies the curriculum is actually drawing from the expected N range. Caught a real bug where every resume was silently re-sampling stage 1 only
+- **PPO health** — clip fraction / P-loss / V-loss / entropy across the last 500 updates
+
+![Dashboard bottom — episode trends, per-N scatter, recent episode list, per-stage rollup, curriculum stage timeline](clark/dashboard/bottom.png)
+
+The bottom half is the per-episode and curriculum view:
+
+- **Year win-rate per episode** + **R/W per episode** — raw values plus a rolling-25 smoothed line, so noise and trend are both visible
+- **Per-N year win rate scatter** — every recent episode as one dot, makes the variable-N landscape obvious at a glance
+- **Recent episodes list** — last 25 completed episodes with grade, completion, OT, R/W
+- **Per-stage rollup** — clean stage 1 / 2 / 3 separation
+- **Curriculum stage timeline** — stepped line showing where the model has been in the curriculum over the run
+
+---
+
 ## Performance and status
 
 Foundation pre-training is in progress. The training infrastructure has been validated end-to-end (PPO updates, day-boundary cadence, multi-process env stepping, pipelined CPU/GPU overlap), and the policy importance-sampling ratio has been confirmed to behave correctly (clip fraction in the healthy 5–20% range after a per-worker ratio refactor).
