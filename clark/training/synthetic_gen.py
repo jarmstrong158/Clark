@@ -456,10 +456,14 @@ def _generate_rules(cs: CurriculumStage, n_workers: int) -> BusinessRules:
         management_backlog_weekly_penalty=round(random.uniform(-75.0, -25.0), 1),
         ot_wall_clock_max=ot_wall,
         ot_hard_stop_hour=ot_stop,
-        # Tightened from random(5, 25) → random(1, 10): see schema.py rationale
-        # — values >= 10 created a "leave N orders below trigger" incentive
-        # that paid the F-grade penalty without taking the OT shot to fix it.
-        ot_trigger_orders_remaining=random.randint(1, 10),
+        # ot_trigger_orders_remaining: tightened to a constant 1 after audit
+        # showed 17% of F-days were "Type 1 close-no-OT" — model finalized
+        # 1-15 orders short because the trigger sat above the leftover
+        # count (range 5-25, then 1-10) and OT never fired. Trigger=1 means
+        # OT enters whenever 2+ orders remain at EOD, aligning with the
+        # binary "any incomplete = F" grade rule. Removed the random sample
+        # entirely; per-facility configs can still override via YAML.
+        ot_trigger_orders_remaining=1,
         cycle_count_weekly_hours=round(random.uniform(max(cc_lo, 2.0), min(cc_hi, 5.0)), 1),
         cycle_count_max_overdue_weeks=random.randint(max(ccow_lo, 2), min(ccow_hi, 6)),
         min_staffing_floor=random.randint(1, 3),

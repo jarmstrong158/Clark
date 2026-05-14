@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from clark.env.facility_env import FacilityEnv
 
-from clark.env.facility_env import HUSTLE_BLOCKED_TASKS
+from clark.env.facility_env import HUSTLE_BLOCKED_TASKS, RESTOCK_PICK_PENALTY_THRESHOLD
 
 
 def get_action_mask(env: "FacilityEnv") -> np.ndarray:
@@ -105,8 +105,24 @@ def get_action_mask(env: "FacilityEnv") -> np.ndarray:
             mask[w_id, idle_idx] = True
             continue
 
-        # ── OT: orders still open → pick + pack only ──────────────────────────
+        # ── OT: orders still open → pick + pack (+ restock if depleted) ──────
+        # Audit found 33% of F days were "restock collapse": stock ran
+        # empty mid-day, picking dropped to 5% speed, OT triggered to
+        # catch up — but the OT mask blocked restock, so workers had
+        # no way to refill. Picking stayed at 5% through OT, hard-stop
+        # hit, day failed with hundreds of orders remaining. Real
+        # warehouses obviously DO restock during OT in this scenario.
+        # Now: restock is masked True during OT only when restock_level
+        # is below the pick-penalty threshold (i.e. picking is being
+        # crippled by lack of stock). Otherwise it stays blocked so
+        # workers focus on shipping.
         if day_env.is_ot and orders_remaining:
+            restock_idx = task_to_idx.get("restock", -1)
+            restock_critical = (
+                restock_idx >= 0
+                and day_env._restock_enabled
+                and day_env.restock_level < RESTOCK_PICK_PENALTY_THRESHOLD
+            )
             if worker.is_pack_only:
                 if pack_idx >= 0:
                     mask[w_id, pack_idx] = True
@@ -119,6 +135,11 @@ def get_action_mask(env: "FacilityEnv") -> np.ndarray:
                     mask[w_id, pick_idx] = True
                 if pack_available:
                     mask[w_id, pack_idx] = True
+                # Restock allowed only when stock is critically low and
+                # this worker is actually eligible. Lets the model
+                # break the restock-collapse cascade during OT.
+                if restock_critical and worker.eligible_for("restock"):
+                    mask[w_id, restock_idx] = True
             continue
 
         # ── Shift exhausted (EOD, no OT) → idle only ─────────────────────────
