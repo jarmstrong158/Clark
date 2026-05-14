@@ -34,12 +34,16 @@ if TYPE_CHECKING:
 # ── Hyperparameter defaults ───────────────────────────────────────────────────
 
 PPO_DEFAULTS: dict = {
-    # lr 5e-5 → 2e-5 after a 32-hr training run plateaued at clip% ≈ 20%.
-    # Clip 20% means 1-in-5 ratios are getting clipped — policy was making
-    # large updates relative to clip_eps=0.2 and oscillating around a
-    # local optimum instead of converging. Lower LR shrinks step size so
-    # the model commits to learning rather than ping-ponging.
-    "lr": 2e-5,
+    # lr 5e-5 → 2e-5 → 1e-5. Second drop after a 21-hr run that hit best-
+    # ever metrics (Cmp 94%, OT success 55%, 0/1391 catastrophes) and then
+    # showed monotonic 12-hr drift across 5 indicators (Cmp 94→87%, OT
+    # success 55→40%, OT% 46→68% as crutch, value-loss s/m 1×→21× — the
+    # bimodal-collapse signature returning, entropy compressing 1.77→1.69).
+    # Clip% had already dropped to 7-11% (no longer saturating clip_eps),
+    # so the lower LR tightens the trust region around what's working
+    # instead of forcing converge — locks in gains while curriculum stage
+    # 3 transition (ep 4500) approaches.
+    "lr": 1e-5,
     # gamma 0.999 + gae_lambda 0.98 give effective horizons of ~1000 and
     # ~50 steps respectively — sized for the 13050-step year. Default 0.99
     # / 0.95 left the agent blind to end-of-day rewards (decay to ~0.6 by
