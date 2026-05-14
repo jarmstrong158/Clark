@@ -56,7 +56,12 @@ def pretrain(
 
     total_configs = max(1, n_episodes // years_per_config)
     stage1_end = max(1, int(total_configs * 0.15))   # first 15%
-    stage2_end = max(1, int(total_configs * 0.45))   # first 45%
+    # Stage 2 extended 0.45 → 0.60 after value-head re-saturation audit
+    # found drift driven by stage-2 tail configs at ep ~4127. Delays the
+    # stage 3 (full-complexity) transition until ep ~6000 so the model has
+    # more time to consolidate stage 2 before getting hit with carryover
+    # 40% / peak staffing 50% / N up to 50.
+    stage2_end = max(1, int(total_configs * 0.60))   # first 60%
 
     def _get_stage(configs_seen: int) -> int:
         if configs_seen < stage1_end:
@@ -361,7 +366,7 @@ def pretrain_batched(
 
     total_configs = max(1, n_episodes // years_per_config)
     stage1_end = max(1, int(total_configs * 0.15))
-    stage2_end = max(1, int(total_configs * 0.45))
+    stage2_end = max(1, int(total_configs * 0.60))
 
     # Shared curriculum counter — one integer across all env slots.
     configs_seen_state = {"count": 0}

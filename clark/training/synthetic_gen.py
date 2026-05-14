@@ -138,7 +138,7 @@ def generate_random_facility(stage: int = 3) -> FacilityConfig:
     workers = _generate_workers(n_workers, cs)
     avg_oph = sum(w.base_oph for w in workers) / max(1, len(workers))
 
-    tasks = _generate_tasks(cs)
+    tasks = _generate_tasks(cs, n_workers)
     volume = _generate_volume(n_workers, avg_oph)
     rules = _generate_rules(cs, n_workers)
     complexity = _sample_random_complexity(cs)
@@ -257,7 +257,7 @@ def _sample_task_oph_overrides(exclude: list[str] = []) -> dict[str, float]:
     return {t: round(random.uniform(lo, min(hi, 50.0)), 1) for t in chosen}
 
 
-def _generate_tasks(cs: CurriculumStage) -> TasksConfig:
+def _generate_tasks(cs: CurriculumStage, n_workers: int) -> TasksConfig:
     """
     Always include pick/pack/idle (core) plus restock and management. Sample
     any remaining optional tasks from standard vocab.
@@ -268,12 +268,29 @@ def _generate_tasks(cs: CurriculumStage) -> TasksConfig:
 
     `management` is force-included so the business-rule reward path is
     reachable during training.
+
+    Trap-config filter: when n_workers ≤ 8, cap M at floor(1.2 × N). The
+    distribution audit found that small-N facilities with high M/N ratio
+    (~M ≥ N+2 at N ≤ 8) were unsolvable by current policy and produced
+    repeating -50k to -65k R/W returns for the same cfg seeds. They were
+    creating a persistent secondary mode in the return distribution that
+    re-saturated the value head. The cap eliminates these at the source.
     """
     max_optional = len(_OPTIONAL_TASK_IDS)
     # Bump the minimum to 5 (core 3 + restock + management) so both
     # force-included tasks always fit inside n_tasks.
     min_tasks = min(5, 3 + max_optional)
-    n_tasks = random.randint(min_tasks, min(cs.max_tasks, 3 + max_optional))
+    # Effective max_tasks: stage cap, with the trap-config filter for small N.
+    # Cap M ≤ N when N ≤ 8 (M/N ≤ 1.0). Audit's trap exemplars had M/N
+    # ≥ 1.17 (e.g. N=6/M=7, N=7/M=9, N=5/M=10) — small crews physically
+    # can't cover many task types simultaneously, so they pile up
+    # repeating -50k+ R/W returns for the same cfg seeds. Note: min_tasks
+    # is 5 (core 3 + restock + management) so N=5 facilities will land
+    # at exactly M=5 (M/N=1.0, borderline but at least bounded).
+    eff_max = cs.max_tasks
+    if n_workers <= 8:
+        eff_max = min(eff_max, max(min_tasks, n_workers))
+    n_tasks = random.randint(min_tasks, min(eff_max, 3 + max_optional))
     n_tasks = max(n_tasks, min_tasks)
     n_optional = n_tasks - 3  # number of optional tasks to add
 
