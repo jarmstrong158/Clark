@@ -91,13 +91,14 @@ Outputs
 Key design points:
 
 - **Variable-shape architecture.** Workers and tasks are token sequences; the model has no hardcoded dependence on N or M.
-- **Action masks for both heads.** Both task-assignment masks (eligibility, OT-only-pick-and-pack, management quota gating, restock gating) and hustle masks (per-worker absent / cap-exhausted) are applied as `-1e9` fills before softmax in both rollout AND PPO update. Invalid actions never receive gradient, and the importance-sampling math stays consistent across rollout and update.
+- **Action masks for both heads.** Task-assignment masks (eligibility, OT-pick-pack-plus-restock-when-stock-critical, management quota gating, restock-only-when-needed, pick-buffer-cap, idle-only-when-absent-or-shift-exhausted) and hustle masks (per-worker absent / cap-exhausted) are applied as `-1e9` fills before softmax in both rollout AND PPO update. Invalid actions never receive gradient, and the importance-sampling math stays consistent across rollout and update.
 - **Per-worker PPO ratio.** The policy importance-sampling ratio is computed and clipped *per-worker per-head* rather than as a sum across all 2N decisions. Without this, ratio variance scales linearly with N (a 25-worker config produces ratio stdev ~0.35 from harmless replay drift, which alone saturates `clip_eps=0.2`). This is the standard fix for factored / multi-agent action spaces (IPPO).
 - **Assignment logits scaled by `1/√d_model`.** The `W_final @ T.T` matmul is divided by `√d_model` (~22 at d_model=512) so logits at init are O(1) and softmax is well-tempered. Without this scaling the matmul outputs O(20) magnitudes, causing immediate near-argmax collapse and entropy crash. Same trick scaled-dot-product attention uses for its scores.
 - **EMA running return normalization for the value loss.** The value head trains against returns normalized by a global EMA of `mean`/`var` (not per-batch stats). Per-batch standardization on a 64-step TBPTT chunk produced tiny / unstable σ — value loss exploded and the head chased moving targets across chunks. Replaced an earlier PopArt experiment that didn't fit the per-day single-trajectory update setting.
 - **Per-worker mean entropy.** The entropy bonus is averaged over workers, not summed. Sum-over-workers made the bonus magnitude scale with N, swamping the policy gradient at large facilities and collapsing exploration at small ones. `entropy_coeff=0.10` keeps healthy exploration without dominating the policy gradient.
 - **TBPTT** with `chunk_size = 64` truncates LSTM gradients across the full simulated year (~13,050 steps). 64 covers ~half a day's gradient horizon and keeps per-batch correlation low enough that the value-loss running stats stay stable. Chunks are split at any worker-count change (peak-staffing arrivals) so the per-step state stack stays homogeneous.
-- **Loose reward / return clips.** Per-step reward clipped at ±20k; GAE returns clipped at ±500k. End-of-day single-step penalties (`per_order_incomplete = -10 × N_unshipped`) can legitimately hit -7000 on small-facility disasters; tighter clips were masking the catastrophic-day signal so the value head couldn't distinguish a normal failure from a 4×-worse one.
+- **Bounded incomplete-penalty + completion bonus.** The `per_order_incomplete = -10 × N_unshipped` multiplier is now capped at `min(N_unshipped, 50)` so the per-event floor is -500, symmetric with a new `+500 × cmp_year` shaping bonus applied at year end. Earlier runs with the unbounded penalty produced day-rewards down to -130k and year returns to -3.26M — a fat-tail distribution that the value head fit by learning huge canceling biases (output std ~3,000, weight matrix saturated). After capping, returns become well-behaved and `v_loss` collapses from a bimodal s/m=228× to s/m≈1×. Reward / return clips remain ±20k per step and ±500k on GAE returns as a defense-in-depth ceiling.
+- **Physical pick-buffer cap.** `pick_buffer_capacity` is an env-level cart-space proxy (6-12 × N workers in synthetic configs) that removes "pick" from the action mask when `orders_picked_not_audited` reaches the cap. Real warehouses can only stage so many picked orders before the buffer is physically full and pickers have to wait. Without this cap the env let pickers (which are 2.5× faster than packers in this sim) pile up unbounded backlog that packers couldn't clear, producing the picked_backlog reward dominance an audit identified. Pick/pack balance now emerges from the env constraint instead of being something the model has to learn from a delayed end-of-day signal.
 - **Dropout disabled** in the policy network. The cross-rollout/update dropout-mask difference would create importance-ratio noise on the order of `clip_epsilon` even with frozen weights — saturating the clip threshold structurally.
 - **fp32 log-prob storage.** Old log-probs are cast to fp32 before storing (rollout runs under bf16 autocast). bf16 quantization noise on a sum-over-workers log-prob is comparable to `clip_eps` itself.
 - **bf16 AMP** on CUDA with explicit fp16 fallback for hardware without bf16 support.
@@ -116,9 +117,11 @@ The model is exposed to thousands of synthetically generated `FacilityConfig` in
 
 | Stage | Share | Workers | Tasks | Carryover | Peak staffing | Saturday |
 |---|---|---|---|---|---|---|
-| 1 | first 15% | 3–10 | up to 5 | 0% | 0% | 0% |
+| 1 | first 15% | 5–10 | up to 5 | 0% | 0% | 0% |
 | 2 | next 30% | 5–25 | up to 10 | 30% | 30% | 15% |
 | 3 | remaining 55% | 5–50 | up to 15 | 40% | 50% | 25% |
+
+The stage-1 floor was raised from N=3 to N=5 after training found N=3 and N=4 facilities had a structural near-zero win ceiling — they were teaching the model "lose" rather than building competence. Daily order volume scales per-config to `n_workers × avg_oph × shift_hours × ~0.4` so even peak summer days stay at ≤110% of physical capacity (no impossible-by-construction configs).
 
 Synthetic configs are sampled within bounds defined by [`clark/config/clark_limits.yaml`](clark/config/clark_limits.yaml). Anything outside these bounds is explicitly out-of-distribution; expanding the limits requires retraining (a new `arch_version` bump).
 
@@ -381,11 +384,18 @@ Clark is a successor to Jack, not a wrapper around it. The two share design DNA 
 - [x] Dropout disabled in the policy network (PPO consistency)
 - [x] `γ=0.999`, `λ=0.98`, `chunk_size=64` tuned for the 13k-step horizon
 - [x] Reward / return clips wide enough to preserve catastrophic-day signal
+- [x] Bounded `per_order_incomplete` penalty (cap at -10 × min(N_unshipped, 50))
+- [x] `+500 × cmp_year` shaping bonus to balance the negative-dominant signal
+- [x] Physical pick-buffer cap (`pick_buffer_capacity`) prevents unbounded over-picking
+- [x] Restock allowed during OT when stock is critically low (breaks restock-collapse cascade)
+- [x] Volume scales per-N so peak-summer days stay ≤110% of physical capacity
 - [x] Vectorized PPO update (single GPU sync per cycle)
 - [x] Facility-aware order-arrival schedule (no silent drops)
+- [x] Float-comparison epsilon at order-cutoff boundary (no stranded orders)
 - [x] Multi-process env runner with pipelined CPU/GPU overlap
 - [x] N-split TBPTT chunker for peak-staffing days
-- [x] Live training metrics + dashboard (PPO health, day-grade trends, sliding windows)
+- [x] Live training metrics + dashboard (PPO health, day-grade trends, sliding windows, per-N rollup)
+- [x] Curriculum-counter resume bug fixed (stage advancement persists across restarts)
 
 ### Infrastructure
 
