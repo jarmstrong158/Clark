@@ -38,6 +38,10 @@ facility:
   # Equipment
   pack_stations:      { min: 1,    max: 30   }    # null = unlimited
   carts_available:    { min: 1,    max: 100  }    # null = unlimited
+  # Physical cap on orders picked-but-not-packed (cart-space proxy).
+  # Real warehouses cap around 5-15 per worker depending on order size
+  # and cart capacity. null = unlimited.
+  pick_buffer_capacity: { min: 10, max: 500 }     # null = unlimited
 
   # OT
   ot_wall_clock_max:  { min: 0.0,  max: 3.0  }

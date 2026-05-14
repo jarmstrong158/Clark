@@ -59,6 +59,15 @@ def get_action_mask(env: "FacilityEnv") -> np.ndarray:
 
     orders_remaining = (day_env.orders_in_queue + day_env.orders_picked_not_audited) > 0
     eod_hour = day_env._eod_hour
+    # Pick buffer cap — when too many orders are picked-but-not-packed,
+    # carts/staging is full and no one can pick any more until packing
+    # drains some. Real-warehouse cart-space proxy. None = unlimited
+    # (legacy behavior).
+    pick_buffer_cap = day_env.facility_config.rules.pick_buffer_capacity
+    pick_buffer_full = (
+        pick_buffer_cap is not None
+        and day_env.orders_picked_not_audited >= pick_buffer_cap
+    )
 
     # Management quota check (used in the normal-case branch)
     def _management_available(worker_id: int) -> bool:
@@ -102,9 +111,13 @@ def get_action_mask(env: "FacilityEnv") -> np.ndarray:
                 if pack_idx >= 0:
                     mask[w_id, pack_idx] = True
             else:
-                if pick_idx >= 0:
+                # Buffer-full: pick removed, force pack. If pack also
+                # unavailable (no pack task in this facility) fall back
+                # to allowing pick so the worker isn't stranded.
+                pack_available = pack_idx >= 0
+                if pick_idx >= 0 and not (pick_buffer_full and pack_available):
                     mask[w_id, pick_idx] = True
-                if pack_idx >= 0:
+                if pack_available:
                     mask[w_id, pack_idx] = True
             continue
 
@@ -152,8 +165,24 @@ def get_action_mask(env: "FacilityEnv") -> np.ndarray:
                 )
                 continue
 
+            # Pick buffer cap — block "pick" when buffer is full so
+            # the model is forced toward pack/restock/etc. Eligibility
+            # check still applies. (Stranded-worker safety check below
+            # the per-task loop re-enables pick if no other action ended
+            # up valid.)
+            if t_id == "pick" and pick_buffer_full:
+                mask[w_id, j] = False
+                continue
+
             # General task: check worker eligibility
             mask[w_id, j] = worker.eligible_for(t_id)
+
+        # Stranded-worker safety: if pick was blocked by the buffer cap
+        # AND nothing else came back valid, re-enable pick. Better the
+        # buffer overflows by a small amount than the worker gets a
+        # zero-mask softmax (which would NaN the policy distribution).
+        if pick_buffer_full and pick_idx >= 0 and not mask[w_id].any():
+            mask[w_id, pick_idx] = True
 
     return mask
 

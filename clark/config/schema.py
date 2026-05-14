@@ -192,6 +192,18 @@ class BusinessRules:
     # Equipment constraints
     pack_stations: Optional[int] = None    # None = unlimited
     carts_available: Optional[int] = None  # None = unlimited
+    # Physical cap on orders picked-but-not-yet-packed at any moment.
+    # Models the real-world constraint that picking carts have finite
+    # capacity — a real warehouse can only stage so many picked orders
+    # before they have to be packed and cleared. When the buffer hits
+    # this cap, the action mask removes "pick" from available actions
+    # for every worker, forcing them to pack (or restock/manage/etc.)
+    # until the buffer drains. Without this, the env let pickers (which
+    # are 2.5× faster than packers) pile up unbounded backlog that the
+    # packers couldn't clear, producing the picked_backlog reward
+    # dominance the audit found. Default None = unlimited (preserves
+    # original behavior for legacy YAMLs).
+    pick_buffer_capacity: Optional[int] = None
 
     # Order carryover — user controls all three knobs
     order_carryover_enabled: bool = False
@@ -536,6 +548,7 @@ class FacilityConfig:
             # Equipment
             pack_stations=(int(d["pack_stations"]) if d.get("pack_stations") is not None else None),
             carts_available=(int(d["carts_available"]) if d.get("carts_available") is not None else None),
+            pick_buffer_capacity=(int(d["pick_buffer_capacity"]) if d.get("pick_buffer_capacity") is not None else None),
             # Order carryover
             order_carryover_enabled=bool(d.get("order_carryover_enabled", False)),
             order_carryover_max_days=int(d.get("order_carryover_max_days", 3)),

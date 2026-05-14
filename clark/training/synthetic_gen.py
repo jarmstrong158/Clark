@@ -140,7 +140,7 @@ def generate_random_facility(stage: int = 3) -> FacilityConfig:
 
     tasks = _generate_tasks(cs)
     volume = _generate_volume(n_workers, avg_oph)
-    rules = _generate_rules(cs)
+    rules = _generate_rules(cs, n_workers)
     complexity = _sample_random_complexity(cs)
 
     # Generate break schedule and peak staffing
@@ -389,7 +389,7 @@ def _generate_volume(n_workers: int, avg_oph: float) -> VolumeConfig:
     return VolumeConfig(seasonal_ranges=seasonal_ranges, weekly_curve=weekly_curve)
 
 
-def _generate_rules(cs: CurriculumStage) -> BusinessRules:
+def _generate_rules(cs: CurriculumStage, n_workers: int) -> BusinessRules:
     """Sample business rules from reasonable priors, using BOUNDS for timing fields."""
     # Sample shift timing coherently (start before end, lunch between them)
     ds_lo, ds_hi = BOUNDS["day_start_hour"]
@@ -490,6 +490,13 @@ def _generate_rules(cs: CurriculumStage) -> BusinessRules:
         saturday_volume_fraction=saturday_vol,
         late_order_exception_rate=late_exception_rate,
         restock_availability_hour=restock_avail,
+        # Per-worker pick buffer scaling. User-reported real warehouse
+        # caps around 5-15 orders per worker (cart-space proxy). Sample
+        # 6-12 per worker → an N=10 facility holds 60-120 picked orders
+        # before pickers must wait. Forces pick/pack balance via env
+        # constraint instead of relying on the model to learn the 2.5×
+        # picker-vs-packer rate asymmetry.
+        pick_buffer_capacity=random.randint(6, 12) * n_workers,
     )
 
 
