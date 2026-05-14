@@ -454,8 +454,19 @@ class FacilityEnv:
             starved_count = len(packers)
             reward += self._add_reward("packers_starved", starved_count)
 
-        # Picked backlog piling up
-        if self.orders_picked_not_audited > 20:
+        # Picked backlog piling up — fire only when we're approaching
+        # the physical cap (≥80% of pick_buffer_capacity), not on every
+        # tick where buffer > 20. Audit found this penalty was firing
+        # ~30 ticks/day even when the model was correctly working the
+        # cap (packers draining as fast as they can per the env's pack
+        # rate, which is 2.5× slower than pick). Per-tick fire was
+        # redundant noise the model couldn't reduce — the cap already
+        # physically prevents over-picking. Now it's a "real" signal:
+        # only fires when packers are genuinely falling behind to the
+        # point that the cap is about to constrain.
+        cap = self.facility_config.rules.pick_buffer_capacity
+        threshold = max(20, int(cap * 0.8)) if cap is not None else 20
+        if self.orders_picked_not_audited > threshold:
             backlog_units = self.orders_picked_not_audited // 10
             reward += self._add_reward("picked_backlog", backlog_units)
 
