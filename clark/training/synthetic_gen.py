@@ -280,15 +280,18 @@ def _generate_tasks(cs: CurriculumStage, n_workers: int) -> TasksConfig:
     # Bump the minimum to 5 (core 3 + restock + management) so both
     # force-included tasks always fit inside n_tasks.
     min_tasks = min(5, 3 + max_optional)
-    # Effective max_tasks: stage cap, with the trap-config filter for small N.
-    # Cap M ≤ N when N ≤ 8 (M/N ≤ 1.0). Audit's trap exemplars had M/N
-    # ≥ 1.17 (e.g. N=6/M=7, N=7/M=9, N=5/M=10) — small crews physically
-    # can't cover many task types simultaneously, so they pile up
-    # repeating -50k+ R/W returns for the same cfg seeds. Note: min_tasks
-    # is 5 (core 3 + restock + management) so N=5 facilities will land
-    # at exactly M=5 (M/N=1.0, borderline but at least bounded).
+    # Effective max_tasks: stage cap, with the trap-config filter for small
+    # AND mid-N facilities. Cap M ≤ N when N ≤ 15 (M/N ≤ 1.0).
+    #
+    # Original filter (N ≤ 8) caught the worst trap exemplars but left a
+    # second wave of mid-N traps. Per-N audit found N=13 with M=9-10
+    # (M/N = 0.69-0.77) producing recurring -8k to -19k R/W on the same
+    # cfg seeds (synthetic_4882 / synthetic_2298 hit Cmp 33-49% across 3
+    # repeats each). Extending to N ≤ 15 catches that range without
+    # restricting larger facilities (which can absorb high task variety).
+    # min_tasks=5 means N=5 still lands at M=5 (M/N=1.0, borderline).
     eff_max = cs.max_tasks
-    if n_workers <= 8:
+    if n_workers <= 15:
         eff_max = min(eff_max, max(min_tasks, n_workers))
     n_tasks = random.randint(min_tasks, min(eff_max, 3 + max_optional))
     n_tasks = max(n_tasks, min_tasks)

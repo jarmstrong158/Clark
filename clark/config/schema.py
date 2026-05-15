@@ -304,7 +304,15 @@ DEFAULT_REWARDS: dict[str, float] = {
     # head and producing the monotonic regression we saw post-launch.
     "all_orders_complete_bonus":     50.0,
     "per_order_incomplete":         -10.0,
-    "per_ot_hour":                   -0.5,
+    # per_ot_hour bumped -0.5 → -1.5 after audit found N=23 facilities
+    # were shipping 100% of orders BUT earning F/D grades because they
+    # used heavy OT to do it. The model was treating OT as a "free"
+    # crutch — at -0.5/hr × 2h = -1.0 cost vs +5/order × 50 saved orders
+    # = +250, OT was always worth it. At -1.5/hr × 2h = -3.0, the model
+    # has stronger incentive to schedule cleanly during normal hours.
+    # The grade system already F's at any incomplete, so this just lifts
+    # the cleanliness floor without changing OT's existence.
+    "per_ot_hour":                   -1.5,
     "ot_incomplete_flat":           -25.0,
     "ot_per_order_incomplete":      -10.0,
     # Restock penalties at Jack's order of magnitude. We tried HARSH values
@@ -314,7 +322,12 @@ DEFAULT_REWARDS: dict[str, float] = {
     # values give a learnable signal without making one bad day catastrophic.
     "per_restock_completed":          2.0,
     "all_restock_bonus":             50.0,
-    "per_restock_bleed":             -3.0,
+    # per_restock_bleed bumped -3.0 → -6.0 — pairs with the per_ot_hour
+    # bump above. The N=23 demerit problem was driven by OT-overuse AND
+    # restock-missed-by-EOD. Stronger restock penalty pushes the model
+    # to keep restock current (which also avoids the restock-collapse
+    # cascade that caused 33% of F-days at the audit checkpoint).
+    "per_restock_bleed":             -6.0,
     "restock_pick_interruption":    -15.0,
     "restock_level_low":             -3.0,
     "restock_level_empty":           -8.0,
