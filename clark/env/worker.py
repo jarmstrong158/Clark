@@ -76,6 +76,12 @@ class WorkerState:
     # Cycle count tracking
     cycle_count_hours_today: float = 0.0
 
+    # Per-task time tracking (diagnostic — populated by facility_env each tick).
+    # Lets us spot patterns like "model assigned this worker to pack but no
+    # picked orders ever showed up so they had 5 hours of effective idle time."
+    # Reset at day start. Keys are task_ids; values are hours.
+    task_hours_today: dict = field(default_factory=dict)
+
     # Hustle mode — agent-controlled per-step toggle
     hustle_mode: bool = False
     hustle_hours_today: float = 0.0    # accumulated hustle hours this day

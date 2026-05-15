@@ -136,6 +136,20 @@ def _worker_loop(conn, init_config: FacilityConfig) -> None:
                         "shipped":    float(rb.get("per_order_shipped", 0.0)),
                     },
                 }
+                # Aggregate task-time totals across all workers so the
+                # day digest can show "of 135 worker-hours today, 60 went
+                # to pick, 50 to pack, 18 to idle, ..." without paying
+                # per-worker IPC cost. The full per-worker breakdown is
+                # still in env.daily_summaries[-1]['footer']['worker_time']
+                # if we ever want to deep-dive a specific day.
+                wt = day_footer.get("worker_time", {})
+                task_totals: dict = {}
+                for worker_tasks in wt.values():
+                    for t, h in worker_tasks.items():
+                        task_totals[t] = task_totals.get(t, 0.0) + float(h)
+                day_just_finished["task_hours"] = {
+                    k: round(v, 1) for k, v in task_totals.items()
+                }
 
             finished = None
             just_reset = False

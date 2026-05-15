@@ -557,6 +557,17 @@ class FacilityEnv:
             elif self.restock_level < RESTOCK_PICK_PENALTY_THRESHOLD:
                 reward += self._add_reward("restock_level_low")
 
+        # Per-worker per-task time tally — diagnostic so we can see how
+        # the model is actually allocating worker hours and spot patterns
+        # like "everyone assigned to pack but no picked orders existed
+        # so they were de facto idle." Counts the worker's CURRENT task
+        # (whatever the model just assigned this tick), so includes idle
+        # time for absent / shift-exhausted workers and for any worker
+        # the model put on a no-op task.
+        for w in self.episode.workers:
+            t = w.current_task
+            w.task_hours_today[t] = w.task_hours_today.get(t, 0.0) + duration
+
         return reward
 
     def _process_management(self, w: WorkerState, duration: float) -> float:
@@ -1143,6 +1154,15 @@ class FacilityEnv:
                 "deliberate_complete": self.deliberate_complete,
                 "filler_complete": self.filler_complete,
                 "grade": grade,
+                # Per-worker per-task hours — diagnostic so we can spot
+                # patterns like "model assigned everyone to pack but no
+                # picked orders existed" or "Worker_3 was idle for 6h
+                # while the queue had work." Keys are worker names; values
+                # are dicts of {task_id: hours}.
+                "worker_time": {
+                    w.name: {t: round(h, 2) for t, h in w.task_hours_today.items()}
+                    for w in ep.workers
+                },
             },
             "steps": self.step_log,
         }

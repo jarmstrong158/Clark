@@ -196,6 +196,11 @@ class TrainingMetricsLogger:
             rb = d.get("rb")
             if rb is not None:
                 entry["rb"] = {k: round(float(v), 2) for k, v in rb.items()}
+            # Per-task aggregate hours (across all workers). Lets us spot
+            # patterns like "this day, 30% of worker-hours went to idle."
+            th = d.get("task_hours")
+            if th is not None:
+                entry["task_hours"] = {k: round(float(v), 1) for k, v in th.items()}
             self.day_grades.append(entry)
         self._trim(self.day_grades)
 
