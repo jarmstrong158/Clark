@@ -169,6 +169,32 @@ class StateBuilder:
         # Pre-compute which workers are available (not absent)
         available_workers = [w for w in env.episode.workers if not w.is_absent]
 
+        # Filler-task suppression. Per-worker time tracking exposed that
+        # the model was sending 16-26h/day to quality_check / training /
+        # receiving / returns_processing on bad-Cmp days while pick was
+        # 21h short of good days. Root cause: filler tasks had a
+        # CONSTANT demand=0.5 regardless of pick/pack queue state, so
+        # when pick demand briefly dropped (early morning, low queue),
+        # the model committed workers to filler — then orders flooded
+        # in but workers were locked into the wrong tasks.
+        # Fix: suppress filler demand based on the larger of two
+        # pressures:
+        #   pending_pressure = current outstanding orders / total
+        #   schedule_pressure = how far behind schedule we are
+        # When EITHER is significant, filler demand drops toward 0.
+        pending_pressure = orders_pending / orders_total
+        eod_hour = env._eod_hour
+        day_start = self.config.rules.day_start_hour
+        time_progress = max(0.0, min(1.0,
+            (env.current_hour - day_start) / max(0.01, eod_hour - day_start)
+        ))
+        completion_progress = max(0.0, min(1.0, env.orders_completed / orders_total))
+        schedule_pressure = max(0.0, time_progress - completion_progress)
+        # Combined pressure: the bigger concern wins. Multiplier 1.7 means
+        # filler demand hits 0 around 30% pending OR 30% behind schedule.
+        # At 0 pressure (slack day, on schedule), filler demand = 0.5.
+        filler_demand = max(0.0, 0.5 - max(pending_pressure, schedule_pressure) * 1.7)
+
         for j, t_id in enumerate(self.task_ids):
             # --- demand_signal ---
             # Pick and pack demand are SEPARATE signals — previously both got
@@ -195,8 +221,11 @@ class StateBuilder:
             elif t_id == "idle":
                 demand = 0.0
             else:
-                # side_project, cycle_count, receiving, etc. — moderate constant signal
-                demand = 0.5
+                # Filler tasks (side_project, cycle_count, receiving,
+                # quality_check, training, returns_processing, loading).
+                # Demand scales DOWN as pick/pack pressure or schedule
+                # pressure rises — see filler_demand computation above.
+                demand = filler_demand
 
             feats[j, 0] = demand
 
