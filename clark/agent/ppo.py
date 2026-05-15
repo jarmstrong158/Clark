@@ -52,13 +52,17 @@ PPO_DEFAULTS: dict = {
     "gamma": 0.999,
     "gae_lambda": 0.98,
     "clip_epsilon": 0.2,
-    # entropy_coeff bumped 0.02 → 0.10 to compensate for the entropy
-    # sum→mean change in transformer.py. Old code summed per-worker entropy
-    # so the bonus magnitude scaled with N (~8× at average N=8); new mean-
-    # over-workers makes the bonus N-invariant but ~8× smaller in absolute
-    # terms. Without this bump the policy committed to near-deterministic
-    # actions within ~250 PPO updates and stopped exploring.
-    "entropy_coeff": 0.10,
+    # entropy_coeff history: 0.02 → 0.10 (compensate for entropy sum→mean
+    # change), → 0.05 (compensate for LR drop 2e-5 → 1e-5).
+    #
+    # When LR was halved, the policy gradient effectively shrank but the
+    # entropy term magnitude didn't change — the entropy bonus went from
+    # ~20× the policy gradient to ~40×. Result: at lower LR the policy
+    # couldn't update fast enough to fight the entropy push, so it
+    # drifted toward random behavior (entropy rose 1.83 → 2.02 over a
+    # few hours, win/Cmp slid). Halving entropy_coeff restores the
+    # policy/entropy balance to where it was at LR=2e-5.
+    "entropy_coeff": 0.05,
     "value_loss_coeff": 0.5,
     "max_grad_norm": 0.5,
     "epochs_per_update": 4,

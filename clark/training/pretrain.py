@@ -79,18 +79,22 @@ def pretrain(
             _ckpt = _torch.load(output_path, map_location="cpu", weights_only=False)
             agent = ClarkAgent.load(output_path, **agent_kwargs)
             start_episode = int(_ckpt.get("episode", 0)) + 1
-            # Force live PPO_DEFAULTS LR onto the resumed optimizer. Without
-            # this the saved hparams (which include the old LR) silently
-            # override the current default, so changing PPO_DEFAULTS["lr"]
-            # has no effect on resumed runs.
+            # Force live PPO_DEFAULTS hparams onto the resumed agent.
+            # Without this, the saved hparams from the checkpoint silently
+            # override the current defaults — changing any PPO_DEFAULTS
+            # value has no effect on resumed runs. We override LR (rebuild
+            # optimizer param_groups) and other scalar PPO hparams (used
+            # by reference in _update_single_buffer).
             from clark.agent.ppo import PPO_DEFAULTS as _PPO_DEFAULTS
-            new_lr = float(_PPO_DEFAULTS["lr"])
-            if abs(agent.hparams.get("lr", new_lr) - new_lr) > 1e-12:
-                old_lr = agent.hparams["lr"]
-                agent.hparams["lr"] = new_lr
-                for g in agent.optimizer.param_groups:
-                    g["lr"] = new_lr
-                print(f"  [Resume] LR override: {old_lr:.1e} -> {new_lr:.1e}")
+            for hp_key, hp_default in _PPO_DEFAULTS.items():
+                if not isinstance(hp_default, (int, float)): continue
+                cur = agent.hparams.get(hp_key, hp_default)
+                if abs(float(cur) - float(hp_default)) > 1e-12:
+                    agent.hparams[hp_key] = hp_default
+                    print(f"  [Resume] hparam override: {hp_key} {cur} -> {hp_default}")
+                    if hp_key == "lr":
+                        for g in agent.optimizer.param_groups:
+                            g["lr"] = float(hp_default)
             print(f"  [Resume] Loaded checkpoint — resuming at episode {start_episode}/{n_episodes}")
         except Exception as e:
             print(f"  [Resume] Could not load checkpoint ({e}) — starting fresh.")
@@ -393,18 +397,22 @@ def pretrain_batched(
             _ckpt = _torch.load(output_path, map_location="cpu", weights_only=False)
             agent = ClarkAgent.load(output_path, **agent_kwargs)
             start_episode = int(_ckpt.get("episode", 0)) + 1
-            # Force live PPO_DEFAULTS LR onto the resumed optimizer. Without
-            # this the saved hparams (which include the old LR) silently
-            # override the current default, so changing PPO_DEFAULTS["lr"]
-            # has no effect on resumed runs.
+            # Force live PPO_DEFAULTS hparams onto the resumed agent.
+            # Without this, the saved hparams from the checkpoint silently
+            # override the current defaults — changing any PPO_DEFAULTS
+            # value has no effect on resumed runs. We override LR (rebuild
+            # optimizer param_groups) and other scalar PPO hparams (used
+            # by reference in _update_single_buffer).
             from clark.agent.ppo import PPO_DEFAULTS as _PPO_DEFAULTS
-            new_lr = float(_PPO_DEFAULTS["lr"])
-            if abs(agent.hparams.get("lr", new_lr) - new_lr) > 1e-12:
-                old_lr = agent.hparams["lr"]
-                agent.hparams["lr"] = new_lr
-                for g in agent.optimizer.param_groups:
-                    g["lr"] = new_lr
-                print(f"  [Resume] LR override: {old_lr:.1e} -> {new_lr:.1e}")
+            for hp_key, hp_default in _PPO_DEFAULTS.items():
+                if not isinstance(hp_default, (int, float)): continue
+                cur = agent.hparams.get(hp_key, hp_default)
+                if abs(float(cur) - float(hp_default)) > 1e-12:
+                    agent.hparams[hp_key] = hp_default
+                    print(f"  [Resume] hparam override: {hp_key} {cur} -> {hp_default}")
+                    if hp_key == "lr":
+                        for g in agent.optimizer.param_groups:
+                            g["lr"] = float(hp_default)
             print(f"  [Resume] Loaded checkpoint — resuming at episode {start_episode}/{n_episodes}")
         except Exception as e:
             print(f"  [Resume] Could not load checkpoint ({e}) — starting fresh.")
