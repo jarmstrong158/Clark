@@ -36,3 +36,6 @@ clark/data/facilities/
 
 # Local-only test outputs
 *.log
+
+# Profiler measurement logs (transient run artifacts)
+proflog_*.txt

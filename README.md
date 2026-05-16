@@ -144,7 +144,26 @@ cd Clark
 pip install -e .
 ```
 
-### Scaffold and validate a facility config
+### Set up a facility — the wizard (recommended)
+
+For most users, the setup wizard is the fastest path from "describe my
+warehouse" to a validated config and a kicked-off fine-tune, with no YAML
+editing:
+
+```bash
+clark wizard
+# ...or double-click "Run Clark Wizard.bat" (Windows)
+```
+
+It opens a local web UI that walks through warehouse archetype, volume
+profile (per-season order ranges, busiest weekday), and operational
+priorities (OT tolerance, incomplete-order severity, stockout severity,
+filler tolerance, backlog tolerance). It validates as you go (catching
+broken combinations like OT-cost dominating incomplete-cost), generates
+the YAML, and can launch the fine-tune subprocess. Sessions save and
+resume.
+
+### Scaffold and validate a facility config (advanced / manual)
 
 ```bash
 # Scaffold a config from a built-in template
@@ -181,11 +200,27 @@ clark plan \
   --date 2026-06-01
 ```
 
+### Tests
+
+```bash
+# Full suite from the repo root (pytest config in pyproject.toml)
+pytest
+```
+
+Coverage targets the silent-regression risks — symlog value-target
+math, reward/crunch-cap bookkeeping, the action-mask no-NaN
+invariant, worker OPH, config validation, synthetic-config
+generation, sampler distribution-equivalence, and a full-day env
+smoke loop.
+
 ---
 
 ## CLI reference
 
 ```
+clark wizard                       Launch the facility setup wizard (web UI).
+  --port                  N        Port to serve on (default: 8090)
+  --sessions-dir          PATH     Where saved wizard sessions live
 clark init <output.yaml>           Scaffold a facility config from a template.
 clark validate <config.yaml>       Validate against schema and clark_limits.
 
@@ -271,6 +306,10 @@ clark/
     log_schema.py
   dashboard/
     dashboard.html          # Single-file browser dashboard
+  wizard/
+    presets.json            # Archetype + pain-point + validation library
+    index.html              # Vanilla-JS setup wizard UI
+    wizard.bat              # Double-click launcher
   data/
     configs/                # Example facility YAMLs
     checkpoints/            # (gitignored) trained models
@@ -279,7 +318,9 @@ clark/
 
 api/main.py                 # FastAPI server
 cli/main.py                 # `clark` CLI entry point
+tests/                      # pytest suite (`pytest` from repo root)
 
+Run Clark Wizard.bat        # Double-click entry point for the setup wizard
 NOTE.md                     # Canonical design doc — read before touching code
 docs/ARCHITECTURE.md        # Public-facing architecture reference
 CLOUD_ARCHITECTURE.md       # Production deployment design
