@@ -19,6 +19,22 @@ clark = "cli.main:app"
 [tool.setuptools.packages.find]
 include = ["clark*", "cli*"]
 
+# Non-.py assets must ship in the wheel. Without this, `pip install`
+# (non-editable) silently omits facility configs, the wizard UI, and
+# the dashboard — every external review's "packaging gap" finding.
+# Editable installs masked it because they point at the source tree.
+[tool.setuptools.package-data]
+clark = [
+    "config/*.yaml",
+    "data/configs/*.yaml",
+    "wizard/*.json",
+    "wizard/*.html",
+    "wizard/*.bat",
+    "dashboard/*.html",
+    "dashboard/*.bat",
+    "dashboard/*.png",
+]
+
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"

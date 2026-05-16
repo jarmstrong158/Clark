@@ -1,0 +1,39 @@
+name: CI
+
+# Passing tests must not depend on local discipline. This runs the full
+# suite on every push/PR so a contract drift like the select_action_from_dict
+# 5-tuple-vs-4-unpack bug (which shipped to master because nothing enforced
+# the tests) fails in CI instead of in someone's `clark plan`.
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install (CPU torch, editable)
+        run: |
+          python -m pip install --upgrade pip
+          # CPU-only torch keeps the CI image small and fast; the suite
+          # does not require CUDA.
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -e .
+
+      - name: Run test suite
+        run: pytest
