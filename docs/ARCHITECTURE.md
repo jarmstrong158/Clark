@@ -114,7 +114,7 @@ Outputs
 | Cross-attention layers | 1 |
 | Attention heads | 8 |
 | LSTM hidden size | 512 |
-| TBPTT chunk size | 16 |
+| TBPTT chunk size | 64 |
 | Approx parameters | ~18M |
 | Architecture version tag | `clark-v2` |
 
@@ -124,7 +124,7 @@ Every checkpoint embeds an `arch_version` field. Loading a checkpoint with a mis
 
 Two masks are computed per step from facility state and applied as `-1e9` fills before softmax:
 
-- **Assignment mask** — shape `(N, M)`, `True` where worker `i` is eligible for task `j`. Encodes absence, OT-only-pick-and-pack restriction, shift exhaustion, pack-only workers, per-task eligibility, management quota gating, cycle-count eligibility, and restock-level-driven gating.
+- **Assignment mask** — shape `(N, M)`, `True` where worker `i` is eligible for task `j`. Encodes absence, OT-only-pick-and-pack restriction (with a restock exception when stock is critically low so OT can't deadlock on an empty warehouse), shift exhaustion, pack-only workers, per-task eligibility, management quota gating, cycle-count eligibility, restock-level-driven gating, and pick-buffer-capacity gating (pick is masked off when picked-but-unpacked orders exceed the cart-space proxy, forcing pack/restock — with a stranded-worker fallback that re-enables pick rather than emit an all-False row). Idle is deliberately invalid in the normal branch (only reachable via the absent / shift-exhausted branches) so a deterministic-at-init policy can't collapse to "everyone idle" forever.
 - **Hustle mask** — shape `(N, 2)`. Column 0 (no-hustle) is always valid for non-absent workers; column 1 (hustle) is `True` only when the worker hasn't hit their daily hustle cap and isn't absent.
 
 Both masks are applied at sample time AND during PPO log-prob recomputation, so the policy distribution is consistent across rollout and update.
@@ -153,9 +153,11 @@ A 3-stage curriculum advances by share of total configs:
 
 The synthetic generator stays within bounds defined by `clark/config/clark_limits.yaml`. Configs outside those bounds are explicitly out-of-distribution; expanding the limits requires retraining.
 
+**Feasibility-bounded volume.** Generated daily order volume is tied to the paired workforce's throughput, not sampled independently. Comfortable capacity ≈ `N × avg_oph × 9 × 0.22` (the 0.22 factor is empirically calibrated — every order needs a sequential pick *and* pack labor unit, minus restock/management/break/complexity overhead and the env's pick→pack coordination cost). Every generated season's peak is hard-capped at `comfortable × 1.25` (max-OT rescue headroom); peak staffing, when present, is additional safety margin and is deliberately *not* counted toward feasibility (it is stage-probabilistic and month-specific). This guarantees every sampled year is winnable with reasonable OT while still producing genuinely demanding peak days. Prior to this, the curriculum emitted configs whose volume physically exceeded workforce capacity (~2× too optimistic), and the agent was being graded on unwinnable years — a ceiling no amount of training could break.
+
 ### Fine-tuning (per facility)
 
-Fine-tuning loads the foundation checkpoint and runs 200–500 episodes on a single user-supplied `FacilityConfig`. Default learning rate drops to `5e-6` (vs `1e-5` to `5e-5` in pre-train, depending on stage). Encoder layers can optionally be frozen via `--freeze-encoder` to prevent catastrophic forgetting on facilities very different from the pre-training distribution.
+Fine-tuning loads the foundation checkpoint and runs 200–500 episodes on a single user-supplied `FacilityConfig`. Default learning rate is `5e-5` (vs `1e-5` in pre-train). Encoder layers can optionally be frozen via `--freeze-encoder` to prevent catastrophic forgetting on facilities very different from the pre-training distribution.
 
 A fresh-init Clark can also be trained directly on a single facility (no foundation), but this requires substantially more episodes — comparable to training Jack from scratch.
 
@@ -167,14 +169,15 @@ A fresh-init Clark can also be trained directly on a single facility (no foundat
 | `gamma` | **0.999** | Effective horizon ~1000 steps (≈2 simulated days) — sized for the 13,050-step year |
 | `gae_lambda` | **0.98** | Effective TD horizon ~50 steps (≈one full day) |
 | `clip_epsilon` | 0.2 | Policy ratio clip — applied per (worker × head), not on the joint sum |
-| `entropy_coeff` | 0.10 | Compensates for the entropy mean-over-workers normalization (see [Per-worker mean entropy](#per-worker-mean-entropy)) |
+| `entropy_coeff` | 0.05 | Compensates for the entropy mean-over-workers normalization; halved from 0.10 when `lr` dropped 2e-5→1e-5 so the entropy bonus didn't dominate the shrunken policy gradient (see [Per-worker mean entropy](#per-worker-mean-entropy)) |
 | `value_loss_coeff` | 0.5 | |
 | `max_grad_norm` | 0.5 | |
 | `epochs_per_update` | 4 | |
-| `lr` | **2e-5** | Lowered from 5e-5 after a long run plateaued at clip% ~20%; 2e-5 keeps clip in the healthy 8-15% range |
+| `vf_clip` | 0.2 | PPO-style value-prediction clip, applied **in symlog space**. Bounds the per-update value-head step (see [Symlog value-target compression](#symlog-value-target-compression)) |
+| `lr` | **1e-5** | 5e-5 → 2e-5 → 1e-5. Second drop after a 21-hr run hit best-ever metrics then showed 12-hr monotonic drift; the lower LR tightens the trust region around what works |
 | Update cadence | per day boundary | matches Jack's daily-update strategy |
-| Reward clip (per step) | ±20,000 | end-of-day single-step penalties (`per_order_incomplete = -10 × N_unshipped`) can legitimately hit -7000 on small-N disasters; tighter clips were masking catastrophic-day signal |
-| Returns clip (post-GAE) | ±500,000 | guards against numerical blow-up while letting catastrophic-year signals reach the gradient |
+| Reward clip (per step) | ±20,000 | guards single-step numerical blow-up; the dominant end-of-day penalties are themselves bounded at the source (`per_order_incomplete` capped at `-10 × min(N, 50)`; cumulative `side_project_during_crunch` capped at -5000/day) |
+| Returns clip (post-GAE) | ±500,000 | guards numerical blow-up; symlog compression (below) is the primary mechanism that keeps catastrophic-year signal learnable |
 | AMP | bf16 on CUDA | with explicit fp16 fallback for hardware without bf16 |
 | Old log-prob storage | fp32 | bf16 quantization noise is comparable to `clip_epsilon` |
 | Dropout | **0.0** | Cross-rollout/update dropout-mask difference would saturate `clip_epsilon` even with frozen weights |
@@ -187,36 +190,82 @@ The standard PPO importance-sampling ratio `exp(new_log_prob - old_log_prob)` is
 
 The motivation is variance scaling. A naive joint ratio sums 2N independent log-prob deltas; even if each per-worker delta has tiny stdev (~0.05), the joint sum has stdev `~0.05 × sqrt(2N)`, and `exp` of that exceeds the `clip_epsilon=0.2` boundary at N≥10. The clip threshold then saturates *structurally* — not because of a bad policy update, but because the dimensionality of the action space exceeded the trust region. Per-worker ratio (this is the IPPO formulation; see [Independent Learning All You Need in StarCraft Multi-Agent Challenge](https://arxiv.org/pdf/2011.09533)) keeps the per-decision ratio variance independent of N.
 
-### EMA running return normalization
+### Symlog value-target compression
 
-The value head is a simple two-layer MLP (`Linear → Tanh → Linear`). Return normalization for the value loss is handled separately by an EMA of mean/var maintained on the agent (`_ret_mean`, `_ret_var`):
+The value head is a simple two-layer MLP (`Linear → Tanh → Linear`). Value targets span ~8 orders of magnitude — a normal day scores in the single digits while a catastrophic one can reach -120,000 — and no fixed-scale normalizer kept the head learnable across that range. The recurring failure mode was **value-head saturation**: the output-layer weights blew out trying to represent the range (observed `value_head.2.weight` std ≈ 14 in a saturated checkpoint vs ≈ 0.08 healthy), value estimates collapsed into noise, and policy improvement stalled. It recurred three times under EMA-only normalization; resetting the head only treated the symptom.
+
+The fix is symlog target compression (the [DreamerV3](https://arxiv.org/abs/2301.04104) recipe). Targets are transformed by a reversible curve that squashes large magnitudes and barely touches small ones:
 
 ```
-batch_mean ← returns.mean()
-batch_var  ← returns.var()
-_ret_mean  ← (1 - β) × _ret_mean + β × batch_mean
-_ret_var   ← (1 - β) × _ret_var  + β × batch_var
-σ          ← sqrt(_ret_var) + 1e-8
-value_loss ← MSE((values - _ret_mean) / σ, (returns - _ret_mean) / σ)
+symlog(x) = sign(x) · log(1 + |x|)          # compress (e.g. -120,000 → ≈ -11.7)
+symexp(y) = sign(y) · (exp(|y|) - 1)         # decompress, |y| clamped ≤ 20
+
+returns are symexp'd before GAE; the value loss is computed in symlog space:
+  v_loss = max( (v − symlog(R))²,  (v_clip − symlog(R))² )   # PPO-style, vf_clip = 0.2
 ```
 
-with β = 0.01 (~100-update half-life), updated **once per PPO update call, not per epoch**.
+The head only ever learns the compressed signal, bounded by construction to roughly ±13 — fully inside its natural operating range. Combined with `vf_clip` (bounding the per-update value step in symlog space), the saturation pathology has not recurred across thousands of episodes since.
 
-PopArt was tried earlier in development and removed. The multi-task PopArt design ([DeepMind 2018](https://arxiv.org/abs/1809.04474)) didn't fit our single-policy / per-day update / single-trajectory-buffer setting — μ/σ oscillated chasing per-day batch noise and the value head ended up chasing moving targets across PPO update cycles.
-
-Per-batch standardization (the vanilla PPO default) was also tried and rejected: with TBPTT chunks of 64 correlated steps, σ inside a chunk is tiny (the steps are temporally adjacent and rewards are highly correlated), making the value loss explode and producing μ that moved chunk-to-chunk.
-
-The EMA approach gives the value head a stable normalizer it can actually learn against. The `_ret_mean` / `_ret_var` are intentionally not saved in the checkpoint — they re-warm in ~50-100 updates after a resume, which is fast enough that adding them to the save format isn't worth the migration complexity.
+**Rejected alternatives.** *PopArt* ([DeepMind 2018](https://arxiv.org/abs/1809.04474)) didn't fit the single-policy / per-day update / single-trajectory-buffer setting — μ/σ oscillated chasing per-day batch noise. *Per-batch standardization* (vanilla PPO) explodes here: TBPTT chunks of 64 correlated steps have tiny intra-chunk σ. *EMA-only normalization* (β=0.01 running mean/var, the prior approach) was an improvement on both but still let the head saturate whenever the return distribution shifted faster than the EMA could track — symlog bounds the target by construction instead of chasing a moving normalizer, which is why it finally held.
 
 ### Per-worker mean entropy
 
 The entropy bonus is averaged over workers, not summed. With sum-over-workers the entropy magnitude scaled with N (~7 for N=8), dwarfing the policy gradient (~0.005) — the optimizer was effectively just being told to spread the policy. Per-worker mean keeps the bonus magnitude consistent across N=5 vs N=25 facilities.
 
-The `entropy_coeff = 0.10` is set ~5× higher than typical PPO defaults to compensate for the mean-over-workers normalization (which is ~Nx smaller in absolute terms than sum-over-workers).
+The `entropy_coeff = 0.05` is set well above typical PPO defaults to compensate for the mean-over-workers normalization (which is ~Nx smaller in absolute terms than sum-over-workers). It was halved from 0.10 when `lr` dropped 2e-5→1e-5: halving the LR shrank the policy gradient without changing the entropy term, so the bonus went from ~20× to ~40× the policy gradient and the policy drifted toward random. Halving `entropy_coeff` restored the balance.
 
 ### Assignment logits scaled by `1/√d_model`
 
 Assignment logits come from `W_final @ T.T`. With both factors at gain=√2 orthogonal init, the raw matmul output magnitude scales with √d_model (~22 at d_model=512), producing near-deterministic softmax at init and immediate entropy collapse. The matmul is divided by `√d_model` (the same trick scaled-dot-product attention uses for its scores) so initial logits are O(1) and softmax is well-tempered. No learnable scaler — earlier experiments with one ended up either freezing gradients (small init) or saturating (large init).
+
+---
+
+## Reward Design
+
+The reward function is the primary behavior lever. Weights live in `FacilityConfig.rewards` (overridable per facility); the env applies them in `facility_env.py`. Two mechanisms are load-bearing enough to call out architecturally:
+
+### Filler-vs-orders priority
+
+"Filler" tasks (side_project, loading, training, quality_check, returns_processing, receiving) are work that doesn't ship today's orders. The agent must not do them while orders are at risk. Three coupled controls enforce this:
+
+1. **No "look busy" floor.** `per_productive_hour` (the small positive reward for any non-idle work) is *not* paid for filler tasks — only for order-flow and management work. Filler is reward-neutral by default, not reward-positive. (Previously the floor let a pure-filler day net positive reward even on a grade-F day.)
+2. **Severity-scaled crunch penalty.** When pending order pressure exceeds 10%, filler incurs `side_project_during_crunch × max(1.0, pending_pct × 5.0)` — a flat floor up to ~20% backlog, then a linear ramp to 5× at 100% pending. Acute backlog is punished proportionally harder than chronic.
+3. **Per-day crunch cap.** Cumulative crunch penalty is bounded at **-5000/day**. Beyond that the signal is already saturated; the cap prevents a single pathological day from injecting an extreme-magnitude tail that destabilizes the value function (even with symlog upstream).
+
+### Bounded catastrophic penalties
+
+`per_order_incomplete` is capped at `-10 × min(N_unshipped, 50)` (max -500/day) rather than scaling unbounded with unshipped count. Uncapped, a small-N disaster produced a secondary mode in the return distribution that re-saturated the value head. Capping at the source is cheaper and more stable than relying on downstream clips alone.
+
+These were arrived at through a sequenced, attribution-disciplined debugging arc (one or two changes per restart, never bundled) and an independent multi-agent audit pattern — see the context-keeper decision log (`dec-011` … `dec-015`) for the full rationale and rejected alternatives.
+
+---
+
+## Facility Setup Wizard
+
+`clark wizard` launches a local web UI (stdlib `http.server`, vanilla JS, zero new dependencies — same pattern as the dashboard) that walks a non-technical warehouse operator from "describe my facility" to a validated `FacilityConfig` and a kicked-off fine-tune, with no YAML editing.
+
+- **`clark/wizard/presets.json`** is the single source of truth: archetypes, pain-point questions, and validation rules. Each question maps user-friendly choices to specific reward-weight deltas via a hand-curated table — **no LLM calls at runtime**, so refining the question library is a content edit, not an engineering change.
+- **Flow:** name/resume → archetype → volume profile (per-intensity actual order ranges + month/weekday shape) → pain-point questions (OT tolerance, incomplete severity, stockout severity, filler tolerance, backlog tolerance) → review with defensive validation → generate YAML → kick off fine-tune subprocess.
+- **Endpoints:** `/presets`, `/sessions` (GET/POST/by-id, save+resume), `/validate` (catches broken weight combos, e.g. OT cost dominating incomplete cost), `/generate` (materializes the YAML), `/train/start` + `/train/{id}/status` (subprocess + liveness).
+- Generated configs land under `clark/data/configs/user/`; per-job logs under `clark/data/logs/user/{job_id}/`. Launchers: `Run Clark Wizard.bat` (root, double-click) and `clark/wizard/wizard.bat`.
+
+---
+
+## Testing
+
+`pytest` from the repo root runs the full suite (config in `pyproject.toml` under `[tool.pytest.ini_options]`). Coverage targets the silent-regression risks — code where a refactor breaks training without an obvious error:
+
+| Area | What's pinned |
+|---|---|
+| `test_symlog.py` | symlog/symexp exact round-trip, sign preservation, monotonicity, overflow clamps |
+| `test_rewards.py` | `_add_reward` bookkeeping, the crunch cap, the `max(1.0, pending_pct×5)` scale formula |
+| `test_worker.py` | OPH multiplier chain (hustle/fatigue/soreness stack multiplicatively), eligibility |
+| `test_actions.py` | the no-all-False-row invariant (an all-False mask NaNs the policy softmax), business-rule encoding |
+| `test_schema.py` | `validate()` error/warning contract + YAML round-trip |
+| `test_synthetic_gen.py` | every generated config validates; volume never exceeds the OT-rescue ceiling; no inverted ranges |
+| `test_env_smoke.py` | full-day reset+step loop stays finite and terminates |
+
+The synthetic-gen tests have already caught one latent crash (an inverted volume range that would have killed a stage-3 run mid-flight) before it reached training.
 
 ---
 
@@ -260,7 +309,7 @@ Queue a fine-tune job.
 ```json
 {
   "episodes": 500,
-  "lr": 5e-6,
+  "lr": 5e-5,
   "freeze_encoder": false
 }
 ```
