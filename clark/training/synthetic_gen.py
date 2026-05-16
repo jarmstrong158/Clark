@@ -332,37 +332,59 @@ def _generate_volume(n_workers: int, avg_oph: float) -> VolumeConfig:
     seasonal multiplier (up to 3x) stacks on top — so a peak-summer day
     can be physically demanding but never impossible.
     """
-    # Per-worker per-day capacity: base_oph × shift_hours × 0.4 (split across
-    # pick + pack + restock + management; you can't pick while packing).
-    capacity_per_worker = max(20.0, avg_oph * 9.0 * 0.4)
-    # Sample the SUMMER peak multiplier first so we can cap winter to keep
-    # peak-summer achievable. Without this cap winter * peak_mult could
-    # easily exceed 3× capacity, which is physically unwinnable and trains
-    # the model to "panic OT" / "give up" on impossible days. That bad
-    # pattern then bleeds into days that ARE achievable.
+    # ── Feasibility-bounded capacity (Fork C) ────────────────────────────
+    # Three-agent audit (consensus) found the win-rate ceiling was NOT a
+    # training problem: the curriculum was sampling configs whose order
+    # volume physically exceeded what the paired workforce could clear.
+    # Empirical anchor from 300 days of grade data: NO A-grade day ever
+    # exceeded ~1226 orders, yet this function was emitting up to 2000 for
+    # the same workforce class. Configs with 1700-2100 orders graded 84% F
+    # regardless of how well the policy played.
+    #
+    # Why the old model was ~2x optimistic: it used avg_oph (the PACK rate)
+    # times hours times 0.4, but every order needs BOTH a pick and a pack
+    # labor unit (sequential pipeline), plus restock / management / breaks /
+    # call-off / complexity overhead and the env's pick->pack coordination
+    # cost (buffer caps, pack starvation, audit step). Theory alone says
+    # ~0.37; the env's real achievable factor measured against the 1226
+    # empirical ceiling is ~0.22. Trust the data over the theory.
+    #
+    # Fork C: comfortable capacity is what the workforce clears in a normal
+    # shift with no OT. The HARD ceiling on any generated volume is what max
+    # OT can rescue on top of that (~+25%). Peak staffing, when a config has
+    # it, is then pure safety margin rather than something we bank on (it is
+    # stage-probabilistic and month-specific, so it must not be load-bearing
+    # for feasibility). Result: hard days still exist (good training
+    # pressure) but every generated year is winnable.
+    comfortable_cap_pw = max(12.0, avg_oph * 9.0 * 0.22)
+    OT_RESCUE_MULT = 1.25  # max-OT headroom on top of a normal shift
+    rescue_ceiling_pw = comfortable_cap_pw * OT_RESCUE_MULT
+    facility_comfortable = n_workers * comfortable_cap_pw
+    facility_rescue = n_workers * rescue_ceiling_pw
+
     peak_mult = random.uniform(1.5, 3.0)
-    # Target: even the SUMMER HIGH stays at or under ~110% capacity.
-    # winter_high * peak_mult <= n_workers * capacity * 1.10
-    # → winter_high_max = n_workers * capacity * 1.10 / peak_mult
-    winter_hi_cap = n_workers * capacity_per_worker * 1.10 / peak_mult
-    fraction_hi = random.uniform(0.85, 1.00)
-    fraction_lo = random.uniform(0.50, 0.70)
-    base_hi = int(n_workers * capacity_per_worker * fraction_hi)
-    base_lo = int(n_workers * capacity_per_worker * fraction_lo)
-    # Apply the peak-aware cap so we don't generate impossible summers.
-    base_hi = min(base_hi, int(winter_hi_cap))
+    # Winter (comfortable) baseline: a fraction of comfortable capacity, so
+    # normal months are routinely winnable without OT.
+    fraction_hi = random.uniform(0.70, 0.95)
+    fraction_lo = random.uniform(0.45, 0.65)
+    # Cap winter so that winter_hi * peak_mult lands at (not above) the
+    # rescue ceiling — summer is demanding but OT-rescuable, never impossible.
+    winter_hi_cap = facility_rescue / peak_mult
+    base_hi = min(int(facility_comfortable * fraction_hi), int(winter_hi_cap))
+    base_lo = int(facility_comfortable * fraction_lo)
     base_lo = min(base_lo, max(30, base_hi - 50))
     winter_lo = max(30, base_lo)
-    winter_hi = max(winter_lo + 20, min(base_hi, 2000))
+    winter_hi = max(winter_lo + 20, base_hi)
 
-    # Spring/summer multiplier — peak_mult was sampled above so we could
-    # cap winter accordingly. Don't re-roll it here.
+    # Seasonal scaling. Every HIGH end is hard-clamped to the rescue ceiling
+    # so no season can produce an unwinnable day.
+    rc = int(facility_rescue)
     spring_lo = int(winter_lo * 1.2)
-    spring_hi = int(winter_hi * 1.5)
+    spring_hi = min(int(winter_hi * 1.5), rc)
     summer_lo = int(winter_lo * peak_mult * 0.9)
-    summer_hi = min(int(winter_hi * peak_mult), 2000)
+    summer_hi = min(int(winter_hi * peak_mult), rc)
     fall_lo = int(winter_lo * 1.1)
-    fall_hi = int(winter_hi * 1.3)
+    fall_hi = min(int(winter_hi * 1.3), rc)
 
     # Normalize every season range so the invariant lo < hi ALWAYS holds.
     # Bug history: summer_hi was clamped to 2000 but summer_lo was not, so

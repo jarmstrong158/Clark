@@ -81,6 +81,27 @@ def test_volume_ranges_never_inverted(stage, trial):
         assert hi <= 2000, f"{month} high {hi} above ceiling"
 
 
+@pytest.mark.parametrize("stage", [1, 2, 3])
+@pytest.mark.parametrize("trial", range(40))
+def test_volume_never_exceeds_ot_rescue_ceiling(stage, trial):
+    """Fork C invariant (three-agent audit consensus): no generated
+    season's HIGH volume may exceed what the workforce can clear with
+    max-OT headroom. Pre-fix the generator emitted up to 2000 orders for
+    workforces whose empirical A-grade ceiling was ~1226, so the model
+    was graded on physically unwinnable years. The rescue ceiling is
+    n_workers * avg_oph * 9 * 0.22 * 1.25; allow a small rounding margin."""
+    cfg = generate_random_facility(stage=stage)
+    avg_oph = sum(w.base_oph for w in cfg.workers) / max(1, len(cfg.workers))
+    comfortable_pw = max(12.0, avg_oph * 9.0 * 0.22)
+    rescue_ceiling = len(cfg.workers) * comfortable_pw * 1.25
+    worst_hi = max(hi for _lo, hi in cfg.volume.seasonal_ranges.values())
+    assert worst_hi <= rescue_ceiling + 5, (
+        f"stage={stage} trial={trial}: peak volume {worst_hi} exceeds the "
+        f"OT-rescue ceiling {rescue_ceiling:.0f} for {len(cfg.workers)} "
+        f"workers @ avg_oph={avg_oph:.1f} -- unwinnable config generated"
+    )
+
+
 def test_generate_random_facility_can_reset_an_env():
     """The ultimate integration check for the volume bug: a generated
     config must actually drive FacilityEnv.reset() without raising.
