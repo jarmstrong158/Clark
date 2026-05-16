@@ -1,0 +1,919 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Clark — Facility Wizard</title>
+<style>
+  :root {
+    --bg: #0f1419;
+    --panel: #1a1f29;
+    --panel-2: #232a36;
+    --border: #2d3748;
+    --text: #e2e8f0;
+    --muted: #8b95a7;
+    --accent: #4fd1c5;
+    --accent-hover: #38b2ac;
+    --selected: #2c5282;
+    --selected-border: #4fd1c5;
+    --error: #fc8181;
+    --warning: #f6ad55;
+    --success: #68d391;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg); color: var(--text);
+    min-height: 100vh;
+  }
+  header {
+    border-bottom: 1px solid var(--border);
+    padding: 16px 24px;
+    display: flex; align-items: center; justify-content: space-between;
+    background: var(--panel);
+  }
+  header h1 { margin: 0; font-size: 18px; font-weight: 600; }
+  header .session-info { font-size: 13px; color: var(--muted); }
+  main {
+    max-width: 880px;
+    margin: 0 auto;
+    padding: 32px 24px;
+  }
+  .step-indicator {
+    display: flex; gap: 8px; margin-bottom: 32px;
+  }
+  .step-dot {
+    flex: 1; height: 4px; border-radius: 2px;
+    background: var(--border);
+  }
+  .step-dot.active { background: var(--accent); }
+  .step-dot.done { background: var(--accent-hover); }
+  .step {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 32px;
+    display: none;
+  }
+  .step.active { display: block; }
+  .step h2 { margin: 0 0 8px 0; font-size: 22px; }
+  .step .step-help { color: var(--muted); margin-bottom: 24px; font-size: 14px; }
+  .option-card {
+    background: var(--panel-2);
+    border: 2px solid var(--border);
+    border-radius: 6px;
+    padding: 16px 20px;
+    margin-bottom: 12px;
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+  }
+  .option-card:hover { border-color: var(--accent-hover); }
+  .option-card.selected {
+    border-color: var(--selected-border);
+    background: var(--selected);
+  }
+  .option-card .label {
+    font-weight: 600; font-size: 15px; margin-bottom: 4px;
+  }
+  .option-card .desc {
+    color: var(--muted); font-size: 13px;
+  }
+  .input-row {
+    display: flex; gap: 12px; align-items: center; margin-bottom: 16px;
+  }
+  .input-row label {
+    min-width: 140px; color: var(--muted); font-size: 14px;
+  }
+  .input-row input[type="text"] {
+    flex: 1;
+    padding: 10px 12px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text);
+    font-size: 14px;
+    font-family: inherit;
+  }
+  .range-row {
+    display: flex; align-items: center; gap: 10px;
+  }
+  .range-row .range-label {
+    min-width: 110px; font-size: 14px;
+  }
+  .range-row input.range-input {
+    width: 120px;
+    padding: 8px 12px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text);
+    font-size: 14px;
+    font-family: inherit;
+  }
+  .nav {
+    display: flex; justify-content: space-between;
+    margin-top: 32px;
+  }
+  button {
+    padding: 10px 20px;
+    border-radius: 4px;
+    border: none;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  button.primary {
+    background: var(--accent); color: var(--bg);
+  }
+  button.primary:hover { background: var(--accent-hover); }
+  button.primary:disabled {
+    background: var(--border); color: var(--muted); cursor: not-allowed;
+  }
+  button.secondary {
+    background: transparent; color: var(--text);
+    border: 1px solid var(--border);
+  }
+  button.secondary:hover { border-color: var(--accent-hover); }
+  .validation-results {
+    margin-top: 16px;
+  }
+  .validation-item {
+    padding: 12px 16px;
+    border-radius: 4px;
+    margin-bottom: 8px;
+    font-size: 14px;
+  }
+  .validation-item.error {
+    background: rgba(252, 129, 129, 0.1);
+    border-left: 3px solid var(--error);
+  }
+  .validation-item.warning {
+    background: rgba(246, 173, 85, 0.1);
+    border-left: 3px solid var(--warning);
+  }
+  .validation-item.success {
+    background: rgba(104, 211, 145, 0.1);
+    border-left: 3px solid var(--success);
+  }
+  .summary-block {
+    background: var(--panel-2);
+    border-radius: 4px;
+    padding: 16px;
+    margin-top: 16px;
+    font-family: "SF Mono", Monaco, Consolas, monospace;
+    font-size: 12px;
+    color: var(--muted);
+    max-height: 300px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+  }
+  .sessions-list {
+    margin-top: 12px;
+  }
+  .session-row {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 10px 14px;
+    background: var(--panel-2);
+    border-radius: 4px;
+    margin-bottom: 6px;
+    font-size: 13px;
+  }
+  .session-row .name { font-weight: 500; }
+  .session-row .meta { color: var(--muted); font-size: 12px; }
+  .session-row button { padding: 4px 12px; font-size: 12px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Clark Facility Wizard</h1>
+  <div class="session-info">
+    <span id="facilityName">Untitled facility</span>
+    · <span id="sessionId">new session</span>
+    · <button class="secondary" style="padding: 4px 10px; font-size: 12px;" onclick="saveSession()">Save</button>
+  </div>
+</header>
+
+<main>
+
+  <div class="step-indicator">
+    <div class="step-dot" data-step="0"></div>
+    <div class="step-dot" data-step="1"></div>
+    <div class="step-dot" data-step="2"></div>
+    <div class="step-dot" data-step="3"></div>
+    <div class="step-dot" data-step="4"></div>
+  </div>
+
+  <!-- STEP 0: name + resume -->
+  <section class="step active" data-step="0">
+    <h2>Let's set up your warehouse</h2>
+    <p class="step-help">First, give this facility a name. You can save your progress and come back to finish later.</p>
+
+    <div class="input-row">
+      <label for="nameInput">Facility name</label>
+      <input type="text" id="nameInput" placeholder="e.g. Acme Fulfillment NJ" oninput="updateName(this.value)">
+    </div>
+
+    <div style="margin-top: 24px;">
+      <h3 style="font-size: 15px; color: var(--muted); margin-bottom: 8px;">Resume a saved session</h3>
+      <div id="sessionsList" class="sessions-list">
+        <div style="color: var(--muted); font-size: 13px;">Loading...</div>
+      </div>
+    </div>
+
+    <div class="nav">
+      <span></span>
+      <button class="primary" id="step0Next" onclick="goToStep(1)" disabled>Continue →</button>
+    </div>
+  </section>
+
+  <!-- STEP 1: archetype picker -->
+  <section class="step" data-step="1">
+    <h2>What kind of warehouse is this?</h2>
+    <p class="step-help">Pick the closest match — this sets sensible defaults that you'll be able to refine in the next steps.</p>
+    <div id="archetypes"></div>
+    <div class="nav">
+      <button class="secondary" onclick="goToStep(0)">← Back</button>
+      <button class="primary" id="step1Next" onclick="goToStep(2)" disabled>Continue →</button>
+    </div>
+  </section>
+
+  <!-- STEP 2: volume profile -->
+  <section class="step" data-step="2">
+    <h2>What does your volume look like?</h2>
+    <p class="step-help">Tell us your typical order volume and which months and days are heaviest. This shapes the workload Clark trains against — every facility's pattern is different.</p>
+
+    <h3 style="font-size: 15px; margin: 16px 0 6px 0;">Months</h3>
+    <p style="color: var(--muted); font-size: 13px; margin: 0 0 12px 0;">Click each month to cycle through <b>Slow</b> → <b>Normal</b> → <b>Peak</b>. (Default: all months Normal.)</p>
+    <div id="monthsGrid" style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px;"></div>
+
+    <h3 style="font-size: 15px; margin: 24px 0 6px 0;">What does each season look like?</h3>
+    <p style="color: var(--muted); font-size: 13px; margin: 0 0 12px 0;">Enter the daily order range you actually see in each season. Slow and Peak ranges only appear if you marked any months as such above.</p>
+    <div id="seasonRanges" style="display: flex; flex-direction: column; gap: 10px;">
+      <div class="range-row" data-bucket="slow" style="display: none;">
+        <span class="range-label" style="color: var(--accent); font-weight: 600;">Slow days</span>
+        <input type="text" class="range-input" id="slowLow" placeholder="low (e.g. 60)" inputmode="numeric"
+               oninput="onRangeChange('slow', 'low', this.value)">
+        <span style="color: var(--muted);">to</span>
+        <input type="text" class="range-input" id="slowHigh" placeholder="high (e.g. 100)" inputmode="numeric"
+               oninput="onRangeChange('slow', 'high', this.value)">
+        <span style="color: var(--muted); font-size: 12px;">orders/day</span>
+      </div>
+      <div class="range-row" data-bucket="normal">
+        <span class="range-label" style="color: var(--muted); font-weight: 600;">Normal days</span>
+        <input type="text" class="range-input" id="normalLow" placeholder="low (e.g. 200)" inputmode="numeric"
+               oninput="onRangeChange('normal', 'low', this.value)">
+        <span style="color: var(--muted);">to</span>
+        <input type="text" class="range-input" id="normalHigh" placeholder="high (e.g. 300)" inputmode="numeric"
+               oninput="onRangeChange('normal', 'high', this.value)">
+        <span style="color: var(--muted); font-size: 12px;">orders/day</span>
+      </div>
+      <div class="range-row" data-bucket="peak" style="display: none;">
+        <span class="range-label" style="color: #fc8181; font-weight: 600;">Peak days</span>
+        <input type="text" class="range-input" id="peakLow" placeholder="low (e.g. 300)" inputmode="numeric"
+               oninput="onRangeChange('peak', 'low', this.value)">
+        <span style="color: var(--muted);">to</span>
+        <input type="text" class="range-input" id="peakHigh" placeholder="high (e.g. 440)" inputmode="numeric"
+               oninput="onRangeChange('peak', 'high', this.value)">
+        <span style="color: var(--muted); font-size: 12px;">orders/day</span>
+      </div>
+    </div>
+
+    <h3 style="font-size: 15px; margin: 24px 0 6px 0;">Busiest weekday</h3>
+    <p style="color: var(--muted); font-size: 13px; margin: 0 0 12px 0;">Which day of the week typically gets the most orders? Pick "No clear peak" if it's evenly spread.</p>
+    <div id="weekdayPicker"></div>
+
+    <div class="nav">
+      <button class="secondary" onclick="goToStep(1)">← Back</button>
+      <button class="primary" id="step2Next" onclick="goToStep(3)" disabled>Continue →</button>
+    </div>
+  </section>
+
+  <!-- STEP 3: pain-points (was step 2) -->
+  <section class="step" data-step="3">
+    <h2>Tell us what matters to you</h2>
+    <p class="step-help">These questions translate your operational priorities into how the model values different outcomes during training. No "right" answers — pick what's true for your business.</p>
+    <div id="questions"></div>
+    <div class="nav">
+      <button class="secondary" onclick="goToStep(2)">← Back</button>
+      <button class="primary" id="step3Next" onclick="goToStep(4)" disabled>Review →</button>
+    </div>
+  </section>
+
+  <!-- STEP 4: validate + preview (was step 3) -->
+  <section class="step" data-step="4">
+    <h2>Review and validate</h2>
+    <p class="step-help">Here's the configuration Clark will train against. Validation flags anything that might cause issues.</p>
+
+    <h3 style="font-size: 14px; color: var(--muted); margin-bottom: 4px;">Validation</h3>
+    <div id="validationResults" class="validation-results"></div>
+
+    <h3 style="font-size: 14px; color: var(--muted); margin: 24px 0 4px 0;">Resulting reward weights</h3>
+    <div id="weightsPreview" class="summary-block"></div>
+
+    <h3 style="font-size: 14px; color: var(--muted); margin: 24px 0 4px 0;">Generated YAML preview</h3>
+    <div id="yamlPreview" class="summary-block" style="max-height: 240px;">Click <b>Generate config</b> to materialize the YAML.</div>
+
+    <div class="nav">
+      <button class="secondary" onclick="goToStep(3)">← Back</button>
+      <div>
+        <button class="secondary" id="generateBtn" onclick="generateYaml()">Generate config</button>
+        <button class="primary" id="trainBtn" onclick="startTraining()" disabled>Train on my facility</button>
+      </div>
+    </div>
+
+    <div id="trainStatus" style="margin-top: 24px;"></div>
+  </section>
+
+</main>
+
+<script>
+// ─── State ─────────────────────────────────────────────────────
+const MONTHS = [
+  "january", "february", "march",     "april",
+  "may",     "june",     "july",      "august",
+  "september","october", "november",  "december",
+];
+const WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday"];
+// Month intensity cycles through these values when user clicks
+const INTENSITIES = ["normal", "slow", "peak"];
+
+const state = {
+  sessionId: null,
+  facilityName: "",
+  selectedArchetype: null,
+  // Volume profile (step 2)
+  monthIntensity: {},   // monthName → "slow" | "normal" | "peak"
+  // Per-intensity actual ranges in orders/day. User enters the real
+  // numbers from their facility (e.g. slow=[60,100], normal=[200,300],
+  // peak=[300,440]) — no derived multipliers, captures asymmetric
+  // variance accurately.
+  seasonRanges: {
+    slow:   { low: null, high: null },
+    normal: { low: null, high: null },
+    peak:   { low: null, high: null },
+  },
+  busiestWeekday: null, // weekday name or "none"
+  // Pain-point answers (step 3)
+  answers: {},          // questionId → optionId
+  currentStep: 0,
+};
+let presets = null;     // loaded from /presets
+
+// ─── Boot ──────────────────────────────────────────────────────
+async function boot() {
+  try {
+    const r = await fetch("/presets");
+    presets = await r.json();
+  } catch (e) {
+    alert("Failed to load presets: " + e);
+    return;
+  }
+  renderArchetypes();
+  renderMonths();
+  renderWeekdays();
+  renderQuestions();
+  await refreshSessionsList();
+  // Restore in-flight from localStorage if we have one
+  const draft = localStorage.getItem("clark_wizard_draft");
+  if (draft) {
+    try {
+      const d = JSON.parse(draft);
+      if (d.facilityName) {
+        document.getElementById("nameInput").value = d.facilityName;
+        updateName(d.facilityName);
+        if (d.selectedArchetype) {
+          selectArchetype(d.selectedArchetype, false);
+        }
+        // Restore volume profile
+        if (d.seasonRanges) {
+          state.seasonRanges = d.seasonRanges;
+          ["slow", "normal", "peak"].forEach(b => {
+            const r = state.seasonRanges[b] || {};
+            const lo = document.getElementById(b + "Low");
+            const hi = document.getElementById(b + "High");
+            if (lo && r.low != null) lo.value = r.low;
+            if (hi && r.high != null) hi.value = r.high;
+          });
+        }
+        if (d.monthIntensity) {
+          state.monthIntensity = d.monthIntensity;
+          refreshMonthChips();
+          refreshSeasonRangeVisibility();
+        }
+        if (d.busiestWeekday) {
+          selectWeekday(d.busiestWeekday, false);
+        }
+        updateStep2NextEnabled();
+        Object.entries(d.answers || {}).forEach(([qid, oid]) =>
+          selectAnswer(qid, oid, false)
+        );
+      }
+    } catch {}
+  }
+}
+
+// ─── Step navigation ───────────────────────────────────────────
+function goToStep(n) {
+  document.querySelectorAll(".step").forEach(s => s.classList.remove("active"));
+  document.querySelector(`.step[data-step="${n}"]`).classList.add("active");
+  document.querySelectorAll(".step-dot").forEach((d, i) => {
+    d.classList.remove("active", "done");
+    if (i < n) d.classList.add("done");
+    if (i === n) d.classList.add("active");
+  });
+  state.currentStep = n;
+  // Review step is now step 4 (was 3 before volume step was inserted)
+  if (n === 4) runValidation();
+  persistDraft();
+}
+
+// ─── Name handling ─────────────────────────────────────────────
+function updateName(v) {
+  state.facilityName = v.trim();
+  document.getElementById("facilityName").textContent =
+    state.facilityName || "Untitled facility";
+  document.getElementById("step0Next").disabled = !state.facilityName;
+  persistDraft();
+}
+
+// ─── Archetype rendering ───────────────────────────────────────
+function renderArchetypes() {
+  const wrap = document.getElementById("archetypes");
+  wrap.innerHTML = "";
+  presets.archetypes.forEach(a => {
+    const card = document.createElement("div");
+    card.className = "option-card";
+    card.dataset.archetypeId = a.id;
+    card.innerHTML = `
+      <div class="label">${escapeHtml(a.label)}</div>
+      <div class="desc">${escapeHtml(a.description)}</div>
+    `;
+    card.onclick = () => selectArchetype(a.id);
+    wrap.appendChild(card);
+  });
+}
+
+function selectArchetype(id, persist = true) {
+  state.selectedArchetype = id;
+  document.querySelectorAll("#archetypes .option-card").forEach(c => {
+    c.classList.toggle("selected", c.dataset.archetypeId === id);
+  });
+  document.getElementById("step1Next").disabled = false;
+  if (persist) persistDraft();
+}
+
+// ─── Volume step ───────────────────────────────────────────────
+function renderMonths() {
+  const grid = document.getElementById("monthsGrid");
+  grid.innerHTML = "";
+  MONTHS.forEach(m => {
+    const chip = document.createElement("div");
+    chip.className = "month-chip";
+    chip.dataset.month = m;
+    chip.style.cssText = `
+      padding: 12px 8px;
+      border-radius: 4px;
+      background: var(--panel-2);
+      border: 2px solid var(--border);
+      text-align: center;
+      cursor: pointer;
+      font-size: 13px;
+      user-select: none;
+      transition: background 0.15s, border-color 0.15s;
+    `;
+    chip.onclick = () => cycleMonth(m);
+    grid.appendChild(chip);
+  });
+  // Default all months to "normal"
+  MONTHS.forEach(m => {
+    if (!state.monthIntensity[m]) state.monthIntensity[m] = "normal";
+  });
+  refreshMonthChips();
+}
+
+function cycleMonth(m) {
+  const cur = state.monthIntensity[m] || "normal";
+  const next = INTENSITIES[(INTENSITIES.indexOf(cur) + 1) % INTENSITIES.length];
+  state.monthIntensity[m] = next;
+  refreshMonthChips();
+  refreshSeasonRangeVisibility();
+  updateStep2NextEnabled();
+  persistDraft();
+}
+
+// Show/hide slow + peak range inputs depending on whether the user
+// has any months marked as such. Normal is always visible (it's the
+// baseline every facility has).
+function refreshSeasonRangeVisibility() {
+  const hasSlow = Object.values(state.monthIntensity).includes("slow");
+  const hasPeak = Object.values(state.monthIntensity).includes("peak");
+  document.querySelector('.range-row[data-bucket="slow"]').style.display = hasSlow ? "" : "none";
+  document.querySelector('.range-row[data-bucket="peak"]').style.display = hasPeak ? "" : "none";
+}
+
+function refreshMonthChips() {
+  document.querySelectorAll(".month-chip").forEach(chip => {
+    const m = chip.dataset.month;
+    const intensity = state.monthIntensity[m] || "normal";
+    chip.innerHTML = `<div style="font-weight: 600;">${m.charAt(0).toUpperCase() + m.slice(1, 3)}</div>
+                      <div style="font-size: 11px; color: var(--muted); margin-top: 2px;">${intensity}</div>`;
+    chip.style.borderColor = "var(--border)";
+    chip.style.background = "var(--panel-2)";
+    if (intensity === "peak") {
+      chip.style.borderColor = "#fc8181";
+      chip.style.background = "rgba(252, 129, 129, 0.1)";
+    } else if (intensity === "slow") {
+      chip.style.borderColor = "#4fd1c5";
+      chip.style.background = "rgba(79, 209, 197, 0.1)";
+    }
+  });
+}
+
+function renderWeekdays() {
+  const wrap = document.getElementById("weekdayPicker");
+  wrap.innerHTML = "";
+  const opts = [...WEEKDAYS, "none"];
+  opts.forEach(d => {
+    const btn = document.createElement("button");
+    btn.className = "secondary";
+    btn.style.marginRight = "6px";
+    btn.style.marginBottom = "6px";
+    btn.style.padding = "8px 14px";
+    btn.dataset.weekday = d;
+    btn.textContent = d === "none" ? "No clear peak" : d.charAt(0).toUpperCase() + d.slice(1);
+    btn.onclick = () => selectWeekday(d);
+    wrap.appendChild(btn);
+  });
+}
+
+function selectWeekday(d, persist = true) {
+  state.busiestWeekday = d;
+  document.querySelectorAll("#weekdayPicker button").forEach(b => {
+    if (b.dataset.weekday === d) {
+      b.style.background = "var(--selected)";
+      b.style.borderColor = "var(--selected-border)";
+      b.style.color = "var(--text)";
+    } else {
+      b.style.background = "transparent";
+      b.style.borderColor = "var(--border)";
+    }
+  });
+  updateStep2NextEnabled();
+  if (persist) persistDraft();
+}
+
+function onRangeChange(bucket, side, v) {
+  const n = parseInt(v, 10);
+  state.seasonRanges[bucket][side] = isFinite(n) && n > 0 ? n : null;
+  updateStep2NextEnabled();
+  persistDraft();
+}
+
+function isRangeValid(bucket) {
+  const r = state.seasonRanges[bucket];
+  return r.low != null && r.high != null && r.high >= r.low;
+}
+
+function updateStep2NextEnabled() {
+  // Required: normal range. Slow/peak only required if user marked any
+  // month with that intensity. Also need a weekday choice.
+  const needsSlow = Object.values(state.monthIntensity).includes("slow");
+  const needsPeak = Object.values(state.monthIntensity).includes("peak");
+  const ok =
+    isRangeValid("normal") &&
+    (!needsSlow || isRangeValid("slow")) &&
+    (!needsPeak || isRangeValid("peak")) &&
+    state.busiestWeekday;
+  document.getElementById("step2Next").disabled = !ok;
+}
+
+// ─── Question rendering ────────────────────────────────────────
+function renderQuestions() {
+  const wrap = document.getElementById("questions");
+  wrap.innerHTML = "";
+  presets.questions.forEach(q => {
+    const block = document.createElement("div");
+    block.style.marginBottom = "32px";
+    block.innerHTML = `
+      <h3 style="font-size: 16px; margin: 0 0 4px 0;">${escapeHtml(q.prompt)}</h3>
+      ${q.help ? `<p style="color: var(--muted); font-size: 13px; margin: 0 0 12px 0;">${escapeHtml(q.help)}</p>` : ""}
+    `;
+    q.options.forEach(opt => {
+      const card = document.createElement("div");
+      card.className = "option-card";
+      card.dataset.questionId = q.id;
+      card.dataset.optionId = opt.id;
+      const subtitleHTML = opt.subtitle
+        ? `<div class="desc" style="margin-top: 6px; line-height: 1.4;">${escapeHtml(opt.subtitle)}</div>`
+        : "";
+      card.innerHTML = `<div class="label">${escapeHtml(opt.label)}</div>${subtitleHTML}`;
+      card.onclick = () => selectAnswer(q.id, opt.id);
+      block.appendChild(card);
+    });
+    wrap.appendChild(block);
+  });
+}
+
+function selectAnswer(qid, oid, persist = true) {
+  state.answers[qid] = oid;
+  document.querySelectorAll(`#questions .option-card[data-question-id="${qid}"]`)
+    .forEach(c => {
+      c.classList.toggle("selected", c.dataset.optionId === oid);
+    });
+  // Enable Next once every question has an answer
+  const allAnswered = presets.questions.every(q => state.answers[q.id]);
+  document.getElementById("step3Next").disabled = !allAnswered;
+  if (persist) persistDraft();
+}
+
+// ─── Build the combined config ─────────────────────────────────
+function buildConfig() {
+  const arch = presets.archetypes.find(a => a.id === state.selectedArchetype);
+  const weights = { ...(arch ? arch.defaults.weights : {}) };
+  // Apply deltas from each answered question
+  for (const q of presets.questions) {
+    const optId = state.answers[q.id];
+    if (!optId) continue;
+    const opt = q.options.find(o => o.id === optId);
+    if (opt && opt.weight_deltas) {
+      for (const [k, v] of Object.entries(opt.weight_deltas)) {
+        // For now: deltas REPLACE archetype defaults, not add.
+        // Authoring presets so this is sensible is the curator's job.
+        weights[k] = v;
+      }
+    }
+  }
+  return {
+    facility_name: state.facilityName,
+    archetype: state.selectedArchetype,
+    archetype_defaults: arch ? arch.defaults : null,
+    volume_profile: {
+      season_ranges: state.seasonRanges,
+      month_intensity: state.monthIntensity,
+      busiest_weekday: state.busiestWeekday,
+    },
+    answers: state.answers,
+    resulting_weights: weights,
+  };
+}
+
+// ─── Validation (defensive layer) ──────────────────────────────
+async function runValidation() {
+  const cfg = buildConfig();
+  document.getElementById("weightsPreview").textContent =
+    JSON.stringify(cfg.resulting_weights, null, 2);
+  try {
+    const r = await fetch("/validate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(cfg),
+    });
+    const result = await r.json();
+    renderValidation(result);
+  } catch (e) {
+    renderValidation({
+      issues: [{ level: "error", message: "Validation request failed: " + e }],
+    });
+  }
+}
+
+function renderValidation(result) {
+  const wrap = document.getElementById("validationResults");
+  wrap.innerHTML = "";
+  const issues = result.issues || [];
+  if (issues.length === 0) {
+    const div = document.createElement("div");
+    div.className = "validation-item success";
+    div.textContent = "✓ No issues found. Configuration looks healthy.";
+    wrap.appendChild(div);
+    return;
+  }
+  issues.forEach(issue => {
+    const div = document.createElement("div");
+    div.className = "validation-item " + (issue.level || "warning");
+    div.textContent = (issue.level === "error" ? "✗ " : "⚠ ") + issue.message;
+    wrap.appendChild(div);
+  });
+}
+
+// ─── YAML emit + training kickoff ──────────────────────────────
+let _generatedYamlPath = null;
+
+async function generateYaml() {
+  const cfg = buildConfig();
+  document.getElementById("yamlPreview").textContent = "Generating...";
+  try {
+    const r = await fetch("/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(cfg),
+    });
+    const res = await r.json();
+    if (res.error) {
+      document.getElementById("yamlPreview").textContent = "Error: " + res.error;
+      return;
+    }
+    _generatedYamlPath = res.yaml_path;
+    document.getElementById("yamlPreview").textContent =
+      `# Saved to: ${res.yaml_path}\n\n${res.yaml_text}`;
+    document.getElementById("trainBtn").disabled = false;
+  } catch (e) {
+    document.getElementById("yamlPreview").textContent = "Request failed: " + e;
+  }
+}
+
+async function startTraining() {
+  if (!_generatedYamlPath) {
+    alert("Generate the config first.");
+    return;
+  }
+  if (!confirm(
+    "Fine-tuning typically takes hours on consumer GPU and is CPU-heavy " +
+    "without one. The trainer runs as a background process — you can " +
+    "close this wizard once it starts. Continue?"
+  )) return;
+
+  const statusDiv = document.getElementById("trainStatus");
+  statusDiv.innerHTML = '<div class="validation-item warning">Starting fine-tune subprocess...</div>';
+  document.getElementById("trainBtn").disabled = true;
+
+  try {
+    const r = await fetch("/train/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ yaml_path: _generatedYamlPath }),
+    });
+    const res = await r.json();
+    if (res.error) {
+      statusDiv.innerHTML = `<div class="validation-item error">Failed to start training: ${escapeHtml(res.error)}</div>`;
+      document.getElementById("trainBtn").disabled = false;
+      return;
+    }
+    statusDiv.innerHTML = `
+      <div class="validation-item success">
+        ✓ Training started. job_id=<code>${escapeHtml(res.job_id.slice(0, 8))}</code>, pid=${res.pid}<br>
+        Checkpoint will be saved to: <code>${escapeHtml(res.checkpoint_path)}</code><br>
+        Subprocess stdout: <code>${escapeHtml(res.log_dir)}/stdout.log</code><br>
+        <small>Polling status every 5s...</small>
+      </div>
+      <div class="validation-item warning" style="margin-top: 8px;">
+        <b>Heads up:</b> training continues in the background even if you close
+        this wizard window. To stop it before it finishes, end the
+        <code>python.exe</code> process with PID <b>${res.pid}</b> in Task
+        Manager (or run <code>taskkill /PID ${res.pid} /F</code> in a terminal).
+        Closing the wizard does NOT stop training.
+      </div>
+      <div id="livenessIndicator" style="margin-top: 8px; font-size: 13px; color: var(--muted);">PID ${res.pid}: checking...</div>
+    `;
+    pollTrainingStatus(res.job_id);
+  } catch (e) {
+    statusDiv.innerHTML = `<div class="validation-item error">Request failed: ${escapeHtml(String(e))}</div>`;
+    document.getElementById("trainBtn").disabled = false;
+  }
+}
+
+async function pollTrainingStatus(jobId) {
+  const indicator = document.getElementById("livenessIndicator");
+  if (!indicator) return;
+  try {
+    const r = await fetch(`/train/${jobId}/status`);
+    const s = await r.json();
+    if (s.alive) {
+      indicator.style.color = "var(--success)";
+      indicator.textContent = `PID ${s.pid}: running (started ${s.started_at})`;
+      setTimeout(() => pollTrainingStatus(jobId), 5000);
+    } else {
+      indicator.style.color = "var(--muted)";
+      indicator.textContent = `PID ${s.pid}: stopped. Check ${s.log_dir}/stdout.log for outcome.`;
+    }
+  } catch (e) {
+    indicator.style.color = "var(--error)";
+    indicator.textContent = "Status poll failed: " + e;
+  }
+}
+
+// ─── Session save/resume ───────────────────────────────────────
+function persistDraft() {
+  localStorage.setItem("clark_wizard_draft", JSON.stringify({
+    facilityName: state.facilityName,
+    selectedArchetype: state.selectedArchetype,
+    seasonRanges: state.seasonRanges,
+    monthIntensity: state.monthIntensity,
+    busiestWeekday: state.busiestWeekday,
+    answers: state.answers,
+  }));
+}
+
+async function saveSession() {
+  if (!state.facilityName) {
+    alert("Give the facility a name before saving.");
+    return;
+  }
+  const payload = {
+    session_id: state.sessionId,
+    facility_name: state.facilityName,
+    selected_archetype: state.selectedArchetype,
+    season_ranges: state.seasonRanges,
+    month_intensity: state.monthIntensity,
+    busiest_weekday: state.busiestWeekday,
+    answers: state.answers,
+    current_step: state.currentStep,
+  };
+  try {
+    const r = await fetch("/sessions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const res = await r.json();
+    state.sessionId = res.session_id;
+    document.getElementById("sessionId").textContent = res.session_id.slice(0, 8);
+    await refreshSessionsList();
+  } catch (e) {
+    alert("Save failed: " + e);
+  }
+}
+
+async function refreshSessionsList() {
+  try {
+    const r = await fetch("/sessions");
+    const data = await r.json();
+    const wrap = document.getElementById("sessionsList");
+    wrap.innerHTML = "";
+    if (!data.sessions || data.sessions.length === 0) {
+      wrap.innerHTML = '<div style="color: var(--muted); font-size: 13px;">No saved sessions yet.</div>';
+      return;
+    }
+    data.sessions.forEach(s => {
+      const row = document.createElement("div");
+      row.className = "session-row";
+      row.innerHTML = `
+        <div>
+          <div class="name">${escapeHtml(s.facility_name)}</div>
+          <div class="meta">${escapeHtml(s.session_id.slice(0, 8))} · updated ${escapeHtml(s.updated_at)}</div>
+        </div>
+        <button class="secondary" onclick="loadSession('${s.session_id}')">Resume</button>
+      `;
+      wrap.appendChild(row);
+    });
+  } catch (e) {
+    console.error("Failed to load sessions:", e);
+  }
+}
+
+async function loadSession(id) {
+  try {
+    const r = await fetch("/sessions/" + id);
+    const s = await r.json();
+    state.sessionId = s.session_id;
+    state.facilityName = s.facility_name || "";
+    state.selectedArchetype = s.selected_archetype || null;
+    state.seasonRanges = s.season_ranges || {
+      slow: {low: null, high: null},
+      normal: {low: null, high: null},
+      peak: {low: null, high: null},
+    };
+    state.monthIntensity = s.month_intensity || {};
+    state.busiestWeekday = s.busiest_weekday || null;
+    state.answers = s.answers || {};
+    document.getElementById("nameInput").value = state.facilityName;
+    document.getElementById("facilityName").textContent =
+      state.facilityName || "Untitled facility";
+    document.getElementById("sessionId").textContent = s.session_id.slice(0, 8);
+    document.getElementById("step0Next").disabled = !state.facilityName;
+    if (state.selectedArchetype) selectArchetype(state.selectedArchetype, false);
+    ["slow", "normal", "peak"].forEach(b => {
+      const r = state.seasonRanges[b] || {};
+      const lo = document.getElementById(b + "Low");
+      const hi = document.getElementById(b + "High");
+      if (lo) lo.value = r.low != null ? r.low : "";
+      if (hi) hi.value = r.high != null ? r.high : "";
+    });
+    refreshMonthChips();
+    refreshSeasonRangeVisibility();
+    if (state.busiestWeekday) selectWeekday(state.busiestWeekday, false);
+    updateStep2NextEnabled();
+    Object.entries(state.answers).forEach(([qid, oid]) =>
+      selectAnswer(qid, oid, false)
+    );
+    goToStep(s.current_step || 0);
+  } catch (e) {
+    alert("Load failed: " + e);
+  }
+}
+
+// ─── Utils ─────────────────────────────────────────────────────
+function escapeHtml(s) {
+  const div = document.createElement("div");
+  div.textContent = s;
+  return div.innerHTML;
+}
+
+boot();
+</script>
+
+</body>
+</html>

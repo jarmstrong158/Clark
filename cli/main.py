@@ -642,7 +642,448 @@ def build_parser() -> argparse.ArgumentParser:
     p_dash.add_argument("--port", type=int, default=8080,
                         help="Port to serve the dashboard on (default: 8080).")
 
+    # wizard
+    p_wiz = sub.add_parser("wizard", help="Launch the facility setup wizard (web UI).")
+    p_wiz.add_argument("--port", type=int, default=8090,
+                       help="Port to serve the wizard on (default: 8090).")
+    p_wiz.add_argument("--sessions-dir", default="clark/data/configs/user/sessions",
+                       help="Directory for saved wizard sessions.")
+
     return parser
+
+
+# ── Wizard ────────────────────────────────────────────────────────────────────
+
+def cmd_wizard(args: argparse.Namespace):
+    """Launch the facility setup wizard — a local web UI that walks
+    a warehouse operator through fine-tune config creation.
+
+    Endpoints:
+      GET  /                 — wizard HTML
+      GET  /presets          — archetype + question library JSON
+      GET  /sessions         — list saved sessions
+      GET  /sessions/{id}    — load one session
+      POST /sessions         — create or update a session
+      POST /validate         — defensive validation on the combined config
+    """
+    _header()
+
+    import http.server
+    import json as _json
+    import os
+    import threading
+    import uuid
+    import webbrowser
+    from datetime import datetime, timezone
+    from urllib.parse import urlparse
+
+    wizard_dir = Path(__file__).parent.parent / "clark" / "wizard"
+    index_html = wizard_dir / "index.html"
+    presets_path = wizard_dir / "presets.json"
+    sessions_dir = Path(args.sessions_dir).resolve()
+    port = args.port
+
+    if not index_html.exists():
+        _die(f"Wizard HTML not found at {index_html}")
+    if not presets_path.exists():
+        _die(f"Wizard presets not found at {presets_path}")
+
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+
+    # Pre-load presets at startup to fail fast on JSON errors.
+    try:
+        _presets = _json.loads(presets_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        _die(f"Failed to parse presets.json: {e}")
+
+    def _validate_config(cfg: dict) -> dict:
+        """Defensive validation — walk validation_rules from presets.json
+        and report errors/warnings on the combined config. Pure Python,
+        no external deps.
+
+        The user explicitly asked for this safety net: combinations of
+        preset answers can produce weird weight combos (e.g. OT-cost
+        dominating shipping reward → agent prefers leaving orders unshipped).
+        These rules catch those before fine-tuning burns hours.
+        """
+        weights = cfg.get("resulting_weights", {}) or {}
+        issues = []
+
+        for rule in _presets.get("validation_rules", []):
+            check = rule.get("check")
+            level = rule.get("level", "warning")
+            msg = rule.get("message", "")
+
+            if check == "per_order_shipped_gt_zero":
+                if weights.get("per_order_shipped", 0) <= 0:
+                    issues.append({"level": level, "rule": rule["id"], "message": msg})
+
+            elif check == "ot_cost_vs_incomplete":
+                ot_hr = abs(weights.get("per_ot_hour", 0))
+                inc_pen = abs(weights.get("per_order_incomplete", 0))
+                # Heuristic: if 1 hour of OT costs > 0.5x a single incomplete order,
+                # the agent will sometimes prefer leaving orders incomplete.
+                # The 0.5 factor is conservative — adjust based on observed behavior.
+                if inc_pen > 0 and ot_hr > inc_pen * 0.5:
+                    issues.append({"level": level, "rule": rule["id"], "message": msg})
+
+            elif check == "idle_not_negative":
+                if weights.get("per_idle_hour", 0) >= 0:
+                    issues.append({"level": level, "rule": rule["id"], "message": msg})
+
+            elif check == "any_weight_extreme":
+                extreme = [(k, v) for k, v in weights.items() if abs(v) > 500]
+                if extreme:
+                    detail = ", ".join(f"{k}={v}" for k, v in extreme)
+                    issues.append({
+                        "level": level, "rule": rule["id"],
+                        "message": f"{msg} Flagged: {detail}",
+                    })
+
+        return {"issues": issues, "checked": len(_presets.get("validation_rules", []))}
+
+    # Roots used by generate + train endpoints
+    repo_root = Path(__file__).parent.parent.resolve()
+    user_configs_dir = repo_root / "clark" / "data" / "configs" / "user"
+    user_checkpoints_dir = repo_root / "clark" / "data" / "checkpoints" / "user"
+    user_logs_dir = repo_root / "clark" / "data" / "logs" / "user"
+    user_configs_dir.mkdir(parents=True, exist_ok=True)
+    user_checkpoints_dir.mkdir(parents=True, exist_ok=True)
+    user_logs_dir.mkdir(parents=True, exist_ok=True)
+
+    # In-process registry of training jobs spawned via /train/start.
+    # Maps job_id → {pid, config_path, log_dir, started_at}.
+    # Lost on server restart by design — training itself is durable
+    # (checkpoint + log files on disk) and can be re-attached via the
+    # dashboard pointing at log_dir.
+    training_jobs: dict = {}
+
+    def _safe_filename(name: str) -> str:
+        """Slugify a facility name into a filesystem-safe stem."""
+        cleaned = "".join(c if c.isalnum() or c in ("-", "_") else "_"
+                          for c in name.strip().lower().replace(" ", "_"))
+        return cleaned.strip("_") or "facility"
+
+    def _generate_yaml(cfg: dict) -> dict:
+        """Materialize a full FacilityConfig YAML from the wizard's
+        archetype + answers. Strategy: load the archetype's base
+        template, mutate facility.name and rewards, write to disk under
+        clark/data/configs/user/, return path + serialized content.
+
+        The base template carries everything the schema requires
+        (workers, volume, tasks, business rules) — for the prototype we
+        only override the facility name and reward weights. Later
+        wizard steps (worker roster, volume profile) will override
+        more of the template.
+        """
+        import yaml as _yaml
+
+        arch_id = cfg.get("archetype")
+        arch = next((a for a in _presets["archetypes"] if a["id"] == arch_id), None)
+        if arch is None:
+            raise ValueError(f"Unknown archetype: {arch_id!r}")
+
+        template_path = repo_root / arch["base_template"]
+        if not template_path.exists():
+            raise FileNotFoundError(f"Base template not found: {template_path}")
+
+        base = _yaml.safe_load(template_path.read_text(encoding="utf-8"))
+        if not isinstance(base, dict):
+            raise ValueError(f"Base template is not a mapping: {template_path}")
+
+        # Override facility name
+        facility_name = (cfg.get("facility_name") or "").strip() or "Untitled Facility"
+        base.setdefault("facility", {})["name"] = facility_name
+
+        # Merge user-tuned reward weights on top of whatever the template
+        # had (rewards: {} in current templates, but we don't assume that).
+        weights = cfg.get("resulting_weights") or {}
+        merged_rewards = dict(base.get("rewards") or {})
+        merged_rewards.update(weights)
+        base["rewards"] = merged_rewards
+
+        # Volume profile translation. The wizard collects per-intensity
+        # actual ranges (e.g. slow=[60,100], normal=[200,300], peak=[300,440])
+        # because real warehouses have asymmetric variance that doesn't fit
+        # a single avg × multiplier formula. We map each month's intensity
+        # bucket to its corresponding range. If the wizard didn't collect a
+        # volume profile (older session, incomplete walkthrough), the
+        # template's volume stays intact.
+        vol = cfg.get("volume_profile") or {}
+        season_ranges = vol.get("season_ranges") or {}
+
+        def _bucket_range(bucket: str) -> tuple[int, int] | None:
+            r = season_ranges.get(bucket) or {}
+            lo, hi = r.get("low"), r.get("high")
+            if not isinstance(lo, (int, float)) or not isinstance(hi, (int, float)):
+                return None
+            if lo <= 0 or hi <= 0 or hi < lo:
+                return None
+            return (int(round(float(lo))), int(round(float(hi))))
+
+        normal_range = _bucket_range("normal")
+        if normal_range is not None:
+            slow_range = _bucket_range("slow") or normal_range
+            peak_range = _bucket_range("peak") or normal_range
+            band_map = {"slow": slow_range, "normal": normal_range, "peak": peak_range}
+            month_intensity = vol.get("month_intensity") or {}
+            seasonal = {}
+            for m in ["january", "february", "march", "april", "may", "june",
+                      "july", "august", "september", "october", "november", "december"]:
+                bucket = month_intensity.get(m, "normal")
+                lo, hi = band_map.get(bucket, normal_range)
+                seasonal[m] = [lo, hi]
+            base.setdefault("volume", {})["seasonal_ranges"] = seasonal
+
+            # Weekly curve. The schema stores per-day low/high fractions of
+            # the seasonal baseline. Build a peaked-or-flat curve depending
+            # on the user's busiest_weekday choice. "none" → flat across the
+            # week; otherwise the chosen day gets the maximum range and
+            # adjacent days taper off — mirrors a real Mon-heavy or Fri-heavy
+            # warehouse pattern.
+            weekdays = ["monday", "tuesday", "wednesday", "thursday", "friday"]
+            busiest = (vol.get("busiest_weekday") or "none").lower()
+            if busiest == "none" or busiest not in weekdays:
+                # Flat — same fraction every weekday
+                weekly = {d: [0.50, 1.00] for d in weekdays}
+            else:
+                # Peaked: busiest day = [0.80, 1.00], decreasing by ~0.15
+                # per day of distance, floored at [0.10, 0.30].
+                idx = weekdays.index(busiest)
+                weekly = {}
+                for j, d in enumerate(weekdays):
+                    dist = abs(j - idx)
+                    lo = max(0.10, 0.80 - 0.15 * dist)
+                    hi = max(0.30, 1.00 - 0.15 * dist)
+                    weekly[d] = [round(lo, 2), round(hi, 2)]
+            base.setdefault("volume", {})["weekly_curve"] = weekly
+
+        # Write to disk
+        stem = _safe_filename(facility_name)
+        out_path = user_configs_dir / f"{stem}.yaml"
+        # If a config already exists for this facility name, version it
+        # rather than silently overwriting (warehouses iterate).
+        if out_path.exists():
+            i = 2
+            while (user_configs_dir / f"{stem}_v{i}.yaml").exists():
+                i += 1
+            out_path = user_configs_dir / f"{stem}_v{i}.yaml"
+
+        yaml_text = _yaml.safe_dump(base, sort_keys=False, default_flow_style=False)
+        out_path.write_text(yaml_text, encoding="utf-8")
+
+        return {
+            "facility_name": facility_name,
+            "yaml_path": str(out_path),
+            "yaml_text": yaml_text,
+        }
+
+    def _start_training(yaml_path: str) -> dict:
+        """Spawn cmd_finetune as a detached subprocess. Returns a job_id
+        that future /train/{id}/status calls can use.
+
+        Uses the existing CLI entry point so we get all the same defaults
+        + validation as a manual `clark finetune` run. The subprocess's
+        stdout/stderr stream to a per-job log file so a wizard progress
+        view can tail it later.
+        """
+        import subprocess as _sp
+        import uuid as _uuid
+
+        if not Path(yaml_path).exists():
+            raise FileNotFoundError(f"Config YAML missing: {yaml_path}")
+
+        job_id = str(_uuid.uuid4())
+        job_log_dir = user_logs_dir / job_id
+        job_log_dir.mkdir(parents=True, exist_ok=True)
+        stem = Path(yaml_path).stem
+        ckpt_path = user_checkpoints_dir / f"{stem}.pt"
+        base_model = repo_root / "clark" / "data" / "checkpoints" / "clark_foundation.pt"
+
+        if not base_model.exists():
+            raise FileNotFoundError(
+                f"Foundation checkpoint not found at {base_model}. "
+                "Run `clark pretrain` first or download a foundation model."
+            )
+
+        stdout_log = open(job_log_dir / "stdout.log", "wb")
+        # NOTE: cmd_finetune doesn't currently expose --log-dir, so finetune
+        # defaults the log dir to a sibling of --output. The job_log_dir we
+        # create above just holds the subprocess stdout for the wizard's
+        # progress view; the real episode logs live next to the checkpoint.
+        cmd = [
+            sys.executable, "-m", "cli.main", "finetune",
+            "--config", str(yaml_path),
+            "--base", str(base_model),
+            "--output", str(ckpt_path),
+        ]
+        proc = _sp.Popen(cmd, cwd=str(repo_root), stdout=stdout_log,
+                         stderr=_sp.STDOUT)
+        training_jobs[job_id] = {
+            "pid": proc.pid,
+            "config_path": yaml_path,
+            "log_dir": str(job_log_dir),
+            "checkpoint_path": str(ckpt_path),
+            "started_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        }
+        return {"job_id": job_id, **training_jobs[job_id]}
+
+    def _list_sessions() -> list[dict]:
+        out = []
+        for p in sorted(sessions_dir.glob("*.json")):
+            try:
+                data = _json.loads(p.read_text(encoding="utf-8"))
+                out.append({
+                    "session_id": data.get("session_id", p.stem),
+                    "facility_name": data.get("facility_name", "(unnamed)"),
+                    "updated_at": data.get("updated_at", ""),
+                })
+            except Exception:
+                continue
+        # Most recently updated first
+        out.sort(key=lambda s: s.get("updated_at", ""), reverse=True)
+        return out
+
+    class WizardHandler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, fmt, *a):
+            pass  # suppress default access log spam
+
+        def do_GET(self):
+            path = urlparse(self.path).path
+            if path in ("/", "/index.html"):
+                # Re-read each request so editing the HTML during dev
+                # takes effect on browser refresh without a server restart.
+                self._send(200, "text/html; charset=utf-8", index_html.read_bytes())
+            elif path == "/presets":
+                self._send(200, "application/json", presets_path.read_bytes())
+            elif path == "/sessions":
+                payload = {"sessions": _list_sessions()}
+                self._send(200, "application/json",
+                           _json.dumps(payload).encode("utf-8"))
+            elif path.startswith("/sessions/"):
+                sid = path[len("/sessions/"):]
+                fpath = sessions_dir / f"{sid}.json"
+                if not fpath.exists():
+                    self._send(404, "application/json",
+                               b'{"error":"session not found"}')
+                    return
+                self._send(200, "application/json", fpath.read_bytes())
+            elif path.startswith("/train/") and path.endswith("/status"):
+                # GET /train/{job_id}/status — poll subprocess liveness.
+                job_id = path[len("/train/"):-len("/status")]
+                job = training_jobs.get(job_id)
+                if job is None:
+                    self._send(404, "application/json",
+                               b'{"error":"unknown job id"}')
+                    return
+                # Liveness check: psutil-free, just kill 0 the pid.
+                alive = True
+                try:
+                    os.kill(job["pid"], 0)
+                except (OSError, ProcessLookupError):
+                    alive = False
+                payload = {**job, "alive": alive}
+                self._send(200, "application/json",
+                           _json.dumps(payload).encode("utf-8"))
+            else:
+                self._send(404, "text/plain", b"Not found")
+
+        def do_POST(self):
+            path = urlparse(self.path).path
+            length = int(self.headers.get("Content-Length", 0))
+            raw = self.rfile.read(length) if length else b"{}"
+            try:
+                body = _json.loads(raw)
+            except Exception:
+                self._send(400, "application/json", b'{"error":"invalid JSON"}')
+                return
+
+            if path == "/sessions":
+                sid = body.get("session_id") or str(uuid.uuid4())
+                now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+                fpath = sessions_dir / f"{sid}.json"
+                created_at = now
+                if fpath.exists():
+                    try:
+                        existing = _json.loads(fpath.read_text(encoding="utf-8"))
+                        created_at = existing.get("created_at", now)
+                    except Exception:
+                        pass
+                doc = {
+                    "session_id": sid,
+                    "facility_name": body.get("facility_name", ""),
+                    "selected_archetype": body.get("selected_archetype"),
+                    "season_ranges": body.get("season_ranges", {}),
+                    "month_intensity": body.get("month_intensity", {}),
+                    "busiest_weekday": body.get("busiest_weekday"),
+                    "answers": body.get("answers", {}),
+                    "current_step": body.get("current_step", 0),
+                    "created_at": created_at,
+                    "updated_at": now,
+                }
+                fpath.write_text(_json.dumps(doc, indent=2), encoding="utf-8")
+                self._send(200, "application/json",
+                           _json.dumps({"session_id": sid, "saved_at": now}).encode("utf-8"))
+
+            elif path == "/validate":
+                result = _validate_config(body)
+                self._send(200, "application/json",
+                           _json.dumps(result).encode("utf-8"))
+
+            elif path == "/generate":
+                # Materialize the YAML from archetype + answers.
+                # Returns yaml_text (for preview) and yaml_path (on disk).
+                try:
+                    result = _generate_yaml(body)
+                    self._send(200, "application/json",
+                               _json.dumps(result).encode("utf-8"))
+                except Exception as e:
+                    self._send(400, "application/json",
+                               _json.dumps({"error": str(e)}).encode("utf-8"))
+
+            elif path == "/train/start":
+                # Body: {"yaml_path": "..."}  — kicks off finetune subprocess.
+                # Foundation checkpoint must already exist; we don't auto-pretrain.
+                yaml_path = body.get("yaml_path")
+                if not yaml_path:
+                    self._send(400, "application/json",
+                               b'{"error":"yaml_path required"}')
+                    return
+                try:
+                    result = _start_training(yaml_path)
+                    self._send(200, "application/json",
+                               _json.dumps(result).encode("utf-8"))
+                except Exception as e:
+                    self._send(400, "application/json",
+                               _json.dumps({"error": str(e)}).encode("utf-8"))
+
+            else:
+                self._send(404, "text/plain", b"Not found")
+
+        def _send(self, code: int, ctype: str, body: bytes):
+            self.send_response(code)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(body)
+
+    server = http.server.HTTPServer(("localhost", port), WizardHandler)
+    url = f"http://localhost:{port}"
+    print(f"  Wizard:       {url}")
+    print(f"  Sessions dir: {sessions_dir}")
+    print(f"  Press Ctrl+C to stop.\n")
+
+    def _open():
+        import time as _time
+        _time.sleep(0.5)
+        webbrowser.open(url)
+    threading.Thread(target=_open, daemon=True).start()
+
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\nWizard stopped.")
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
@@ -658,6 +1099,7 @@ def main():
         "finetune":  cmd_finetune,
         "plan":      cmd_plan,
         "dashboard": cmd_dashboard,
+        "wizard":    cmd_wizard,
     }
 
     fn = dispatch.get(args.command)

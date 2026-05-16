@@ -1,0 +1,239 @@
+{
+  "_schema_version": 1,
+  "_comment": "Wizard preset library. Each archetype seeds reasonable defaults for a facility class. Each pain-point question maps user-friendly choices to specific reward-weight deltas. Edit this file to add archetypes or refine question mappings — no code change needed.",
+
+  "archetypes": [
+    {
+      "id": "ecom_direct",
+      "label": "E-commerce Direct-to-Consumer",
+      "description": "You own the inventory and ship directly to consumers. Service-level reputation matters.",
+      "base_template": "clark/data/configs/example_small.yaml",
+      "defaults": {
+        "workers_typical": 8,
+        "shift_hours": 8.0,
+        "shift_start": 8.0,
+        "tasks": ["pick", "pack", "restock", "receiving", "returns_processing", "side_project", "idle"],
+        "weights": {
+          "per_order_shipped": 5.0,
+          "per_order_incomplete": -10.0,
+          "per_ot_hour": -1.5,
+          "ot_incomplete_flat": -25.0,
+          "per_productive_hour": 0.3,
+          "per_idle_hour": -0.5,
+          "restock_level_low": -30.0,
+          "restock_level_empty": -40.0
+        }
+      }
+    },
+    {
+      "id": "tpl_fulfillment",
+      "label": "3PL Fulfillment",
+      "description": "You ship on behalf of other brands. Contractual SLAs, OT cost passed through to clients.",
+      "base_template": "clark/data/configs/example_large.yaml",
+      "defaults": {
+        "workers_typical": 15,
+        "shift_hours": 8.0,
+        "shift_start": 7.0,
+        "tasks": ["pick", "pack", "restock", "receiving", "loading", "quality_check", "returns_processing", "side_project", "idle"],
+        "weights": {
+          "per_order_shipped": 5.0,
+          "per_order_incomplete": -15.0,
+          "per_ot_hour": -0.5,
+          "ot_incomplete_flat": -50.0,
+          "per_productive_hour": 0.3,
+          "per_idle_hour": -0.7,
+          "restock_level_low": -25.0,
+          "restock_level_empty": -35.0
+        }
+      }
+    }
+  ],
+
+  "questions": [
+    {
+      "id": "ot_tolerance",
+      "prompt": "How costly is overtime for your facility?",
+      "help": "OT means workers staying past their scheduled shift end. The agent will use OT more or less aggressively based on your answer.",
+      "options": [
+        {
+          "id": "free",
+          "label": "OT is fine — we use it freely when needed",
+          "subtitle": "Workers stay as long as needed. The agent treats OT cost as negligible and will run hours past schedule to push orders out.",
+          "weight_deltas": { "per_ot_hour": 0.0, "ot_incomplete_flat": 0.0 }
+        },
+        {
+          "id": "moderate",
+          "label": "OT is expensive — avoid when possible",
+          "subtitle": "The agent will use OT but treats it as a real cost. Prefers to flex staffing within the day rather than extending it.",
+          "weight_deltas": { "per_ot_hour": -1.5, "ot_incomplete_flat": -25.0 }
+        },
+        {
+          "id": "high",
+          "label": "OT is a last resort — only when service is at risk",
+          "subtitle": "OT only kicks in when the day would otherwise miss critical orders. Used as insurance, not routine.",
+          "weight_deltas": { "per_ot_hour": -3.5, "ot_incomplete_flat": -75.0 }
+        },
+        {
+          "id": "banned",
+          "label": "OT is essentially banned — workers leave on time",
+          "subtitle": "The agent will leave orders unshipped before scheduling OT. Workers go home on time regardless of backlog.",
+          "weight_deltas": { "per_ot_hour": -8.0, "ot_incomplete_flat": -200.0 }
+        }
+      ]
+    },
+    {
+      "id": "incomplete_severity",
+      "prompt": "How serious is it when an order misses its ship date?",
+      "help": "An 'incomplete' order is one that should have shipped today but didn't. This is the single biggest lever for service-level vs cost trade-offs.",
+      "options": [
+        {
+          "id": "minor",
+          "label": "Mild — late orders happen, we deal with it",
+          "subtitle": "Late ships count against the day but don't dominate decisions. Useful when SLAs are soft or customers expect 1-2 day delays.",
+          "weight_deltas": { "per_order_incomplete": -5.0 }
+        },
+        {
+          "id": "moderate",
+          "label": "Moderate — try hard to ship, but not at any cost",
+          "subtitle": "Standard service orientation — agent tries to ship same-day, accepts some misses if cost of preventing them is high.",
+          "weight_deltas": { "per_order_incomplete": -10.0 }
+        },
+        {
+          "id": "severe",
+          "label": "Severe — every missed ship date is a serious problem",
+          "subtitle": "Each missed ship date carries a heavy penalty. Agent will spend significantly (OT, reassignments) to prevent them.",
+          "weight_deltas": { "per_order_incomplete": -20.0 }
+        },
+        {
+          "id": "critical",
+          "label": "Critical — missing ship dates is unacceptable",
+          "subtitle": "Missing a ship date is treated as worse than nearly any other cost. Use only if your business has hard contractual penalties.",
+          "weight_deltas": { "per_order_incomplete": -40.0 }
+        }
+      ]
+    },
+    {
+      "id": "stockout_severity",
+      "prompt": "How disruptive is running low or out of pickable stock?",
+      "help": "When inventory drops low, order picking slows down hunting for items. When it hits zero, picking stops entirely until restock catches up. The agent will pull workers to restock more or less aggressively based on your answer.",
+      "options": [
+        {
+          "id": "mild",
+          "label": "Mild — we can pick around gaps for a while",
+          "subtitle": "Empty shelves are an annoyance, not a crisis. Agent restocks as time allows and won't pull workers off order tasks to do it.",
+          "weight_deltas": {
+            "restock_level_low": -15.0,
+            "restock_level_empty": -20.0,
+            "per_restock_bleed": -3.0
+          }
+        },
+        {
+          "id": "moderate",
+          "label": "Moderate — empty shelves slow us down meaningfully",
+          "subtitle": "Standard balance — agent restocks proactively, escalates when level drops, but won't drop everything for it.",
+          "weight_deltas": {
+            "restock_level_low": -30.0,
+            "restock_level_empty": -40.0,
+            "per_restock_bleed": -6.0
+          }
+        },
+        {
+          "id": "critical",
+          "label": "Critical — empty shelves stop the line cold",
+          "subtitle": "Restock is a top-priority blocker. Agent reassigns workers immediately when inventory drops low, even at the cost of picks.",
+          "weight_deltas": {
+            "restock_level_low": -60.0,
+            "restock_level_empty": -100.0,
+            "per_restock_bleed": -12.0
+          }
+        }
+      ]
+    },
+    {
+      "id": "filler_tolerance",
+      "prompt": "When your facility falls behind on orders mid-day, how should non-essential work be handled?",
+      "help": "Non-essential work includes side projects, training, returns processing, loading prep, quality checks, and receiving — tasks that don't directly ship today's orders. Every operation wants workers busy AND orders out — this question is about which one wins when they conflict.",
+      "options": [
+        {
+          "id": "always_busy",
+          "label": "Keep side work moving even when orders are stacking up",
+          "subtitle": "Workers spread across non-order tasks even when the order queue is building. Trade-off: orders sometimes miss their ship date because staff is committed elsewhere. Best for facilities where side work is genuinely revenue-generating (e.g. heavy returns, contracted side projects).",
+          "weight_deltas": {
+            "per_filler_unit": 0.3,
+            "side_project_during_crunch": -2.0
+          }
+        },
+        {
+          "id": "balanced",
+          "label": "Pause side work when pressure builds, resume when caught up",
+          "subtitle": "Agent automatically shifts workers off side work and onto order flow (picking, packing, shipping) when the order queue builds. Side work resumes once the queue is manageable. This is where most operations land.",
+          "weight_deltas": {
+            "per_filler_unit": 0.1,
+            "side_project_during_crunch": -5.0
+          }
+        },
+        {
+          "id": "strict",
+          "label": "Side work only when zero orders are pending",
+          "subtitle": "Any backlog at all means non-order tasks stop completely. Strongest service guarantee, but workers may sit idle on light days when there's nothing in the queue.",
+          "weight_deltas": {
+            "per_filler_unit": 0.0,
+            "side_project_during_crunch": -10.0
+          }
+        }
+      ]
+    },
+    {
+      "id": "backlog_tolerance",
+      "prompt": "When yesterday's orders spill into today, how much should that hurt?",
+      "help": "'Backlog' means orders that were picked but didn't ship yesterday, plus any overflow. High backlog penalty makes the agent prioritize clearing the queue first; low penalty lets it keep a steady pace.",
+      "options": [
+        {
+          "id": "lenient",
+          "label": "Lenient — backlog happens, work through it at normal pace",
+          "subtitle": "Carryover orders factor in but don't drive panic. Useful for 3PLs with chronic flow where backlog is just a normal state.",
+          "weight_deltas": { "picked_backlog": -0.3 }
+        },
+        {
+          "id": "moderate",
+          "label": "Moderate — backlog adds urgency, agent works to clear it",
+          "subtitle": "Standard recovery behavior — agent treats backlog as something to fix today, but doesn't sacrifice quality to do it.",
+          "weight_deltas": { "picked_backlog": -0.7 }
+        },
+        {
+          "id": "aggressive",
+          "label": "Aggressive — clearing backlog is the top priority",
+          "subtitle": "Backlog is treated as a crisis. Agent will use OT, reassign workers, and push hard until carryover is zero.",
+          "weight_deltas": { "picked_backlog": -1.5 }
+        }
+      ]
+    }
+  ],
+
+  "validation_rules": [
+    {
+      "id": "shipping_must_be_net_positive",
+      "level": "error",
+      "check": "per_order_shipped_gt_zero",
+      "message": "per_order_shipped must be > 0 — if shipping isn't rewarded, the agent has no reason to ship anything."
+    },
+    {
+      "id": "ot_dominates_incomplete",
+      "level": "warning",
+      "check": "ot_cost_vs_incomplete",
+      "message": "Per-hour OT cost is large enough that the agent may prefer leaving orders incomplete over working OT. If you want orders shipped above all else, reduce OT cost OR raise per_order_incomplete penalty."
+    },
+    {
+      "id": "no_idle_signal",
+      "level": "warning",
+      "check": "idle_not_negative",
+      "message": "per_idle_hour is zero or positive. Agent may prefer idle over productive work since there's no incentive to be busy."
+    },
+    {
+      "id": "extreme_magnitudes",
+      "level": "warning",
+      "check": "any_weight_extreme",
+      "message": "One or more reward weights are at extreme magnitudes (|value| > 500). This can destabilize fine-tuning. Consider moderating."
+    }
+  ]
+}
