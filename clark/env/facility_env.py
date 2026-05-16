@@ -856,8 +856,18 @@ class FacilityEnv:
         #   full required → +management_duty_met        (the carrot)
         #   minimum met   → +management_duty_minimum_met (smaller carrot, was 0)
         #   below minimum → -management_duty_missed     (the stick)
-        # Without the middle tier, the gradient saw "all-or-nothing" and the
-        # agent had no way to learn that "barely passing" was a valid choice.
+        #
+        # Defect-B fix (dec-018): the old `elif high_volume: pass` branch
+        # gave ZERO reward for missing management on busy days, while the
+        # grade still hard-F's that exact day for missing the minimum and
+        # demerits it for missing required — every day, regardless of
+        # volume. That reward/grade contradiction trained the agent that
+        # skipping management when busy is free, then the grade punished
+        # it for doing what it was trained to do. The audit found this
+        # caps ~332/1000 perfect-completion days below A. Removing the
+        # escape hatch makes the reward signal consistent with the grade:
+        # missing minimum is penalized regardless of how busy the day was,
+        # because the grade penalizes it regardless.
         total_mgmt = self._get_effective_management_hours()
         required = self.facility_config.rules.management_daily_hours_required
         min_hours = self.facility_config.rules.management_min_daily_hours
@@ -865,8 +875,6 @@ class FacilityEnv:
             reward += self._add_reward("management_duty_met")
         elif total_mgmt >= min_hours:
             reward += self._add_reward("management_duty_minimum_met")
-        elif self.episode.total_orders >= self.facility_config.rules.high_volume_day_orders:
-            pass  # heavy day — management backlog acceptable
         else:
             reward += self._add_reward("management_duty_missed")
 
