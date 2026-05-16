@@ -96,7 +96,19 @@ PPO_DEFAULTS: dict = {
     "entropy_coeff": 0.05,
     "value_loss_coeff": 0.5,
     "max_grad_norm": 0.5,
-    "epochs_per_update": 4,
+    # epochs_per_update 4 → 2 — SPEED A/B (Lever 1).
+    # Production profiler (con-011) measured _update_single_buffer at 82-83%
+    # of training wall-clock; eval+rest both scale LINEARLY with this knob,
+    # so 4→2 ≈ halves the dominant cost (~1.8x throughput projected, to be
+    # confirmed against the same profiler — not trusted on projection).
+    # This is NOT behavior-neutral: fewer epochs = less PPO sample reuse,
+    # so it changes how the agent learns, not just how fast. Shipped as a
+    # GATED A/B: keep only if the win/cmp learning trend is not materially
+    # worse over the next few hundred episodes; one-line revert otherwise.
+    # Consciously trades the in-flight dec-015 clean read for speed (the
+    # two can't be cleanly measured simultaneously — same confounding
+    # problem one level up). Single change this restart (con-008).
+    "epochs_per_update": 2,
     # vf_clip: PPO-style value-prediction clip (in symlog space). Bounds
     # per-update value-head step. Combined with symlog target compression
     # this fully prevents the recurring saturation pathology.
