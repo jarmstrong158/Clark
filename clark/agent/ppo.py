@@ -31,6 +31,37 @@ if TYPE_CHECKING:
     from clark.config.schema import FacilityConfig
 
 
+# ── Symlog / symexp for value-target compression (DreamerV3-style) ────────────
+# Value head outputs are interpreted as symlog(true_value). Targets are
+# symlog(returns). Inverse symexp is applied whenever we need a real value
+# for GAE / advantage math. Symlog compresses targets that span 8 orders of
+# magnitude (e.g. -7M to +60k returns across N=5 to N=50) onto roughly ±16,
+# which bounds the value head's weight magnitudes by construction and
+# eliminates the saturation pathology that's recurred three times.
+#
+# Without symlog: a curriculum/reward shift that 5×s the target scale
+# forces the value head to grow its output weights to fit, saturating
+# Tanh and breaking gradients. With symlog: same 5× target shift becomes
+# log(5) ≈ 1.6 in target space — fully within the value head's natural
+# operating range. No more saturation susceptibility.
+#
+# Reference: Hafner et al. DreamerV3 (arXiv:2301.04104), §4 — same recipe
+# achieves stability across 150+ tasks with 8 OOM reward scales using a
+# single fixed hyperparameter set.
+def _symlog_np(x):
+    return np.sign(x) * np.log1p(np.abs(x))
+
+def _symexp_np(x):
+    # Clamp to prevent overflow at large magnitudes (symexp(20) ≈ 5e8 already)
+    return np.sign(x) * (np.exp(np.minimum(np.abs(x), 20.0)) - 1.0)
+
+def _symlog_t(x: torch.Tensor) -> torch.Tensor:
+    return torch.sign(x) * torch.log1p(torch.abs(x))
+
+def _symexp_t(x: torch.Tensor) -> torch.Tensor:
+    return torch.sign(x) * (torch.expm1(torch.abs(x).clamp(max=20.0)))
+
+
 # ── Hyperparameter defaults ───────────────────────────────────────────────────
 
 PPO_DEFAULTS: dict = {
@@ -66,6 +97,10 @@ PPO_DEFAULTS: dict = {
     "value_loss_coeff": 0.5,
     "max_grad_norm": 0.5,
     "epochs_per_update": 4,
+    # vf_clip: PPO-style value-prediction clip (in symlog space). Bounds
+    # per-update value-head step. Combined with symlog target compression
+    # this fully prevents the recurring saturation pathology.
+    "vf_clip": 0.2,
     # chunk_size 16 → 64: a "day" in this sim spans many ticks. With chunk=16
     # the LSTM gradient was truncated 3-4 times per day, so the agent could
     # not learn that an 8AM pick-heavy assignment causes packer-starvation
@@ -161,9 +196,15 @@ class RolloutBuffer:
         if isinstance(first, torch.Tensor):
             # .float() up-casts bf16/fp16 to fp32 before the numpy conversion,
             # which doesn't support bf16 natively.
-            values_np = torch.stack(self.values).detach().float().cpu().numpy()
+            values_symlog = torch.stack(self.values).detach().float().cpu().numpy()
         else:
-            values_np = np.asarray(self.values, dtype=np.float32)
+            values_symlog = np.asarray(self.values, dtype=np.float32)
+        # Stored values are in symlog space (value head output is interpreted
+        # as predicting symlog(real_value)). GAE math operates in real-value
+        # space — so we exp them back here. The returns we compute below are
+        # therefore in real-value space; the symlog target for value-loss is
+        # taken AGAIN at _update_single_buffer time.
+        values_np = _symexp_np(values_symlog)
 
         for t in reversed(range(n)):
             next_value = 0.0 if t == n - 1 else float(values_np[t + 1])
@@ -590,12 +631,21 @@ class ClarkAgent:
             for t in buf.hustle_log_probs
         ]
 
+        # Stored values in symlog space (value head output is interpreted
+        # as predicting symlog(real_value)). Used for vf_clip below.
+        old_values_symlog = torch.as_tensor(
+            [float(v.item()) if isinstance(v, torch.Tensor) else float(v)
+             for v in buf.values],
+            dtype=torch.float32, device=self.device,
+        )
+
         clip_eps = self.hparams["clip_epsilon"]
         ent_coeff = self.hparams["entropy_coeff"]
         val_coeff = self.hparams["value_loss_coeff"]
         max_norm = self.hparams["max_grad_norm"]
         chunk_size = self.hparams["tbptt_chunk_size"]
         epochs = self.hparams["epochs_per_update"]
+        vf_clip = self.hparams.get("vf_clip", 0.2)
 
         metrics = {
             "policy_loss": 0.0,
@@ -679,21 +729,25 @@ class ClarkAgent:
                     (r - 1.0).abs() > clip_eps
                 ).float().mean().item()
 
-                # Running-stats return standardization for value loss.
-                # Per-batch standardization on a 64-step correlated chunk
-                # was the previous approach and destabilized the value head:
-                # σ within a chunk is tiny (correlated samples), so MSE
-                # divided by tiny σ blew up; μ moves chunk-to-chunk, so the
-                # value head chased a moving target. We instead maintain a
-                # single global EMA of return mean/var (updated below per
-                # update call, NOT per epoch) — a stable normalizer the
-                # value head can actually learn against.
-                ret_mean = float(self._ret_mean)
-                ret_std  = float(self._ret_var) ** 0.5 + 1e-8
-                value_loss = F.mse_loss(
-                    (values_f32 - ret_mean) / ret_std,
-                    (returns_t  - ret_mean) / ret_std,
+                # Symlog-space value loss (DreamerV3-style). Value head
+                # output (values_f32) is interpreted as predicting
+                # symlog(real_return). Target = symlog(returns_t). Because
+                # symlog compresses returns from millions to ±~16, the
+                # value head never has to grow its output weights into the
+                # saturation region we kept hitting — distribution shifts
+                # (curriculum, new N range, reward changes) become
+                # log-scale shifts, fully within natural operating range.
+                #
+                # With vf_clip: bound the per-update value-prediction
+                # change to ±vf_clip in symlog space. Defense-in-depth
+                # against any remaining gradient blow-ups.
+                sl_returns = _symlog_t(returns_t)
+                v_pred_clipped = old_values_symlog + torch.clamp(
+                    values_f32 - old_values_symlog, -vf_clip, vf_clip
                 )
+                v_loss_unclipped = (values_f32 - sl_returns).pow(2)
+                v_loss_clipped   = (v_pred_clipped - sl_returns).pow(2)
+                value_loss = torch.max(v_loss_unclipped, v_loss_clipped).mean()
                 entropy_loss = -entropies_f32.mean()
 
                 loss = policy_loss + val_coeff * value_loss + ent_coeff * entropy_loss

@@ -479,6 +479,23 @@ class FacilityEnv:
                 w.check_soreness()
 
         # --- Phase 3: Restock, side_project, management, cycle_count, idle ---
+        # Filler-during-crunch suppression. Audit found loading / training /
+        # quality_check / returns_processing / receiving were the model's
+        # "escape valves" on bad-Cmp days even after demand_signal was
+        # suppressed in state.py — the learned policy still routed workers
+        # there. Extend the side_project_during_crunch penalty to cover ALL
+        # filler tasks under pick/pack pressure so the reward signal matches
+        # the demand signal.
+        _FILLER_TASKS = {
+            "side_project", "loading", "training", "quality_check",
+            "returns_processing", "receiving",
+        }
+        _crunch_pending_pct = (
+            (self.orders_in_queue + self.orders_picked_not_audited)
+            / max(1, self.episode.total_orders)
+        )
+        _in_crunch = _crunch_pending_pct > 0.30
+
         for w in active_workers:
             task = w.current_task
             if task in ("pick", "pack"):
@@ -491,6 +508,12 @@ class FacilityEnv:
             if task == "management":
                 reward += self._process_management(w, duration)
                 continue
+
+            # Filler-during-crunch penalty (applied IN ADDITION to whatever
+            # the task's own rewards are below). Mirrors the existing
+            # side_project_during_crunch logic, generalized.
+            if _in_crunch and task in _FILLER_TASKS and task != "side_project":
+                reward += self._add_reward("side_project_during_crunch")
 
             # Scale output by effectiveness ratio
             effectiveness = w.effective_oph(task) / max(1.0, w.base_oph)
