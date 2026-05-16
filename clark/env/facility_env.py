@@ -212,6 +212,15 @@ class FacilityEnv:
         self.filler_complete = False
         self.total_reward = 0.0
         self.reward_breakdown = {k: 0.0 for k in self._rewards}
+        # Option Z (post-Restart-B convergence): cap cumulative
+        # side_project_during_crunch contribution per day at -5000. The
+        # audit found a reward tail down to -123k in raw space (~10s of
+        # days bundled) with worst per-day crunch ~-4700. Symlog handles
+        # the magnitudes but value-loss peaks of 80-91 (vs typical 2-3)
+        # suggested the extreme tail was injecting noise. Cap bounds the
+        # tail without changing the gradient direction.
+        self._crunch_penalty_today = 0.0
+        self._CRUNCH_DAILY_CAP = -5000.0
         # ot_hours starts at the pre-credited morning catchup amount.
         self.ot_hours = self._morning_ot_hours
         self.is_done = False
@@ -494,7 +503,21 @@ class FacilityEnv:
             (self.orders_in_queue + self.orders_picked_not_audited)
             / max(1, self.episode.total_orders)
         )
-        _in_crunch = _crunch_pending_pct > 0.30
+        # Restart A (filler-vs-orders fix): lower threshold 0.30 → 0.10.
+        # The audit found that days with 24% completion never tripped the
+        # 30% gate, so the filler_during_crunch penalty wasn't firing on
+        # the exact failure mode it was designed to deter. Dropping to 10%
+        # means almost any non-trivial backlog triggers the penalty.
+        _in_crunch = _crunch_pending_pct > 0.10
+        # Restart B: scale the penalty with severity. Was flat -2.0 per
+        # tick regardless of backlog (31% pending got the same penalty as
+        # 99% pending). New formula: max(1.0, pending_pct × 5.0). Floor
+        # is 1× (current behavior) for backlogs up to 20%; linear ramp
+        # above that, reaching 5× at 100% pending. This is the
+        # "increasingly scaled" design we agreed on originally but never
+        # actually implemented — only the extension to all filler tasks
+        # landed.
+        _crunch_scale = max(1.0, _crunch_pending_pct * 5.0)
 
         for w in active_workers:
             task = w.current_task
@@ -513,7 +536,10 @@ class FacilityEnv:
             # the task's own rewards are below). Mirrors the existing
             # side_project_during_crunch logic, generalized.
             if _in_crunch and task in _FILLER_TASKS and task != "side_project":
-                reward += self._add_reward("side_project_during_crunch")
+                if self._crunch_penalty_today > self._CRUNCH_DAILY_CAP:
+                    _crunch_hit = self._add_reward("side_project_during_crunch", _crunch_scale)
+                    reward += _crunch_hit
+                    self._crunch_penalty_today += _crunch_hit
 
             # Scale output by effectiveness ratio
             effectiveness = w.effective_oph(task) / max(1.0, w.base_oph)
@@ -536,8 +562,16 @@ class FacilityEnv:
                     reward += self._add_reward("per_restock_completed", 1)
 
             elif task == "side_project":
-                if self.orders_in_queue + self.orders_picked_not_audited > self.episode.total_orders * 0.3:
-                    reward += self._add_reward("side_project_during_crunch")
+                # Restart B: use the unified _in_crunch gate and _crunch_scale
+                # so side_project gets the same threshold (10%) and severity
+                # ramp as all other filler tasks. The old hard-coded 0.30
+                # threshold here was a leftover that disagreed with the
+                # generalized filler-task penalty above.
+                if _in_crunch:
+                    if self._crunch_penalty_today > self._CRUNCH_DAILY_CAP:
+                        _crunch_hit = self._add_reward("side_project_during_crunch", _crunch_scale)
+                        reward += _crunch_hit
+                        self._crunch_penalty_today += _crunch_hit
 
                 if self.episode.has_deliberate_project and not self.deliberate_complete:
                     self.deliberate_progress += effective_duration
@@ -560,7 +594,17 @@ class FacilityEnv:
                 continue  # skip generic hours_worked block below
 
             w.hours_worked += duration
-            reward += self._add_reward("per_productive_hour", duration)
+            # Restart A (filler-vs-orders fix): zero the "look busy" floor.
+            # per_productive_hour previously paid +0.3/hr for ANY non-idle
+            # task, including all filler. That meant a 7-worker × 50-tick
+            # day of pure filler earned +24 baseline before any penalty,
+            # which let net day-reward stay positive even on grade-F days.
+            # Now only non-filler productive work earns the baseline;
+            # filler is neutral by default and negative under crunch via
+            # side_project_during_crunch. Pickers/packers/management get
+            # the baseline via their own per_productive_hour calls upstream.
+            if task not in _FILLER_TASKS:
+                reward += self._add_reward("per_productive_hour", duration)
 
             if w.has_soreness and task != "side_project":
                 w.non_side_project_hours += duration

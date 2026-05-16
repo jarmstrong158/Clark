@@ -122,18 +122,26 @@ def _worker_loop(conn, init_config: FacilityConfig) -> None:
                     # Slim reward breakdown — only the components that
                     # tend to blow up in spirals. Keep IPC tiny.
                     "rb": {
-                        "incomplete": float(rb.get("per_order_incomplete", 0.0)),
-                        "ot_flat":    float(rb.get("ot_incomplete_flat", 0.0)),
-                        "backlog":    float(rb.get("picked_backlog", 0.0)),
-                        "rs_low":     float(rb.get("restock_level_low", 0.0)),
-                        "rs_empty":   float(rb.get("restock_level_empty", 0.0)),
-                        "rs_bleed":   float(rb.get("per_restock_bleed", 0.0)),
-                        "rs_intr":    float(rb.get("restock_pick_interruption", 0.0)),
-                        "starved":    float(rb.get("packers_starved", 0.0)),
-                        "idle":       float(rb.get("per_idle_hour", 0.0)),
-                        "prod":       float(rb.get("per_productive_hour", 0.0)),
-                        "mgmt":       float(rb.get("per_management_hour", 0.0)),
-                        "shipped":    float(rb.get("per_order_shipped", 0.0)),
+                        "incomplete":  float(rb.get("per_order_incomplete", 0.0)),
+                        "ot_flat":     float(rb.get("ot_incomplete_flat", 0.0)),
+                        "backlog":     float(rb.get("picked_backlog", 0.0)),
+                        "rs_low":      float(rb.get("restock_level_low", 0.0)),
+                        "rs_empty":    float(rb.get("restock_level_empty", 0.0)),
+                        "rs_bleed":    float(rb.get("per_restock_bleed", 0.0)),
+                        "rs_intr":     float(rb.get("restock_pick_interruption", 0.0)),
+                        "starved":     float(rb.get("packers_starved", 0.0)),
+                        "idle":        float(rb.get("per_idle_hour", 0.0)),
+                        "prod":        float(rb.get("per_productive_hour", 0.0)),
+                        "mgmt":        float(rb.get("per_management_hour", 0.0)),
+                        "shipped":     float(rb.get("per_order_shipped", 0.0)),
+                        # Restart B: surface the filler-during-crunch penalty
+                        # and per-filler-unit base so we can SEE whether the
+                        # scaled penalty is biting. Pre-Restart-B this was
+                        # firing at -1890/day but invisible on dashboards —
+                        # flew blind for weeks. Now it shows up in rb["crunch"]
+                        # and rb["filler"] alongside everything else.
+                        "crunch":      float(rb.get("side_project_during_crunch", 0.0)),
+                        "filler":      float(rb.get("per_filler_unit", 0.0)),
                     },
                 }
                 # Aggregate task-time totals across all workers so the
