@@ -810,23 +810,40 @@ class ClarkActorCritic(nn.Module):
         task_log_probs_list: list[torch.Tensor] = []
         hustle_log_probs_list: list[torch.Tensor] = []
 
-        # Per-env sample — B is small (typically 4-32) so the Python loop
-        # is cheap compared to the (now batched) forward pass.
+        # Vectorized sample over the full padded logits in ONE batched
+        # Categorical, then ONE GPU->CPU transfer per head. The previous
+        # per-env Python loop did 2*B blocking `.tolist()` GPU syncs per
+        # tick (~235ms/tick vs 27ms of actual GPU compute — the dominant
+        # training-throughput bottleneck). Categorical batches over the
+        # leading (B, max_N) dims independently, so this is
+        # distribution-identical to the per-env loop for real worker rows;
+        # padded rows / padded task columns are -1e9-masked by
+        # forward_batched (probability underflows to exactly 0, so they
+        # can never be sampled and contribute nothing to logsumexp) and
+        # are sliced off per env below. Equivalence is pinned by
+        # tests/test_sampler_equivalence.py (exact log_prob match + matched
+        # empirical distribution).
+        task_dist = Categorical(logits=assign_logits)              # batch (B, max_N) over max_M
+        task_idx_full = task_dist.sample()                         # (B, max_N)
+        task_lp_full = task_dist.log_prob(task_idx_full)           # (B, max_N), on device
+
+        hustle_dist = Categorical(logits=hustle_logits)            # batch (B, max_N) over 2
+        hustle_full = hustle_dist.sample()                         # (B, max_N)
+        hustle_lp_full = hustle_dist.log_prob(hustle_full)         # (B, max_N), on device
+
+        # The only forced syncs: actions must reach the CPU env workers.
+        # One transfer each instead of 2*B.
+        task_idx_cpu = task_idx_full.tolist()                      # [[...max_N...] x B]
+        hustle_cpu = hustle_full.tolist()
+
         for b in range(B):
             Ni = n_w_list[b]
-            Mi = n_t_list[b]
-            logits_b = assign_logits[b, :Ni, :Mi]                  # (Ni, Mi)
-            h_logits_b = hustle_logits[b, :Ni]                     # (Ni, 2)
-
-            task_dist = Categorical(logits=logits_b)
-            task_idx = task_dist.sample()                          # (Ni,)
-            task_actions_list.append(task_idx.tolist())
-            task_log_probs_list.append(task_dist.log_prob(task_idx))
-
-            hustle_dist = Categorical(logits=h_logits_b)
-            hustle_flag = hustle_dist.sample()                     # (Ni,)
-            hustle_actions_list.append(hustle_flag.tolist())
-            hustle_log_probs_list.append(hustle_dist.log_prob(hustle_flag))
+            task_actions_list.append(task_idx_cpu[b][:Ni])
+            hustle_actions_list.append(hustle_cpu[b][:Ni])
+            # log-probs stay on device, sliced to real workers — same
+            # shape/contract the per-env loop produced.
+            task_log_probs_list.append(task_lp_full[b, :Ni])
+            hustle_log_probs_list.append(hustle_lp_full[b, :Ni])
 
         return (
             task_actions_list, hustle_actions_list,
