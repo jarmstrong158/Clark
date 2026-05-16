@@ -1174,6 +1174,22 @@ class FacilityEnv:
 
         no_ot = (self.ot_hours <= 0)
 
+        # Peak-season OT is expected, not a failure: a facility's declared
+        # peak months (PeakStaffingConfig.months) are exactly the period
+        # when running late to clear volume is normal operations, so OT in
+        # those months does not incur a grade demerit. This is a GRADE /
+        # evaluation change only — it does NOT alter the training reward
+        # (per_ot_hour etc. still apply), so it's behaviour-neutral for the
+        # policy and only makes the win-rate metric stop penalising
+        # expected peak-season OT. Facilities with no peak_staffing config
+        # have no defined peak season, so the demerit applies as before.
+        _ps = self.facility_config.peak_staffing
+        in_peak_season = (
+            _ps is not None
+            and self.episode.month_name.lower()
+            in {m.lower() for m in _ps.months}
+        )
+
         backlog_threshold = self.facility_config.rules.management_backlog_week_threshold
 
         if not all_orders or not mgmt_minimum:
@@ -1184,7 +1200,7 @@ class FacilityEnv:
                 demerits += 1
             if not mgmt_full:
                 demerits += 1
-            if not no_ot:
+            if not no_ot and not in_peak_season:
                 demerits += 1
             if management_backlog > backlog_threshold:
                 demerits += 1
