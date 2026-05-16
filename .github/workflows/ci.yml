@@ -33,7 +33,7 @@ jobs:
           # CPU-only torch keeps the CI image small and fast; the suite
           # does not require CUDA.
           pip install torch --index-url https://download.pytorch.org/whl/cpu
-          pip install -e .
+          pip install -e ".[dev]"
 
       - name: Run test suite
         run: pytest
