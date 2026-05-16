@@ -364,20 +364,37 @@ def _generate_volume(n_workers: int, avg_oph: float) -> VolumeConfig:
     fall_lo = int(winter_lo * 1.1)
     fall_hi = int(winter_hi * 1.3)
 
+    # Normalize every season range so the invariant lo < hi ALWAYS holds.
+    # Bug history: summer_hi was clamped to 2000 but summer_lo was not, so
+    # winter_lo * peak_mult * 0.9 > 2000 produced an inverted range
+    # (e.g. (2062, 2000)) that crashed episode generation with
+    # `ValueError: empty range in randrange(2062, 2001)` mid-pretrain.
+    # Clamping only the one observed case would leave the same class of
+    # bug latent in spring/fall, so normalize uniformly here instead.
+    VOLUME_CEIL = 2000      # hard ceiling on daily order volume
+    MIN_SPREAD = 20         # hi must exceed lo by at least this much
+
+    def _norm(lo: int, hi: int) -> tuple[int, int]:
+        lo = max(30, min(int(lo), VOLUME_CEIL - MIN_SPREAD))
+        hi = min(int(hi), VOLUME_CEIL)
+        if hi < lo + MIN_SPREAD:
+            hi = lo + MIN_SPREAD
+        return lo, hi
+
     # Assign months to seasons
     seasonal_ranges: dict[str, tuple[int, int]] = {
-        "january":   (winter_lo, winter_hi),
-        "february":  (winter_lo, winter_hi),
-        "march":     (spring_lo, spring_hi),
-        "april":     (spring_lo, spring_hi),
-        "may":       (spring_lo, spring_hi),
-        "june":      (summer_lo, summer_hi),
-        "july":      (summer_lo, summer_hi),
-        "august":    (summer_lo, summer_hi),
-        "september": (fall_lo, fall_hi),
-        "october":   (fall_lo, fall_hi),
-        "november":  (fall_lo, fall_hi),
-        "december":  (winter_lo, winter_hi),
+        "january":   _norm(winter_lo, winter_hi),
+        "february":  _norm(winter_lo, winter_hi),
+        "march":     _norm(spring_lo, spring_hi),
+        "april":     _norm(spring_lo, spring_hi),
+        "may":       _norm(spring_lo, spring_hi),
+        "june":      _norm(summer_lo, summer_hi),
+        "july":      _norm(summer_lo, summer_hi),
+        "august":    _norm(summer_lo, summer_hi),
+        "september": _norm(fall_lo, fall_hi),
+        "october":   _norm(fall_lo, fall_hi),
+        "november":  _norm(fall_lo, fall_hi),
+        "december":  _norm(winter_lo, winter_hi),
     }
 
     # Weekly curve: Monday heaviest, Friday lightest.
