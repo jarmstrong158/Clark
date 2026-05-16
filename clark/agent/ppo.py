@@ -411,13 +411,17 @@ class ClarkAgent:
             state_dict:   Output of StateBuilder.build().
             action_mask:  (N, M) bool ndarray from get_action_mask(). Optional.
 
-        Returns:
+        Returns a 5-TUPLE (this docstring previously claimed 4, which is
+        exactly why cli/main.py and api/main.py unpacked 4 and `clark plan`
+        crashed once a checkpoint existed — keep this in sync with the
+        actual return below):
             task_actions:   list[int] length N
             hustle_actions: list[int] length N (0 or 1)
-            log_prob:       0-D tensor on model device — sum of log-probs
-            value:          0-D tensor on model device — critic estimate
+            task_log_prob:  (N,) detached fp32 tensor on model device
+            hustle_log_prob:(N,) detached fp32 tensor on model device
+            value:          0-D detached fp32 tensor — critic estimate
 
-        log_prob and value are returned as DETACHED tensors, not Python floats.
+        log-probs and value are returned as DETACHED tensors, not Python floats.
         This avoids a GPU→CPU sync on every rollout step. The buffer stores
         them as-is and flushes them in one batched sync at update time.
         """

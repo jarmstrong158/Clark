@@ -352,8 +352,13 @@ def _run_one_plan_day(config, agent, target_date: date, volume: int) -> list[tup
     state_dict = builder.build(env.day_env)
     mask = get_action_mask(env.day_env)
     hmask = get_hustle_mask(env.day_env)
-    task_actions, hustle_actions, _log_prob, _value = agent.select_action_from_dict(
-        state_dict, mask, hustle_mask=hmask,
+    # select_action_from_dict returns 5: task/hustle actions, task_lp,
+    # hustle_lp, value. Previously unpacked 4 -> `clark plan` crashed with
+    # "too many values to unpack (expected 4)" the moment a checkpoint
+    # existed. The test suite missed it (no end-to-end plan-path test);
+    # test_plan_path.py now pins the 5-tuple contract.
+    task_actions, hustle_actions, _task_lp, _hustle_lp, _value = (
+        agent.select_action_from_dict(state_dict, mask, hustle_mask=hmask)
     )
 
     assignments = []

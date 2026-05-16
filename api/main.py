@@ -445,8 +445,11 @@ def get_plan(
         state_dict = builder.build(env.day_env)
         mask = get_action_mask(env.day_env)
         hmask = get_hustle_mask(env.day_env)
-        task_actions, hustle_actions, _lp, _v = agent.select_action_from_dict(
-            state_dict, mask, hustle_mask=hmask,
+        # 5-tuple: task/hustle actions, task_lp, hustle_lp, value.
+        # Was unpacking 4 -> the /plan endpoint 500'd once a model
+        # existed. Mirrors the cli/main.py fix; pinned by test_plan_path.py.
+        task_actions, hustle_actions, _task_lp, _hustle_lp, _v = (
+            agent.select_action_from_dict(state_dict, mask, hustle_mask=hmask)
         )
 
         assignments = []
