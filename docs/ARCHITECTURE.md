@@ -14,8 +14,8 @@ Clark's responsibilities span the full RL lifecycle:
 2. **State construction** — translate current facility state into per-worker / per-task / per-env tokens (shape varies with `N` workers and `M` tasks)
 3. **Inference** — run the transformer + LSTM forward pass to produce task assignment and hustle decisions
 4. **Training** — pre-train on synthetic facilities (foundation model) and fine-tune per facility
-5. **API exposure** — wrap registration, training jobs, and shift planning in a FastAPI server
-6. **Episode logging** — persist episode-level outcomes and curriculum metadata to a database
+5. **Setup wizard + CLI** — guide a facility from config to fine-tune to shift plan, run locally
+6. **Episode logging** — persist episode-level outcomes and curriculum metadata to JSON log files
 
 ---
 
@@ -269,275 +269,29 @@ The synthetic-gen tests have already caught one latent crash (an inverted volume
 
 ---
 
-## REST API
+## Deployment
 
-Clark's API is facility-oriented: register a facility once, queue training jobs, request shift plans, retrieve logs.
+Clark runs **locally, per facility**. The full path is the CLI plus the
+local setup wizard:
 
-### `POST /facilities`
+- `clark wizard` (or `Run Clark Wizard.bat`) — configure a facility and
+  kick off its fine-tune from a browser, no YAML editing.
+- `clark finetune` / `clark plan` — fine-tune from the foundation
+  checkpoint and generate shift plans.
+- `clark dashboard` — monitor a training run.
 
-Register a new facility from a YAML config string.
-
-**Request:**
-```json
-{
-  "name": "My Warehouse",
-  "config_yaml": "facility:\n  name: My Warehouse\n  ..."
-}
-```
-
-**Response:**
-```json
-{
-  "facility_id": "abc-123",
-  "name": "My Warehouse",
-  "registered_at": "2026-05-09T14:00:00Z",
-  "has_model": false
-}
-```
-
-The config is validated against `clark_limits.yaml` at this step. Configs with structural errors (missing required fields, invalid task IDs) are rejected. Configs outside the training distribution produce a warning but are accepted.
-
-### `GET /facilities` and `GET /facilities/{id}`
-
-List all registered facilities, or fetch one. Returns `FacilityInfo` objects (id, name, registered_at, has_model, latest job status).
-
-### `POST /facilities/{id}/train`
-
-Queue a fine-tune job.
-
-**Request:**
-```json
-{
-  "episodes": 500,
-  "lr": 5e-5,
-  "freeze_encoder": false
-}
-```
-
-**Response (HTTP 202):**
-```json
-{
-  "job_id": "train-7f2e1a",
-  "status": "pending",
-  "queued_at": "2026-05-09T14:22:00Z"
-}
-```
-
-In production the job is enqueued to Redis and consumed by a worker container (Celery). In dev the job runs via `BackgroundTasks` in the API process.
-
-### `GET /facilities/{id}/train/status`
-
-Returns the latest fine-tune job's status, episodes completed, and elapsed time.
-
-```json
-{
-  "job_id": "train-7f2e1a",
-  "status": "running",
-  "episodes_done": 312,
-  "episodes_total": 500,
-  "started_at": "2026-05-09T14:22:05Z"
-}
-```
-
-`status` ∈ `pending | running | complete | failed`.
-
-### `POST /facilities/{id}/plan`
-
-Generate a shift plan for a given date.
-
-**Request:**
-```json
-{ "date": "2026-06-01" }
-```
-
-**Response:**
-```json
-{
-  "facility_id": "abc-123",
-  "date": "2026-06-01",
-  "forecast_orders": 412,
-  "assignments": [
-    {"worker_id": 0, "name": "Manager",  "task": "management", "hustle": false},
-    {"worker_id": 1, "name": "Picker A", "task": "pick",       "hustle": true}
-  ],
-  "value_estimate": 847.3
-}
-```
-
-Internally: the API loads the facility's fine-tuned model, instantiates a `YearEnv` for the requested date, fast-forwards to that day, runs one simulated day of inference, and returns the resulting per-worker assignments.
-
-### `GET /facilities/{id}/logs`
-
-Tail the latest training logs (for the dashboard).
-
-### `DELETE /facilities/{id}`
-
-Remove a facility (config, checkpoint, logs). Hard delete in dev, soft delete in production.
-
-### Authentication
-
-All endpoints require an `X-API-Key` header. In the MVP skeleton, any non-empty key is accepted. Production target: per-key identity stored hashed in Postgres, with rate limiting via Redis token buckets.
-
-Full OpenAPI spec served at `/docs` once the API is running.
+There is no service/API layer. An earlier FastAPI skeleton (facility
+registry, train-queue, `/plan` endpoint) was **removed**: training-via-API
+was stubbed, auth was a placeholder, and the local wizard already covers
+the human workflow end to end. A hosted / multi-tenant / WMS-integration
+deployment is deliberately **out of scope until there is a real consumer**
+to design it around — building it speculatively only produced
+skeleton code that overstated readiness. Model weights are plain
+`.pt` files on disk: a fine-tune writes one, `clark plan` reads it. No
+live weight sharing, no broker, no DB.
 
 ---
 
-## Database Schema
-
-Clark logs every fine-tune episode and notable summary stats. The schema is SQLite-compatible (default) and Postgres-compatible (production).
-
-### `facilities`
-
-One row per registered facility.
-
-```sql
-CREATE TABLE facilities (
-    id              TEXT PRIMARY KEY,           -- UUID
-    name            TEXT NOT NULL,
-    config_yaml     TEXT NOT NULL,
-    registered_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    has_model       BOOLEAN DEFAULT FALSE
-);
-```
-
-### `train_jobs`
-
-One row per fine-tune job (queued, running, or complete).
-
-```sql
-CREATE TABLE train_jobs (
-    id              TEXT PRIMARY KEY,
-    facility_id     TEXT REFERENCES facilities(id),
-    status          TEXT,                       -- pending | running | complete | failed
-    episodes_total  INTEGER,
-    episodes_done   INTEGER DEFAULT 0,
-    lr              REAL,
-    freeze_encoder  BOOLEAN,
-    started_at      TIMESTAMP,
-    completed_at    TIMESTAMP,
-    error           TEXT                        -- traceback if failed
-);
-```
-
-### `episodes`
-
-One row per completed simulated year during fine-tuning.
-
-```sql
-CREATE TABLE episodes (
-    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
-    facility_id        TEXT REFERENCES facilities(id),
-    job_id             TEXT REFERENCES train_jobs(id),
-    episode_index      INTEGER,
-    grade              TEXT,                    -- A/B/C/D/F (last day's grade)
-    total_reward       REAL,
-    reward_per_worker  REAL,
-    orders_shipped     INTEGER,
-    ot_hours           REAL,
-    win                BOOLEAN,                 -- grade in (A, B)
-    created_at         TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-```
-
-### `notable_episodes`
-
-Sparse table — one row each for best reward, worst reward, first perfect day, most debuffs fired.
-
-```sql
-CREATE TABLE notable_episodes (
-    facility_id    TEXT,
-    reason         TEXT,                       -- 'best_reward', 'first_perfect', etc.
-    episode_id     INTEGER REFERENCES episodes(id),
-    updated_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (facility_id, reason)
-);
-```
-
-### Retention
-
-Episode rows are kept indefinitely. Heavy per-day step data from training (worker timelines, etc.) is sampled to one snapshot per `save_interval` episodes to bound disk growth during long pre-train / fine-tune runs.
-
----
-
-## Storage Layout
-
-### Production (S3)
-
-```
-s3://clark-prod/
-  checkpoints/
-    clark_foundation.pt          # shared base model
-  facilities/
-    <facility_uuid>/
-      config.yaml                # validated facility YAML
-      model.pt                   # latest fine-tuned checkpoint
-      logs/
-        <job_id>.log             # training log per job
-```
-
-### Dev (local filesystem)
-
-```
-clark/data/
-  checkpoints/
-    clark_foundation.pt
-  facilities/
-    <facility_uuid>/
-      config.yaml
-      model.pt
-      meta.json                  # replaces facilities row in SQLite/PG dev mode
-      logs/
-        <job_id>.log
-```
-
----
-
-## Docker Compose Structure
-
-Clark ships as three containers in production: API, training worker, database.
-
-```yaml
-services:
-  api:
-    image: clark-api:latest
-    ports: ["8000:8000"]
-    volumes:
-      - ./model:/app/model:ro
-    environment:
-      - CLARK_DB_URL=postgresql://clark:${DB_PASSWORD}@db/clark
-      - CLARK_REDIS_URL=redis://redis:6379/0
-    depends_on: [db, redis]
-
-  worker:
-    image: clark-worker:latest
-    command: celery -A clark.tasks worker --loglevel=info
-    depends_on: [db, redis]
-    deploy:
-      replicas: 2
-
-  db:
-    image: postgres:16-alpine
-    environment:
-      POSTGRES_DB: clark
-      POSTGRES_USER: clark
-      POSTGRES_PASSWORD: ${DB_PASSWORD}
-    volumes:
-      - clark_db:/var/lib/postgresql/data
-
-  redis:
-    image: redis:7-alpine
-
-volumes:
-  clark_db:
-```
-
-The `worker` container holds the full training stack (PyTorch, env simulation, model). The `api` container is lighter and can run on a smaller instance.
-
-**SQLite mode (dev):** Drop the `db`, `redis`, and `worker` services and set `CLARK_DB_URL=sqlite:////data/clark.db`. Fine-tune jobs run in-process via FastAPI `BackgroundTasks`. Suitable for single-facility, single-server deployments.
-
-**Postgres + Redis + Celery mode (prod):** Required for multi-facility deployments, parallel fine-tunes, and HA setups.
-
----
 
 ## Resource Profile
 
@@ -553,34 +307,15 @@ Pre-training (foundation, ~10k episodes): a multi-day GPU job, run once. Re-runn
 
 ---
 
-## Inference vs. Training Boundary
-
-Clark does both — but they run in different containers and have different resource profiles.
-
-**API container (always-on):**
-- Forward pass through encoder + LSTM (planning)
-- LSTM hidden state initialization for new sessions
-- Config-to-state mapping
-- Episode summary logging
-
-**Training worker container (on-demand):**
-- PPO loss computation, GAE advantage estimation, gradient updates
-- Synthetic facility generation (pre-train only)
-- Rollout buffer management
-- Checkpoint serialization
-
-Model weights flow one way: a fine-tune job uploads a new `model.pt` to S3 (or writes to `clark/data/facilities/.../model.pt` in dev), and the next API request reads it. No live weight sharing — the API picks up new weights at request time.
-
----
-
 ## Config Validation
 
-Configs are validated at registration (`POST /facilities`) and at fine-tune start. Validation has two layers:
+Configs are validated by the wizard (live, as you build one) and at
+fine-tune start. Validation has two layers:
 
-1. **Structural** — required fields present, types correct, IDs contiguous, custom tasks well-formed. Failures are HTTP 400 errors and prevent registration.
-2. **Bounds** — values within `clark_limits.yaml` ranges (per-worker max OPH, per-month order ranges, OT-related thresholds, etc.). Out-of-bounds values produce warnings but do not block registration. The model may still produce reasonable behavior, especially after fine-tuning.
+1. **Structural** — required fields present, types correct, IDs contiguous, custom tasks well-formed. Failures are hard errors that block fine-tuning.
+2. **Bounds** — values within `clark_limits.yaml` ranges (per-worker max OPH, per-month order ranges, OT-related thresholds, etc.). Out-of-bounds values produce warnings but do not block training. The model may still produce reasonable behavior, especially after fine-tuning.
 
-The `clark validate <config.yaml>` CLI command runs both layers locally without registering.
+The `clark validate <config.yaml>` CLI command runs both layers locally.
 
 ---
 

@@ -12,7 +12,7 @@ Clark learns the underlying dynamics of warehouse operations — picking and pac
 
 Where its predecessor [Jack](https://github.com/jarmstrong158/Jack) was a single-facility PPO + LSTM agent operating on a fixed 7-worker, 14-action state vector, Clark is built around a transformer + LSTM hybrid that handles **variable** numbers of workers and tasks. The same model weights generalize across facilities.
 
-> **Status:** Foundation pre-training is actively in progress. The architecture, training loop, fine-tune workflow, configuration schema, and REST API are stable. Code is open; pre-trained foundation weights will ship in a future release.
+> **Status:** Foundation pre-training is actively in progress. The architecture, training loop, fine-tune workflow, configuration schema, CLI, and setup wizard are stable. Code is open; pre-trained foundation weights will ship in a future release.
 
 ---
 
@@ -23,13 +23,12 @@ Where its predecessor [Jack](https://github.com/jarmstrong158/Jack) was a single
 3. [Pre-train → fine-tune workflow](#pre-train--fine-tune-workflow)
 4. [Quickstart](#quickstart)
 5. [CLI reference](#cli-reference)
-6. [REST API](#rest-api)
-7. [Project structure](#project-structure)
-8. [Configuring a facility](#configuring-a-facility)
-9. [Performance and status](#performance-and-status)
-10. [How Clark differs from Jack](#how-clark-differs-from-jack)
-11. [Roadmap](#roadmap)
-12. [License](#license)
+6. [Project structure](#project-structure)
+7. [Configuring a facility](#configuring-a-facility)
+8. [Performance and status](#performance-and-status)
+9. [How Clark differs from Jack](#how-clark-differs-from-jack)
+10. [Roadmap](#roadmap)
+11. [License](#license)
 
 ---
 
@@ -253,27 +252,6 @@ clark dashboard                    Launch local dashboard server.
 
 ---
 
-## REST API
-
-The FastAPI server (`uvicorn api.main:app`) exposes a facility-oriented API.
-
-| Method | Path | Purpose |
-|---|---|---|
-| `POST` | `/facilities` | Register a facility from a YAML body |
-| `GET` | `/facilities` | List registered facilities |
-| `GET` | `/facilities/{id}` | Facility info |
-| `POST` | `/facilities/{id}/train` | Queue a fine-tune job |
-| `GET` | `/facilities/{id}/train/status` | Check job status |
-| `POST` | `/facilities/{id}/plan` | Generate a shift plan for a date |
-| `GET` | `/facilities/{id}/logs` | Tail training logs |
-| `DELETE` | `/facilities/{id}` | Remove a facility |
-
-All endpoints require an `X-API-Key` header. In the MVP skeleton any non-empty key is accepted; production target is per-key identity stored hashed in PostgreSQL with rate limiting via Redis.
-
-Full OpenAPI spec served at `/docs` once running. Detailed deployment notes (Docker Compose, Celery worker, S3 checkpoint storage) in [`CLOUD_ARCHITECTURE.md`](CLOUD_ARCHITECTURE.md).
-
----
-
 ## Project structure
 
 ```
@@ -316,14 +294,12 @@ clark/
     logs/                   # (gitignored) training run logs
     facilities/             # (gitignored) per-facility runtime state
 
-api/main.py                 # FastAPI server
 cli/main.py                 # `clark` CLI entry point
 tests/                      # pytest suite (`pytest` from repo root)
 
 Run Clark Wizard.bat        # Double-click entry point for the setup wizard
 NOTE.md                     # Canonical design doc — read before touching code
 docs/ARCHITECTURE.md        # Public-facing architecture reference
-CLOUD_ARCHITECTURE.md       # Production deployment design
 ```
 
 ---
@@ -403,7 +379,7 @@ A trained `clark_foundation.pt` will be released here once pre-training and curr
 | Architecture | LSTM only (~800K params) | Transformer encoder + LSTM hybrid (~18M params) |
 | Per-facility training | From scratch (~9 simulated years) | Fine-tune from foundation (~200–500 episodes) |
 | Multi-facility | One model per facility | One foundation model, many fine-tunes |
-| Deployment | Script | REST API + Docker, Celery-backed fine-tune queue |
+| Deployment | Script | CLI + local web setup wizard (per-facility, run locally) |
 
 Clark is a successor to Jack, not a wrapper around it. The two share design DNA — PPO with GAE, TBPTT through the LSTM, daily reward shaping — but Clark's encoder, action heads, and training loop are new code built for the variable-shape problem. Jack lives on as the single-facility reference implementation.
 

@@ -2,15 +2,15 @@
 
 The 392-test suite covered the training path but never exercised
 `clark plan` end-to-end, so a contract drift shipped on master:
-select_action_from_dict returns a 5-tuple but cli/main.py and
-api/main.py unpacked 4, crashing `clark plan` with
+select_action_from_dict returns a 5-tuple but the plan call site in
+cli/main.py unpacked 4, crashing `clark plan` with
 `too many values to unpack (expected 4)` the moment a checkpoint
 existed. (Caught by an external review, not by us — this file
-closes that gap.)
+closes that gap. The since-removed api/main.py had the same bug.)
 
 These tests pin:
   1. the exact 5-tuple contract of select_action_from_dict, and
-  2. that the cli/api unpack pattern matches it,
+  2. that the cli plan unpack pattern matches it,
 so this class of return-arity drift can't silently ship again.
 """
 from __future__ import annotations
@@ -62,8 +62,8 @@ def test_select_action_from_dict_returns_exactly_five():
 
 
 def test_cli_plan_unpack_pattern_matches():
-    """Literally the cli/main.py:355 + api/main.py:448 unpack. If the
-    return arity drifts again, this fails instead of `clark plan`."""
+    """Literally the cli/main.py plan-path unpack. If the return arity
+    drifts again, this fails instead of `clark plan`."""
     agent, sd, mask, hmask, env = _plan_inputs()
     # cli/main.py form:
     task_actions, hustle_actions, _task_lp, _hustle_lp, _value = (

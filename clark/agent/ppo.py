@@ -412,9 +412,9 @@ class ClarkAgent:
             action_mask:  (N, M) bool ndarray from get_action_mask(). Optional.
 
         Returns a 5-TUPLE (this docstring previously claimed 4, which is
-        exactly why cli/main.py and api/main.py unpacked 4 and `clark plan`
-        crashed once a checkpoint existed — keep this in sync with the
-        actual return below):
+        exactly why cli/main.py unpacked 4 and `clark plan` crashed once a
+        checkpoint existed — keep this in sync with the actual return
+        below):
             task_actions:   list[int] length N
             hustle_actions: list[int] length N (0 or 1)
             task_log_prob:  (N,) detached fp32 tensor on model device

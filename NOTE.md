@@ -237,19 +237,17 @@ clark dashboard                   — launch local dashboard server
 
 ---
 
-## Cloud Architecture (Phase 7)
+## Cloud / API layer — deliberately NOT built
 
-FastAPI backend + Celery/Redis for training jobs + S3/GCS for storage.
+A FastAPI + Celery/Redis + S3 deployment was prototyped and **scrapped**.
+The skeleton stubbed training-via-API, faked auth, and used local files
+for the "registry" — it overstated readiness and had zero consumers.
+The local `clark wizard` + CLI cover the human workflow end to end.
 
-```
-POST /facilities              — register facility config
-POST /facilities/{id}/train   — trigger fine-tuning job
-GET  /facilities/{id}/status  — job status
-POST /facilities/{id}/plan    — get shift plan for a date
-GET  /facilities/{id}/logs    — dashboard data
-```
-
-Docker: separate containers for API and training workers. Scales horizontally.
+Do not resurrect this speculatively. A hosted / multi-tenant /
+WMS-integration layer should be built *only* when there is a real
+consumer to design it around — at which point it should be shaped by
+that consumer's needs, not the guesses this skeleton encoded.
 
 ---
 
