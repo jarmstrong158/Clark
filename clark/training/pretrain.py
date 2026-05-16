@@ -680,6 +680,28 @@ def pretrain_batched(
                     f"other {other_ms:5.1f} ({other_ms/denom*100:4.1f}%)",
                     flush=True,
                 )
+                # Sub-breakdown of the dominant ppo phase: prep (one-time
+                # GAE/tensor setup) vs eval (epochs× forward_sequence) vs
+                # rest (loss assembly + backward + optimizer step). Tells us
+                # WHICH part of the 82% to attack — measured, not guessed.
+                up = getattr(agent, "_upd_prof", None)
+                if up and up.get("calls", 0) > 0:
+                    c = up["calls"]
+                    pp = up["prep"] / c * 1000
+                    ev = up["eval"] / c * 1000
+                    rs = up["rest"] / c * 1000
+                    tot = max(1e-9, pp + ev + rs)
+                    print(
+                        f"  ... [ppo-prof] {c:>4} updates | per-update "
+                        f"{tot:7.1f}ms = prep {pp:6.1f} ({pp/tot*100:4.1f}%) "
+                        f"eval {ev:7.1f} ({ev/tot*100:4.1f}%) "
+                        f"rest {rs:7.1f} ({rs/tot*100:4.1f}%) "
+                        f"[eval+rest are summed over epochs_per_update]",
+                        flush=True,
+                    )
+                    agent._upd_prof = {"prep": 0.0, "eval": 0.0,
+                                       "rest": 0.0, "calls": 0}
+
                 # Reset the window so each report is a fresh rolling sample,
                 # not a cumulative average that hides drift.
                 prof = {"recv": 0.0, "act": 0.0, "ppo": 0.0, "loop": 0.0, "ticks": 0}

@@ -584,6 +584,20 @@ class ClarkAgent:
         if buf.entry_hidden is None:
             buf.entry_hidden = self.model.init_hidden()
 
+        # ── PPO-update sub-profiler (permanent, con-009/con-011 pattern) ──────
+        # The production tick profiler showed _update_single_buffer is 82-83%
+        # of wall-clock. This breaks that 383ms/tick down into prep (one-time
+        # GAE/tensor setup) vs eval (the epochs× forward_sequence) vs
+        # epoch_rest (loss assembly + backward + optimizer step), so the
+        # optimization target is measured, not guessed (con-011). cuda.sync
+        # at bucket boundaries is required for correct GPU-time attribution;
+        # ~3 syncs per epoch is negligible vs a 383ms update.
+        import time as _time
+        if not hasattr(self, "_upd_prof"):
+            self._upd_prof = {"prep": 0.0, "eval": 0.0, "rest": 0.0, "calls": 0}
+        _cuda = torch.cuda.is_available()
+        _pt = _time.perf_counter()
+
         advantages, returns = buf.compute_returns(
             self.hparams["gamma"], self.hparams["gae_lambda"]
         )
@@ -655,6 +669,11 @@ class ClarkAgent:
             "n_updates": 0,
         }
 
+        if _cuda: torch.cuda.synchronize()
+        self._upd_prof["prep"] += _time.perf_counter() - _pt
+        self._upd_prof["calls"] += 1
+        _pt = _time.perf_counter()
+
         for _ in range(epochs):
             with self._amp_ctx():
                 # _evaluate_sequence returns PER-WORKER per-step log-probs as
@@ -672,6 +691,10 @@ class ClarkAgent:
                         hustle_masks=buf.hustle_masks,
                     )
                 )
+
+                if _cuda: torch.cuda.synchronize()
+                self._upd_prof["eval"] += _time.perf_counter() - _pt
+                _pt = _time.perf_counter()
 
                 values_f32 = values.float()
                 entropies_f32 = entropies.float()
@@ -765,6 +788,10 @@ class ClarkAgent:
             metrics["entropy"] += -entropy_loss.item()
             metrics["clip_fraction"] += clip_fraction
             metrics["n_updates"] += 1
+
+            if _cuda: torch.cuda.synchronize()
+            self._upd_prof["rest"] += _time.perf_counter() - _pt
+            _pt = _time.perf_counter()
 
         n = max(1, metrics["n_updates"])
         for k in ("policy_loss", "value_loss", "entropy", "clip_fraction"):
