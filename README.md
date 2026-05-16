@@ -417,7 +417,7 @@ Clark is a successor to Jack, not a wrapper around it. The two share design DNA 
 - [x] Synthetic facility generator with 3-stage curriculum
 - [x] Pre-train + fine-tune CLI (`clark pretrain`, `clark finetune`)
 - [x] Per-worker PPO ratio + per-(worker, head) clipping (IPPO-style)
-- [x] EMA running return normalization for the value loss (replaced PopArt — see Architecture for rationale)
+- [x] Symlog value-target compression (DreamerV3) + `vf_clip` — replaced EMA-only normalization and PopArt; permanently fixed the recurring value-head saturation (see Architecture for rationale)
 - [x] Assignment logits scaled by `1/√d_model` (well-tempered softmax at init)
 - [x] Per-worker mean entropy (N-invariant exploration bonus)
 - [x] Hustle action masks threaded through rollout AND PPO update
@@ -426,11 +426,13 @@ Clark is a successor to Jack, not a wrapper around it. The two share design DNA 
 - [x] `γ=0.999`, `λ=0.98`, `chunk_size=64` tuned for the 13k-step horizon
 - [x] Reward / return clips wide enough to preserve catastrophic-day signal
 - [x] Bounded `per_order_incomplete` penalty (cap at -10 × min(N_unshipped, 50))
-- [x] `+500 × cmp_year` shaping bonus to balance the negative-dominant signal
+- [x] Scaled, per-day-capped filler-during-crunch penalty (orders prioritized over filler under load)
 - [x] Physical pick-buffer cap (`pick_buffer_capacity`) prevents unbounded over-picking
 - [x] Restock allowed during OT when stock is critically low (breaks restock-collapse cascade)
-- [x] Volume scales per-N so peak-summer days stay ≤110% of physical capacity
-- [x] Vectorized PPO update (single GPU sync per cycle)
+- [x] Feasibility-bounded synthetic volume — daily orders tied to OT-rescuable workforce capacity so no generated year is physically unwinnable
+- [x] Vectorized within-update PPO log-probs (single GPU sync per buffer update)
+- [x] Vectorized batched action sampler (one GPU→CPU transfer per tick)
+- [x] Permanent production-tick profiler (recv/act/ppo wall-clock breakdown)
 - [x] Facility-aware order-arrival schedule (no silent drops)
 - [x] Float-comparison epsilon at order-cutoff boundary (no stranded orders)
 - [x] Multi-process env runner with pipelined CPU/GPU overlap
