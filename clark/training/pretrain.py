@@ -504,6 +504,19 @@ def pretrain_batched(
     # Last seen PPO health (for heartbeat one-liner)
     last_clip = 0.0; last_vloss = 0.0; last_entropy = 0.0
 
+    # ── Production-tick profiler (permanent, ~zero overhead) ──────────────────
+    # Answers the recurring "where does the wall-clock actually go" question
+    # WITHOUT a microbench (microbench-vs-production mismatch already burned
+    # us once — the vectorized-sampler projection didn't materialize because
+    # the real critical path is the pipelined MP loop, not isolated calls).
+    # recv = blocked in step_recv waiting on the slowest of n_envs workers
+    #        (the suspected true bottleneck); act = forward+sample; ppo =
+    #        day-boundary learner updates; loop = whole iteration. The
+    #        recv/loop ratio directly says "is the env the wall."
+    prof = {"recv": 0.0, "act": 0.0, "ppo": 0.0, "loop": 0.0, "ticks": 0}
+    last_prof_report = 0.0
+    prof_report_interval_s = 60.0
+
     # ── Pipelined warmup ──────────────────────────────────────────────────────
     # Pre-fill prev_* with the very first tick's data and kick the workers off
     # so the loop's first step_recv has something to drain. This lets the loop
@@ -529,6 +542,7 @@ def pretrain_batched(
     while ep < n_episodes:
       try:
         tick += 1
+        _loop_t0 = time.perf_counter()
 
         # Heartbeat so the terminal isn't silent for ~9 minutes between
         # episode completions. Overwrites itself in-place so the log stays
@@ -643,8 +657,38 @@ def pretrain_batched(
                 if len(intra_year_days) > 400:
                     intra_year_days = intra_year_days[-200:]
 
+            # Production-tick profiler report — independent 60s cadence so it
+            # fires even before the first day completes. Shows where wall-clock
+            # actually goes per tick. recv% is the headline: if step_recv
+            # (blocked on the slowest of n_envs env workers) dominates, the
+            # bottleneck is the environment and the answer is more parallel
+            # envs / async actor-learner, NOT GPU-side tuning.
+            if now - last_prof_report >= prof_report_interval_s and prof["ticks"] > 0:
+                tk = prof["ticks"]
+                loop_ms = prof["loop"] / tk * 1000
+                recv_ms = prof["recv"] / tk * 1000
+                act_ms = prof["act"] / tk * 1000
+                ppo_ms = prof["ppo"] / tk * 1000
+                other_ms = max(0.0, loop_ms - recv_ms - act_ms - ppo_ms)
+                denom = max(1e-9, loop_ms)
+                print(
+                    f"\n  ... [prof] {tk:>5} ticks | loop {loop_ms:6.1f}ms/tick "
+                    f"({1000.0/denom:4.1f} t/s) | "
+                    f"recv {recv_ms:6.1f} ({recv_ms/denom*100:4.1f}%) "
+                    f"act {act_ms:5.1f} ({act_ms/denom*100:4.1f}%) "
+                    f"ppo {ppo_ms:6.1f} ({ppo_ms/denom*100:4.1f}%) "
+                    f"other {other_ms:5.1f} ({other_ms/denom*100:4.1f}%)",
+                    flush=True,
+                )
+                # Reset the window so each report is a fresh rolling sample,
+                # not a cumulative average that hides drift.
+                prof = {"recv": 0.0, "act": 0.0, "ppo": 0.0, "loop": 0.0, "ticks": 0}
+                last_prof_report = now
+
         # Block until workers finish the previously-sent step.
+        _t = time.perf_counter()
         results = runner.step_recv()
+        prof["recv"] += time.perf_counter() - _t
 
         # Zero LSTM slots for any env that just reset (its just_reset flag
         # was set by the worker when its episode ended). Must happen BEFORE
@@ -665,9 +709,11 @@ def pretrain_batched(
         states = list(runner.states())
         masks = list(runner.masks())
         hmasks = list(runner.hustle_masks())
+        _t = time.perf_counter()
         task_a, hustle_a, t_lps, h_lps, values = agent.select_action_batched(
             states, masks, hustle_masks=hmasks,
         )
+        prof["act"] += time.perf_counter() - _t
 
         # Send actions to workers IMMEDIATELY so they start stepping in the
         # background while the main thread does bookkeeping below. This is
@@ -697,6 +743,7 @@ def pretrain_batched(
         )
 
         # Per-env day-boundary PPO updates (matches single-env cadence).
+        _t = time.perf_counter()
         for b, r in enumerate(results):
             info = r["info"]
             if (info.get("new_day") or r["done"]) and len(agent.buffers[b]) > 0:
@@ -725,6 +772,7 @@ def pretrain_batched(
                             n_updates=m["n_updates"],
                         )
                 agent.snapshot_entry_hidden_for_slot(b)
+        prof["ppo"] += time.perf_counter() - _t
 
         # Handle episode completions: log them and advance ep counter.
         for b, r in enumerate(results):
@@ -930,6 +978,9 @@ def pretrain_batched(
         prev_t_lps = t_lps
         prev_h_lps = h_lps
         prev_v = values
+
+        prof["loop"] += time.perf_counter() - _loop_t0
+        prof["ticks"] += 1
 
       except Exception as exc:
         import traceback
