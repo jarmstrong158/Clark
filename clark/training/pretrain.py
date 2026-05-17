@@ -474,7 +474,13 @@ def pretrain_batched(
 
     episode_reward_per_worker: list[float] = []
     episode_grades: list[str] = []           # last day's grade per episode (badge)
-    episode_year_win_rates: list[float] = [] # full-year win rate per episode (real signal)
+    episode_year_win_rates: list[float] = [] # graded win (A/B-day fraction) per episode
+    episode_ship_win_rates: list[float] = []  # OPERATIONAL win: fraction of days that
+                                              # shipped 100% of orders, independent of
+                                              # the mgmt/OT grade demerits. Audit found
+                                              # graded-win conflates the primary KPI
+                                              # (ship the orders) with secondary duties;
+                                              # this is the artifact-free signal.
     episode_year_grades_flat: list[str] = [] # all 261 day-grades per episode, flat
     episode_ot_flags: list[bool] = []
     episode_ord_pct: list[float] = []
@@ -814,6 +820,7 @@ def pretrain_batched(
             year_grades: list[str] = []
             year_ord_pcts: list[float] = []
             year_ot_count = 0
+            year_days_fully_shipped = 0
             for day_summary in daily:
                 d_footer = day_summary.get("footer", {})
                 d_header = day_summary.get("header", {})
@@ -823,10 +830,15 @@ def pretrain_batched(
                 year_ord_pcts.append(
                     max(0.0, (d_total - d_remaining) / d_total)
                 )
+                # Operational win: did this day ship everything? Independent
+                # of the grade's mgmt/OT demerits (see audit / eval split).
+                if d_remaining <= 0:
+                    year_days_fully_shipped += 1
                 if d_footer.get("ot_hours", 0.0) > 0.0:
                     year_ot_count += 1
             n_days = max(1, len(daily))
             year_win = sum(1 for g in year_grades if g in ("A", "B")) / n_days
+            year_ship_win = year_days_fully_shipped / n_days
             year_ot_rate = year_ot_count / n_days
             year_ord_pct = sum(year_ord_pcts) / max(1, len(year_ord_pcts))
 
@@ -847,6 +859,7 @@ def pretrain_batched(
             # Track year-level win rate separately for a more honest summary
             # in the windowed display.
             episode_year_win_rates.append(year_win)
+            episode_ship_win_rates.append(year_ship_win)
             episode_year_grades_flat.extend(year_grades)
 
             # Per-episode metrics for the dashboard (curriculum scatter,
@@ -857,6 +870,7 @@ def pretrain_batched(
                 n_workers=cfg.num_workers,
                 n_tasks=cfg.num_tasks,
                 win_rate_year=year_win,
+                ship_win_year=year_ship_win,
                 ot_rate_year=year_ot_rate,
                 completion_rate_year=year_ord_pct,
                 reward_per_worker=fin["reward"] / max(1, cfg.num_workers),
@@ -899,6 +913,11 @@ def pretrain_batched(
                 # an A/B" measurement.
                 recent_year_wins = episode_year_win_rates[-w:]
                 win_rate = sum(recent_year_wins) / max(1, len(recent_year_wins))
+                # Operational win (artifact-free): fraction of days that
+                # shipped 100%, averaged over the window — the primary KPI,
+                # NOT conflated with the mgmt/OT grade demerits.
+                recent_ship_wins = episode_ship_win_rates[-w:]
+                ship_win_rate = sum(recent_ship_wins) / max(1, len(recent_ship_wins))
                 ot_rate = sum(episode_ot_flags[-w:]) / w if episode_ot_flags else 0.0
                 avg_ord_pct = sum(episode_ord_pct[-w:]) / max(1, len(episode_ord_pct[-w:]))
                 # Also surface the per-day grade distribution in this window
@@ -929,6 +948,7 @@ def pretrain_batched(
                     f"Cfg {cfg_str:<10} | "
                     f"{size_str:<10} | "
                     f"R/W {avg_rw:7.1f}{trend} | "
+                    f"Ship {ship_win_rate:4.0%} | "
                     f"Win {win_rate:4.0%} | "
                     f"OT {ot_rate:4.0%} | "
                     f"Cmp% {avg_ord_pct:4.0%} | "
@@ -944,6 +964,7 @@ def pretrain_batched(
                     episode=ep,
                     avg_reward_per_worker=avg_rw,
                     win_rate=win_rate,
+                    ship_win_rate=ship_win_rate,
                     ot_rate=ot_rate,
                     completion_rate=avg_ord_pct,
                     reward_dominance=reward_breakdown_window,
@@ -956,7 +977,14 @@ def pretrain_batched(
                     elapsed_s=elapsed,
                     alive=True,
                 )
-                metrics.write()
+                # Soft-fail: a transient Windows file-lock from the dashboard
+                # reader must never kill a multi-hour run (mirrors the
+                # heartbeat-write guard). Worst case: this window's snapshot
+                # is skipped; the next window retries.
+                try:
+                    metrics.write()
+                except Exception as _e:
+                    print(f"  [metrics] window write skipped: {_e}", flush=True)
 
                 # Per-day grade distribution across this window's full years
                 # (not just the last day). One line per window — gives a far

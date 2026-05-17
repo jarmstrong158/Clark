@@ -123,12 +123,15 @@ class TrainingMetricsLogger:
         stage: int,
         n_workers: int,
         n_tasks: int,
-        win_rate_year: float,        # fraction of A/B days across this year
+        win_rate_year: float,        # graded win: fraction of A/B days this year
         ot_rate_year: float,
         completion_rate_year: float,
         reward_per_worker: float,
         last_grade: str,
         config_name: str = "",
+        ship_win_year: float = 0.0,  # OPERATIONAL win: fraction of days that
+                                     # shipped 100% (artifact-free; not
+                                     # conflated with mgmt/OT grade demerits)
     ) -> None:
         self.episodes.append({
             "ep": episode,
@@ -136,6 +139,7 @@ class TrainingMetricsLogger:
             "N": n_workers,
             "M": n_tasks,
             "win_year": round(win_rate_year, 4),
+            "ship_win": round(ship_win_year, 4),
             "ot_year": round(ot_rate_year, 4),
             "cmp_year": round(completion_rate_year, 4),
             "rw_per_worker": round(reward_per_worker, 2),
@@ -159,6 +163,8 @@ class TrainingMetricsLogger:
         completion_rate: float,
         reward_dominance: dict,      # {component_name: value}
         grade_distribution: dict,    # {A: n, B: n, ...}
+        ship_win_rate: float = 0.0,  # OPERATIONAL win (100%-ship-day frac),
+                                     # artifact-free; see record_episode
     ) -> None:
         # Top 5 dominance components for compactness
         top_dominance = dict(sorted(
@@ -168,6 +174,7 @@ class TrainingMetricsLogger:
             "ep": episode,
             "avg_rw": round(avg_reward_per_worker, 2),
             "win": round(win_rate, 4),
+            "ship_win": round(ship_win_rate, 4),
             "ot": round(ot_rate, 4),
             "cmp": round(completion_rate, 4),
             "dominance": {k: round(v, 2) for k, v in top_dominance.items()},

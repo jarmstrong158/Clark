@@ -329,6 +329,7 @@ A single-file HTML dashboard ships with the repo. Double-click [`clark/dashboard
 The top half shows everything that matters during a run:
 
 - **Status tiles** — episode / stage / day-level win, completion, OT frequency, PPO clip fraction, throughput
+- **Operational vs graded win** — `ship_win` (fraction of days that shipped 100% of orders — the primary KPI) is logged and shown alongside the grade-based `win` (A/B-day fraction). An audit found the grade conflates the primary job with secondary management/OT demerits — half of "lost" days shipped everything and were demerited only for secondary duties — so the two are surfaced separately rather than collapsed into one number
 - **Day-grade roll** — rolling 50-day windows of A/B/C/D/F across the last 200 simulated days. The high-frequency learning signal that populates within minutes of starting
 - **Reward components panel** — per-day mean magnitude of every reward signal, sorted, divergent-bar visualization. This is how you spot which penalty is dominating
 - **Pipeline trend** — `per_order_incomplete` (orders never shipped) vs `picked_backlog` (picked but not packed) vs `per_order_shipped` over the last 200 days. Direct visualization of whether the model is balancing pickers and packers correctly
@@ -412,8 +413,10 @@ Clark is a successor to Jack, not a wrapper around it. The two share design DNA 
 - [x] Facility-aware order-arrival schedule (no silent drops)
 - [x] Float-comparison epsilon at order-cutoff boundary (no stranded orders)
 - [x] Multi-process env runner with pipelined CPU/GPU overlap
+- [x] Multi-process runner protocol smoke test + soft-fail metrics write (closes the untested-path crash class)
 - [x] N-split TBPTT chunker for peak-staffing days
 - [x] Live training metrics + dashboard (PPO health, day-grade trends, sliding windows, per-N rollup)
+- [x] Operational `ship_win` metric logged separately from the conflated grade-based `win` (audit-driven eval split)
 - [x] Curriculum-counter resume bug fixed (stage advancement persists across restarts)
 
 ### Infrastructure
@@ -422,9 +425,6 @@ Clark is a successor to Jack, not a wrapper around it. The two share design DNA 
 - [x] Local facility-setup wizard (stdlib HTTP, no service layer — see NOTE.md on why a hosted API is deliberately not built)
 - [ ] **Foundation pre-training run (in progress)**
 - [ ] Public release of `clark_foundation.pt`
-- [ ] Celery-backed multi-worker fine-tune queue (currently `BackgroundTasks`)
-- [ ] PostgreSQL-backed facility registry (currently `meta.json` files)
-- [ ] Per-key authentication and rate limiting
 
 ---
 
