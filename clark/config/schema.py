@@ -146,8 +146,9 @@ class BusinessRules:
     # without OT (those orders carry over via order_carryover_enabled or
     # incur per_order_incomplete penalty). Above this threshold, OT enters.
     # Lowered 10 → 1 after audit found a perverse "leave 9 orders to dodge
-    # OT" incentive: with INCOMPLETE_CAP, leaving 9 orders cost only -90
-    # while OT cost -0.5/hr × ~1hr = -0.5 — but the F-grade fires at ANY
+    # OT" incentive: leaving 9 orders cost only -90 (pre-rebalance, when
+    # the incomplete penalty was also capped) while OT cost -0.5/hr ×
+    # ~1hr = -0.5 — but the F-grade fires at ANY
     # incomplete (grade is binary on shipped >= total), so the model paid
     # the F penalty WITHOUT taking the OT shot to fix the day. Setting
     # trigger to 1 aligns the OT-trigger boundary with the grade boundary:
@@ -289,20 +290,31 @@ class RewardOverrides:
 # ─── Default reward signals ──────────────────────────────────────────────────
 
 DEFAULT_REWARDS: dict[str, float] = {
-    # Bumped from +1.0 → +5.0 so partial completion has a meaningful positive
-    # gradient. With per_order_incomplete=-10 dominating, the agent was
-    # learning to *abandon* picks because the marginal +1 reward for each
-    # shipped order didn't beat PopArt advantage noise. At +5, shipping 50%
-    # of 500 orders gives +1250 (vs old +250) — comparable in magnitude to
-    # the -2500 from the unshipped half, restoring a real "ship more = good"
-    # signal that survives PopArt normalization.
-    "per_order_shipped":              5.0,
-    # Completion bonus reverted to +50 (was bumped to +200 when grades were
-    # stuck at F pre-env-fix). With the env arrival bug fixed, completion is
-    # actually achievable — making this bonus rare-but-massive caused PopArt
-    # μ to drift on the rare perfect-day spikes, destabilizing the value
-    # head and producing the monotonic regression we saw post-launch.
-    "all_orders_complete_bonus":     50.0,
+    # COMPLETION-DOMINANT REBALANCE (triple-audit, 2026-05-17).
+    # Root cause found by three independent audits: a FAILED day netted
+    # net-POSITIVE reward (winnable-idle F days mean +1493, 75% positive),
+    # because per_order_shipped was paid LINEARLY and banked during the
+    # day (~95%-shipped already banks ~95% of reward) while the binary
+    # finish/fail outcome was tiny (flat +50 bonus, capped -500 penalty)
+    # and idle/filler were ~free. PPO optimized correctly — the reward
+    # was mis-specified, so the advantage gradient on idle/filler was
+    # flat-to-positive and training provably could not suppress it
+    # (F-rate flat 0.198→0.214, entropy rising = policy diffusing).
+    #
+    # Fix: shift the bulk of order reward from the in-day linear stream
+    # to a COMPLETION-CONTINGENT lump scaled to the day's order total, so
+    # any unfinished day — near-miss or big-miss — banks far less than a
+    # finished one. per_order_shipped kept small (still a dense
+    # partial-progress gradient for credit assignment, no all-or-nothing
+    # cliff); all_orders_complete_bonus is now applied × total_orders in
+    # _finalize_episode (a finished day ≈ +1/order in-day + +4/order lump
+    # ≈ parity with the old +5/order, so A-days are ~unchanged and the
+    # value head stays stable; an unfinished day gets only the +1/order
+    # in-day stream and loses the lump entirely).
+    "per_order_shipped":              1.0,
+    # Applied as `× self.episode.total_orders` ONLY on full completion
+    # (see _finalize_episode). +4/order lump. Was +50 flat.
+    "all_orders_complete_bonus":      4.0,
     "per_order_incomplete":         -10.0,
     # per_ot_hour bumped -0.5 → -1.5 after audit found N=23 facilities
     # were shipping 100% of orders BUT earning F/D grades because they

@@ -60,14 +60,11 @@ ENV_STATE_SIZE = 17          # expanded from 15 (added carrier_urgency, order_co
 # Tasks that cannot be hustled
 HUSTLE_BLOCKED_TASKS = {"management", "idle", "cycle_count"}
 
-# Cap on the per_order_incomplete multiplier (orders_remaining at EOD,
-# expired backlog count, hard backlog excess). Combined with the -10
-# default reward weight this floors the penalty at -500 per event,
-# symmetric with the +500 year_completion_bonus. Without this cap a
-# 700-order leftover queue produced -7,000+ in a single step which
-# was the dominant driver of the value-loss bimodality the audit
-# identified.
-INCOMPLETE_CAP = 50
+# NOTE: INCOMPLETE_CAP (formerly 50, flooring per_order_incomplete at
+# -500) was REMOVED in the completion-dominant rebalance (2026-05-17).
+# It only existed to bound the value-target tail for the old EMA/PopArt
+# normaliser; symlog value targets supersede it, and the cap's live
+# effect was making failed days net-positive. See _finalize_episode.
 
 # Management fallback: when all management-eligible workers are absent,
 # the first warehouse lead/worker handles minimum management
@@ -826,25 +823,28 @@ class FacilityEnv:
         if self.ot_hours > 0:
             reward += self._add_reward("per_ot_hour", self.ot_hours)
 
-        # Order completion
+        # Order completion — COMPLETION-DOMINANT (triple-audit 2026-05-17).
+        # The completion bonus is scaled by the day's order total so a
+        # finished day banks a large lump (~+4/order) that an unfinished
+        # day — near-miss OR big-miss — never gets. This is what makes
+        # the binary finish/fail outcome dominate the small in-day
+        # per_order_shipped (+1/order) stream; see DEFAULT_REWARDS.
         if orders_remaining <= 0:
-            reward += self._add_reward("all_orders_complete_bonus")
-        else:
-            # Cap the per-incomplete-order multiplier at INCOMPLETE_CAP to
-            # bound the per-day penalty floor. Without this, a large queue
-            # (e.g. 700 orders) produced -7,000+ in a single step, which
-            # was the dominant negative reward (-3,233/day mean across
-            # the run). Three-agent audit found this fat-tail penalty
-            # was the upstream cause of bimodal v_loss collapse: ~17%
-            # of episodes generated returns 100× larger than the bulk,
-            # which whipsawed the EMA return normalizer (per-batch
-            # variance) and made the value head untrainable. Floor at
-            # -INCOMPLETE_CAP × 10 = -500 makes the penalty SYMMETRIC
-            # with the +500 year_completion_bonus instead of asymmetric
-            # by 256×.
             reward += self._add_reward(
-                "per_order_incomplete", min(orders_remaining, INCOMPLETE_CAP)
+                "all_orders_complete_bonus", self.episode.total_orders
             )
+        else:
+            # Incomplete penalty is UNCAPPED (was min(remaining, 50) →
+            # floored at -500). The cap existed only to bound the large
+            # negative value-target tail that destabilised the OLD EMA/
+            # PopArt return normaliser. Symlog value targets (added later,
+            # ppo.py) compress exactly that 8-OOM range — symlog(-7000) ≈
+            # -8.85 vs symlog(-500) ≈ -6.20, ~1.4× not 14× — so the cap is
+            # now a vestige whose only live effect was making a failed day
+            # net-positive. Full count restores a real "didn't finish"
+            # gradient on big-miss days (near-miss days are corrected by
+            # the forgone completion lump above). Watch v_loss post-cut.
+            reward += self._add_reward("per_order_incomplete", orders_remaining)
             if self.ot_hours > 0:
                 reward += self._add_reward("ot_incomplete_flat")
 

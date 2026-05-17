@@ -429,14 +429,15 @@ class YearEnv:
                 expired = [(d, c) for d, c in self.backlog_ages if d <= cutoff]
                 for day_idx, count in expired:
                     self.order_backlog -= count
-                    # Expired unshipped orders = severe penalty. Cap the
-                    # per-event multiplier (see INCOMPLETE_CAP rationale
-                    # in facility_env.py) so a single huge expiry can't
-                    # blow up returns by 100×.
-                    from clark.env.facility_env import INCOMPLETE_CAP
+                    # Expired unshipped orders = severe penalty. UNCAPPED
+                    # as of the completion-dominant rebalance (2026-05-17):
+                    # capping made unshipped orders too cheap (the root
+                    # cause that let failed days net positive); symlog
+                    # value targets absorb the scale. See _finalize_episode
+                    # in facility_env.py.
                     penalty = (
                         self.facility_config.rewards["per_order_incomplete"]
-                        * min(count, INCOMPLETE_CAP) * 1.5
+                        * count * 1.5
                     )
                     reward += penalty
                     self._add_year_reward("backlog_expired", penalty)
@@ -446,12 +447,11 @@ class YearEnv:
             # Hard backlog cap penalty
             if rules.order_carryover_max_backlog > 0 and self.order_backlog > rules.order_carryover_max_backlog:
                 excess = self.order_backlog - rules.order_carryover_max_backlog
-                # Same INCOMPLETE_CAP applies to keep the per-event
-                # penalty bounded.
-                from clark.env.facility_env import INCOMPLETE_CAP
+                # Uncapped (completion-dominant rebalance, 2026-05-17) —
+                # same rationale as the expired-orders penalty above.
                 penalty = (
                     self.facility_config.rewards["per_order_incomplete"]
-                    * min(excess, INCOMPLETE_CAP)
+                    * excess
                 )
                 reward += penalty
                 self._add_year_reward("backlog_cap_exceeded", penalty)
