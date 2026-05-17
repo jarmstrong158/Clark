@@ -172,11 +172,11 @@ A fresh-init Clark can also be trained directly on a single facility (no foundat
 | `entropy_coeff` | 0.05 | Compensates for the entropy mean-over-workers normalization; halved from 0.10 when `lr` dropped 2e-5→1e-5 so the entropy bonus didn't dominate the shrunken policy gradient (see [Per-worker mean entropy](#per-worker-mean-entropy)) |
 | `value_loss_coeff` | 0.5 | |
 | `max_grad_norm` | 0.5 | |
-| `epochs_per_update` | 4 | |
+| `epochs_per_update` | 2 | 4 → 2; ~2× faster updates, gated A/B as a learning-affecting change, verified no regression |
 | `vf_clip` | 0.2 | PPO-style value-prediction clip, applied **in symlog space**. Bounds the per-update value-head step (see [Symlog value-target compression](#symlog-value-target-compression)) |
 | `lr` | **1e-5** | 5e-5 → 2e-5 → 1e-5. Second drop after a 21-hr run hit best-ever metrics then showed 12-hr monotonic drift; the lower LR tightens the trust region around what works |
 | Update cadence | per day boundary | matches Jack's daily-update strategy |
-| Reward clip (per step) | ±20,000 | guards single-step numerical blow-up; the dominant end-of-day penalties are themselves bounded at the source (`per_order_incomplete` capped at `-10 × min(N, 50)`; cumulative `side_project_during_crunch` capped at -5000/day) |
+| Reward clip (per step) | ±20,000 | guards single-step numerical blow-up; the dominant end-of-day penalties are themselves bounded at the source (`per_order_incomplete` capped at `-10 × min(N, 200)`; cumulative `side_project_during_crunch` capped at -5000/day) |
 | Returns clip (post-GAE) | ±500,000 | guards numerical blow-up; symlog compression (below) is the primary mechanism that keeps catastrophic-year signal learnable |
 | AMP | bf16 on CUDA | with explicit fp16 fallback for hardware without bf16 |
 | Old log-prob storage | fp32 | bf16 quantization noise is comparable to `clip_epsilon` |
@@ -232,11 +232,25 @@ The reward function is the primary behavior lever. Weights live in `FacilityConf
 2. **Severity-scaled crunch penalty.** When pending order pressure exceeds 10%, filler incurs `side_project_during_crunch × max(1.0, pending_pct × 5.0)` — a flat floor up to ~20% backlog, then a linear ramp to 5× at 100% pending. Acute backlog is punished proportionally harder than chronic.
 3. **Per-day crunch cap.** Cumulative crunch penalty is bounded at **-5000/day**. Beyond that the signal is already saturated; the cap prevents a single pathological day from injecting an extreme-magnitude tail that destabilizes the value function (even with symlog upstream).
 
-### Bounded catastrophic penalties
+### Completion-dominant order reward
 
-`per_order_incomplete` is capped at `-10 × min(N_unshipped, 50)` (max -500/day) rather than scaling unbounded with unshipped count. Uncapped, a small-N disaster produced a secondary mode in the return distribution that re-saturated the value head. Capping at the source is cheaper and more stable than relying on downstream clips alone.
+The grade is binary on order completion (shipping `< total` is a hard-F), so the reward must make *finishing* decisively beat a near-miss — otherwise the agent has no gradient to close the last orders. The structure:
 
-These were arrived at through a sequenced, attribution-disciplined debugging arc (one or two changes per restart, never bundled) and an independent multi-agent audit pattern — see the context-keeper decision log (`dec-011` … `dec-015`) for the full rationale and rejected alternatives.
+- `per_order_shipped = +3/order`, paid **densely** within the day. Keeps a learnable partial-progress gradient on incomplete days (the ~20% of days that end short — exactly the ones that matter).
+- `all_orders_complete_bonus = +3 × total_orders`, paid **only** on full completion at EOD. A finished day banks ≈`6 × N`; a 95%-complete day banks ≈`2.85 × N` — a ≈2.1× gap that is dense and cliff-free.
+- `per_order_incomplete = -10 × min(N_unshipped, 200)` (floor **-2000/day**). Keeps failed days firmly net-negative while bounding the value-target tail. Symlog is the primary mechanism keeping the catastrophic signal learnable; this source cap is defense-in-depth.
+
+This shape was reached by an attribution-disciplined arc and a repeated independent multi-agent audit:
+
+1. **Bug found:** the original flat `+50` completion bonus + a linear, banked `per_order_shipped=+5` meant a 95%-shipped *failed* day netted **net-positive** reward — PPO was being rewarded for losing winnable days, with no gradient toward finishing or away from idle/filler.
+2. **Over-correction:** collapsing to `per_order_shipped=1` + a pure terminal `+4×N` lump + an *uncapped* incomplete penalty fixed the sign but was over-sparsified (no learnable gradient on incomplete days) and the uncap re-created the fat-tailed value-target instability symlog cannot fully absorb (`v_loss` spiked 65–270). Three independent audits unanimously flagged both failure modes.
+3. **Re-tune (current):** dense graded shipped + scaled completion premium + *looser* cap (200, not the original 50) — keeps the verified sign fix, restores a dense learnable gradient, and bounds the value tail without re-softening failure.
+
+### OT-window feasibility (env, not reward)
+
+`ot_hard_stop_hour` is anchored as `eod_hour + ot_wall` (0.5–2.0 h) at config-generation time. Previously the two were sampled on independent absolute clocks, so `ot_hard_stop ≤ eod` on ~45% of synthetic facilities (plus a sub-tick window on ~5% more) — half the training distribution physically could not use end-of-day OT, making any near-miss an unrecoverable F regardless of policy. The engine also now triggers OT at `orders_remaining >= ot_trigger` (was a strict `>`, which abandoned days *exactly* `ot_trigger` short). Both are env-feasibility fixes: they change what a good policy *can* achieve, independent of the reward shaping above.
+
+These were arrived at through a sequenced, attribution-disciplined debugging arc (one or two changes per restart, never bundled) and a repeated independent multi-agent audit pattern — see the context-keeper decision log for the full rationale and rejected alternatives.
 
 ---
 
