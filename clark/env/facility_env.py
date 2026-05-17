@@ -785,13 +785,18 @@ class FacilityEnv:
         ot_trigger = self.facility_config.rules.ot_trigger_orders_remaining
 
         if self.current_hour >= eod_hour:
-            # OT only ENTERS at EOD when meaningfully many orders remain
-            # (matches `ot_trigger_orders_remaining`, default 10). Below the
-            # threshold the day finalizes — those few leftover orders count
-            # via `per_order_incomplete` or carry over via order_carryover.
-            # Once IN OT (e.g. from morning catchup), continue working
-            # until orders drain to 0 OR we hit ot_hard_stop.
-            if orders_remaining > ot_trigger:
+            # OT ENTERS at EOD when at least `ot_trigger_orders_remaining`
+            # orders remain — `ot_trigger` is the MINIMUM leftover that
+            # justifies paying overtime, so the comparison is `>=`, not
+            # `>`. The old strict `>` silently abandoned days that were
+            # *exactly* `ot_trigger` short: with the synthetic constant
+            # ot_trigger=1, a 1-order miss hit `1 > 1 == False` and the
+            # day finalized with zero OT — an instant F under the binary
+            # order_incomplete grade. Below the threshold the day still
+            # finalizes (tiny leftovers count via per_order_incomplete or
+            # carry over). Once IN OT (e.g. from morning catchup), keep
+            # working until orders drain to 0 OR we hit ot_hard_stop.
+            if orders_remaining >= ot_trigger and orders_remaining > 0:
                 if not self.is_ot:
                     self.is_ot = True
                 # End-of-day OT = morning catchup + (current_hour - eod_hour).

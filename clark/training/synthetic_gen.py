@@ -471,11 +471,26 @@ def _generate_rules(cs: CurriculumStage, n_workers: int) -> BusinessRules:
     # Morning pick: 60% of facilities use it
     morning_pick = random.random() < 0.6
 
-    # OT
+    # OT — the hard stop is ANCHORED a real window past `eod` so every
+    # facility has a usable overtime runway. It used to be sampled on an
+    # absolute [17.5, 20.0] clock INDEPENDENT of `eod`; because `eod`
+    # ranges up to eod_hi, that produced ot_hard_stop <= eod on ~45% of
+    # facilities (OT window <= 0) plus a sub-tick window on ~5% more —
+    # so ~half the training distribution could NEVER use end-of-day OT,
+    # making any near-miss an instant, unrecoverable F under the binary
+    # order_incomplete grade regardless of policy quality. Anchoring the
+    # hard stop `ot_wall` hours past `eod` guarantees a >= MIN_OT_WINDOW
+    # runway and keeps ot_wall_clock_max consistent with the real window.
     otw_lo, otw_hi = BOUNDS["ot_wall_clock_max"]
-    ot_stop_lo, ot_stop_hi = BOUNDS["ot_hard_stop_hour"]
-    ot_wall = round(random.uniform(max(otw_lo, 0.5), min(otw_hi, 2.0)), 1)
-    ot_stop = round(random.uniform(max(ot_stop_lo, 17.5), min(ot_stop_hi, 20.0)), 1)
+    MIN_OT_WINDOW = 0.5  # >= 3 ticks (STEP_DURATION = 1/6 h)
+    win_lo = max(otw_lo, MIN_OT_WINDOW)
+    win_hi = max(win_lo, min(otw_hi, 2.0))
+    ot_wall = max(MIN_OT_WINDOW, round(random.uniform(win_lo, win_hi) * 2) / 2)
+    # No absolute clamp: anchoring strictly off `eod` guarantees the
+    # window is ALWAYS exactly `ot_wall` (>= MIN_OT_WINDOW). `eod` is
+    # already bounded by eod_hi and ot_wall <= 2.0, so ot_stop stays in
+    # a sane envelope without a cap that could re-collapse the window.
+    ot_stop = round(eod + ot_wall, 1)
 
     # Cycle counts
     cc_lo, cc_hi = BOUNDS["cycle_count_weekly_hours"]
