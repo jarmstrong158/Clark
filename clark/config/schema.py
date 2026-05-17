@@ -290,31 +290,35 @@ class RewardOverrides:
 # ─── Default reward signals ──────────────────────────────────────────────────
 
 DEFAULT_REWARDS: dict[str, float] = {
-    # COMPLETION-DOMINANT REBALANCE (triple-audit, 2026-05-17).
-    # Root cause found by three independent audits: a FAILED day netted
-    # net-POSITIVE reward (winnable-idle F days mean +1493, 75% positive),
-    # because per_order_shipped was paid LINEARLY and banked during the
-    # day (~95%-shipped already banks ~95% of reward) while the binary
-    # finish/fail outcome was tiny (flat +50 bonus, capped -500 penalty)
-    # and idle/filler were ~free. PPO optimized correctly — the reward
-    # was mis-specified, so the advantage gradient on idle/filler was
-    # flat-to-positive and training provably could not suppress it
-    # (F-rate flat 0.198→0.214, entropy rising = policy diffusing).
-    #
-    # Fix: shift the bulk of order reward from the in-day linear stream
-    # to a COMPLETION-CONTINGENT lump scaled to the day's order total, so
-    # any unfinished day — near-miss or big-miss — banks far less than a
-    # finished one. per_order_shipped kept small (still a dense
-    # partial-progress gradient for credit assignment, no all-or-nothing
-    # cliff); all_orders_complete_bonus is now applied × total_orders in
-    # _finalize_episode (a finished day ≈ +1/order in-day + +4/order lump
-    # ≈ parity with the old +5/order, so A-days are ~unchanged and the
-    # value head stays stable; an unfinished day gets only the +1/order
-    # in-day stream and loses the lump entirely).
-    "per_order_shipped":              1.0,
-    # Applied as `× self.episode.total_orders` ONLY on full completion
-    # (see _finalize_episode). +4/order lump. Was +50 flat.
-    "all_orders_complete_bonus":      4.0,
+    # COMPLETION-DOMINANT, RE-TUNED (triple-audit #2, 2026-05-17).
+    # Audit #1 correctly found the root cause (failed days netted
+    # net-POSITIVE reward → no gradient to stop leaving orders unshipped)
+    # and the SIGN fix is kept. But the first implementation (per_order_
+    # shipped=1.0 + a pure terminal +4×T completion lump + UNCAPPED
+    # per_order_incomplete) was over-tuned on two axes — three new
+    # independent audits unanimously, high-confidence:
+    #   (a) OVER-SPARSIFIED: collapsing the dense per-tick shipped signal
+    #       to 1.0 + an all-or-nothing terminal lump left ZERO learnable
+    #       gradient on the ~21% of days that end incomplete (exactly the
+    #       targeted F/high-volume days). Behaviour went static-to-adverse
+    #       over 760 eps (core-task share on F days DROPPED 39.7→38.4%);
+    #       win regressed (Welch t=-3.39, not noise, not variance-buried).
+    #   (b) UNCAP RECREATED THE VALUE-TAIL INSTABILITY: removing the cap
+    #       let per_order_incomplete span to -42k; symlog does NOT absorb
+    #       that (v_loss max spiking 65-270, the exact bimodal saturation
+    #       INCOMPLETE_CAP was built to prevent).
+    # Re-tune: restore a DENSE completion-graded shipped signal (3.0, was
+    # over-cut to 1.0, below the old 5.0) so incomplete days carry a real
+    # "ship more" gradient; keep the completion premium as a ×total_orders
+    # lump (now 3.0) so finishing still decisively dominates (finished day
+    # ≈ 6×T vs a 95%-near-miss ≈ 2.85×T — strong, dense, no cliff); and
+    # REINSTATE a looser INCOMPLETE_CAP (200, floor -2000; see
+    # facility_env) to bound the value tail without re-softening failure.
+    "per_order_shipped":              3.0,
+    # Applied `× self.episode.total_orders` ONLY on full completion
+    # (see _finalize_episode) — the finishing premium on top of the
+    # dense per_order_shipped gradient. Was +50 flat (pre-rebalance).
+    "all_orders_complete_bonus":      3.0,
     "per_order_incomplete":         -10.0,
     # per_ot_hour bumped -0.5 → -1.5 after audit found N=23 facilities
     # were shipping 100% of orders BUT earning F/D grades because they
