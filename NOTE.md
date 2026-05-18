@@ -237,17 +237,34 @@ clark dashboard                   — launch local dashboard server
 
 ---
 
-## Cloud / API layer — deliberately NOT built
+## Cloud / API layer — scrapped; minimal local inference endpoint sanctioned
 
 A FastAPI + Celery/Redis + S3 deployment was prototyped and **scrapped**.
 The skeleton stubbed training-via-API, faked auth, and used local files
-for the "registry" — it overstated readiness and had zero consumers.
-The local `clark wizard` + CLI cover the human workflow end to end.
+for the "registry" — it overstated readiness and had **zero consumers**.
+That speculative cloud/multi-tenant/WMS skeleton **stays dead**: no
+Celery, no Redis, no S3, no auth, no facility registry, no
+training-via-API. Do not resurrect any of it.
 
-Do not resurrect this speculatively. A hosted / multi-tenant /
-WMS-integration layer should be built *only* when there is a real
-consumer to design it around — at which point it should be shaped by
-that consumer's needs, not the guesses this skeleton encoded.
+The original rule was: build a serving layer *only when a real consumer
+exists to shape it*. **That condition is now met.** The local AI
+warehouse system (a domain-fine-tuned LLM in Ollama → `clark-mcp` MCP
+server) is a concrete, single, local consumer that needs to call Clark
+for inference. So a **minimal, local-only inference endpoint** is now
+sanctioned and built — scoped strictly to that consumer:
+
+- **In scope:** localhost only; stateless `facility/scenario in → Clark
+  plan out` (+ what-if). Loads the foundation/finetuned weights once,
+  serves inference. That is the entire surface.
+- **Explicitly still out of scope:** anything multi-tenant, networked
+  beyond localhost, authenticated, queue-backed, cloud, or
+  training-via-API. If a future need pushes past localhost inference,
+  it is a new decision with its own real consumer — not licence to
+  rebuild the scrapped skeleton.
+
+This is deliberately recorded as an *evolution* of the rule, not a
+reversal: the discipline (no speculative surface; build only for a real
+consumer) is intact — the consumer simply now exists.
 
 ---
 

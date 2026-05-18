@@ -16,7 +16,12 @@ dependencies = [
 # (and any clean checkout) installs it via `pip install -e ".[dev]"`.
 # Previously pytest was only ever present from ambient local
 # environments, so CI died with "pytest: command not found".
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "httpx>=0.27"]
+# Minimal local inference API (clark serve). Localhost-only, single
+# consumer (clark-mcp / the local LLM system). NOT the scrapped cloud
+# skeleton — see NOTE.md and dec-029. Optional: core training needs none
+# of this.
+serve = ["fastapi>=0.110", "uvicorn>=0.29"]
 
 [project.scripts]
 clark = "cli.main:app"

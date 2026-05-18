@@ -654,7 +654,46 @@ def build_parser() -> argparse.ArgumentParser:
     p_wiz.add_argument("--sessions-dir", default="clark/data/configs/user/sessions",
                        help="Directory for saved wizard sessions.")
 
+    p_srv = sub.add_parser("serve", help="Run the minimal local Clark inference API (localhost only).")
+    p_srv.add_argument("--model", required=True,
+                       help="Path to a trained Clark checkpoint (.pt).")
+    p_srv.add_argument("--facilities-dir", default="clark/data/configs",
+                       help="Directory of facility config YAMLs to serve.")
+    p_srv.add_argument("--port", type=int, default=8000,
+                       help="Port (bound to 127.0.0.1 only; default 8000).")
+
     return parser
+
+
+# ── Serve (minimal local inference API) ───────────────────────────────────────
+
+def cmd_serve(args: argparse.Namespace):
+    """Run the minimal local Clark inference API. Localhost only,
+    stateless, weights loaded once. See clark/serve/app.py + NOTE.md."""
+    model_path = Path(args.model)
+    if not model_path.exists():
+        _die(f"Model checkpoint not found: {model_path}")
+    fdir = Path(args.facilities_dir)
+    if not fdir.is_dir():
+        _die(f"Facilities dir not found: {fdir}")
+
+    try:
+        from clark.agent.ppo import ClarkAgent
+        agent = ClarkAgent.load(str(model_path))      # weights loaded ONCE
+    except Exception as e:
+        _die(f"Failed to load model: {e}")
+
+    try:
+        import uvicorn
+        from clark.serve.app import build_app
+    except ImportError:
+        _die("serve deps missing — install with: pip install -e \".[serve]\"")
+
+    app = build_app(agent, fdir, checkpoint_label=model_path.name)
+    print(f"Clark local inference API → http://127.0.0.1:{args.port}  "
+          f"(facilities: {fdir}, model: {model_path.name})", flush=True)
+    # 127.0.0.1 ONLY — never 0.0.0.0. Local single-user by design.
+    uvicorn.run(app, host="127.0.0.1", port=args.port, log_level="info")
 
 
 # ── Wizard ────────────────────────────────────────────────────────────────────
@@ -1105,6 +1144,7 @@ def main():
         "plan":      cmd_plan,
         "dashboard": cmd_dashboard,
         "wizard":    cmd_wizard,
+        "serve":     cmd_serve,
     }
 
     fn = dispatch.get(args.command)
