@@ -133,6 +133,12 @@ def _worker_loop(conn, init_config: FacilityConfig) -> None:
                         "idle":        float(rb.get("per_idle_hour", 0.0)),
                         "prod":        float(rb.get("per_productive_hour", 0.0)),
                         "mgmt":        float(rb.get("per_management_hour", 0.0)),
+                        # Surface the gated dense management bonus so we can
+                        # SEE whether it fires (the prior gate was inert and
+                        # we flew blind on it for ~1700 episodes — exactly
+                        # the "invisible reward component" failure mode the
+                        # crunch/filler surfacing below was added to prevent).
+                        "mgmt_gated":  float(rb.get("management_progress_gated", 0.0)),
                         "shipped":     float(rb.get("per_order_shipped", 0.0)),
                         # Restart B: surface the filler-during-crunch penalty
                         # and per-filler-unit base so we can SEE whether the

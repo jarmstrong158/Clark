@@ -42,33 +42,38 @@ def test_weight_present():
     assert DEFAULT_REWARDS["management_progress_gated"] == 6.0
 
 
-def test_bonus_pays_when_orders_done():
+def test_bonus_pays_when_shipping_under_control():
+    """Gate opens while pending orders are <= 10% of the day's total
+    (shipping on-track) — a real multi-hour window, not the dead
+    pending==0 boundary the original gate used."""
     env, w = _env_and_mgmt_worker()
     if w is None:
         return  # no eligible non-absent worker this sample; skip silently
+    env.episode.total_orders = 1000
     env.reward_breakdown = {k: 0.0 for k in env._rewards}
-    env.orders_in_queue = 0
-    env.orders_picked_not_audited = 0          # day's orders shipped
+    env.orders_in_queue = 50                    # 5% pending -> under control
+    env.orders_picked_not_audited = 0
     env._process_management(w, 1.0)
     assert env.reward_breakdown["management_progress_gated"] == 6.0, (
-        "dense management bonus must pay once orders are done"
+        "dense management bonus must pay while shipping is under control "
+        "(pending <= 10% of total), not only at pending==0"
     )
-    # sanity: the pre-existing per-hour term still fires too
     assert env.reward_breakdown["per_management_hour"] == 0.5
 
 
-def test_bonus_blocked_while_orders_pending():
-    """The decisive guarantee: it can NEVER trade against shipping."""
+def test_bonus_blocked_during_crunch():
+    """The decisive guarantee: inert during real backlog/crunch, so it
+    can NEVER trade against shipping."""
     env, w = _env_and_mgmt_worker()
     if w is None:
         return
+    env.episode.total_orders = 1000
     env.reward_breakdown = {k: 0.0 for k in env._rewards}
-    env.orders_in_queue = 50                    # orders still pending
+    env.orders_in_queue = 200                   # 20% pending -> crunch
     env.orders_picked_not_audited = 0
     env._process_management(w, 1.0)
     assert env.reward_breakdown["management_progress_gated"] == 0.0, (
-        "gated bonus must be inert while orders are pending — it must "
-        "never incentivize management over shipping"
+        "gated bonus must be inert during crunch (pending > 10% of "
+        "total) — it must never incentivize management over shipping"
     )
-    # the un-gated per-hour management reward still applies (unchanged)
     assert env.reward_breakdown["per_management_hour"] == 0.5

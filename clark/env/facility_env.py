@@ -643,17 +643,24 @@ class FacilityEnv:
         """Handle management task for a worker. Returns reward."""
         reward = 0.0
 
-        # Gate for the dense management bonus: only once the day's orders
-        # are essentially shipped (pending <= the incomplete threshold, =0
-        # for synthetic configs). This makes the bonus structurally inert
-        # during crunch / before completion — it can never trade against
-        # shipping or become a post-completion grind (it is further capped
-        # at the required hours by the `< daily_cap` / `< min_hours`
-        # branches below). See DEFAULT_REWARDS['management_progress_gated'].
+        # Gate for the dense management bonus: pay only while the day's
+        # shipping is UNDER CONTROL — pending orders are <= 10% of the
+        # day's total (the inverse of the env's own crunch threshold,
+        # pending_pct > 0.10). This is the fix for the original
+        # dead-on-arrival gate, which required pending == 0: that is only
+        # true in the last ~0.5h of a day (never on OT days), i.e. shut
+        # during the entire window management is actually performed, so
+        # the term fired literally zero times across 438 windows.
+        # The 10% band opens a real multi-hour window on on-track days
+        # (enough to accrue the 2-6h management requirement) while staying
+        # structurally inert during genuine backlog/crunch — it still
+        # cannot trade against shipping (low pending = shipping secured)
+        # and is still capped at required hours by the `< daily_cap` /
+        # `< min_hours` branches below.
         _orders_pending = self.orders_in_queue + self.orders_picked_not_audited
-        _orders_done = (
+        _shipping_under_control = (
             _orders_pending
-            <= self.facility_config.rules.order_incomplete_threshold
+            <= 0.10 * max(1, self.episode.total_orders)
         )
 
         all_mgmt_absent = all(
@@ -673,7 +680,7 @@ class FacilityEnv:
                     w.hours_worked += duration
                     reward += self._add_reward("per_productive_hour", duration)
                     reward += self._add_reward("per_management_hour", duration)
-                    if _orders_done:
+                    if _shipping_under_control:
                         reward += self._add_reward("management_progress_gated", duration)
                 else:
                     reward += self._add_reward("per_idle_hour", duration)
@@ -690,7 +697,7 @@ class FacilityEnv:
                 w.hours_worked += duration
                 reward += self._add_reward("per_productive_hour", duration)
                 reward += self._add_reward("per_management_hour", duration)
-                if _orders_done:
+                if _shipping_under_control:
                     reward += self._add_reward("management_progress_gated", duration)
             else:
                 reward += self._add_reward("per_idle_hour", duration)
