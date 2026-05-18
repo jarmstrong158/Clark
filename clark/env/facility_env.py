@@ -643,6 +643,19 @@ class FacilityEnv:
         """Handle management task for a worker. Returns reward."""
         reward = 0.0
 
+        # Gate for the dense management bonus: only once the day's orders
+        # are essentially shipped (pending <= the incomplete threshold, =0
+        # for synthetic configs). This makes the bonus structurally inert
+        # during crunch / before completion — it can never trade against
+        # shipping or become a post-completion grind (it is further capped
+        # at the required hours by the `< daily_cap` / `< min_hours`
+        # branches below). See DEFAULT_REWARDS['management_progress_gated'].
+        _orders_pending = self.orders_in_queue + self.orders_picked_not_audited
+        _orders_done = (
+            _orders_pending
+            <= self.facility_config.rules.order_incomplete_threshold
+        )
+
         all_mgmt_absent = all(
             mw.is_absent for mw in self.episode.workers
             if mw.worker_id in self._mgmt_eligible_ids
@@ -660,6 +673,8 @@ class FacilityEnv:
                     w.hours_worked += duration
                     reward += self._add_reward("per_productive_hour", duration)
                     reward += self._add_reward("per_management_hour", duration)
+                    if _orders_done:
+                        reward += self._add_reward("management_progress_gated", duration)
                 else:
                     reward += self._add_reward("per_idle_hour", duration)
                     w.hours_worked += duration
@@ -675,6 +690,8 @@ class FacilityEnv:
                 w.hours_worked += duration
                 reward += self._add_reward("per_productive_hour", duration)
                 reward += self._add_reward("per_management_hour", duration)
+                if _orders_done:
+                    reward += self._add_reward("management_progress_gated", duration)
             else:
                 reward += self._add_reward("per_idle_hour", duration)
                 w.hours_worked += duration

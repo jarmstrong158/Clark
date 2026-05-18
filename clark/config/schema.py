@@ -354,6 +354,20 @@ DEFAULT_REWARDS: dict[str, float] = {
     "side_project_during_crunch":    -2.0,
     "per_productive_hour":            0.3,
     "per_management_hour":            0.5,
+    # Dense, GATED management incentive (triple-audit, 2026-05-18). The
+    # decisive management signal used to be only the sparse EOD grade-tier
+    # lump (+10 minimum-met -> +30 full = a +20 swing) on a day already
+    # worth ~3,600 in dense shipped/completion reward — after PPO's
+    # per-batch advantage normalization that +20 is noise, so the policy
+    # was numerically indifferent and dumped ~118 spare worker-h/day into
+    # filler instead of the ~3h of management needed. This pays a dense
+    # per-management-hour bonus that lands on the same per-tick scale as
+    # the shipped stream, but ONLY once the day's orders are essentially
+    # shipped AND only up to the required hours — so it can never trade
+    # against shipping or become a post-completion grind. Gate + cap make
+    # it structurally inert outside the exact "completed-but-demerited"
+    # regime it targets.
+    "management_progress_gated":      6.0,
     "per_idle_hour":                 -0.5,
     "packers_starved":               -1.0,
     # picked_backlog reduced -2.0 → -0.7 after audit found it was firing
