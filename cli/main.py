@@ -690,7 +690,7 @@ def cmd_serve(args: argparse.Namespace):
         _die("serve deps missing — install with: pip install -e \".[serve]\"")
 
     app = build_app(agent, fdir, checkpoint_label=model_path.name)
-    print(f"Clark local inference API → http://127.0.0.1:{args.port}  "
+    print(f"Clark local inference API -> http://127.0.0.1:{args.port}  "
           f"(facilities: {fdir}, model: {model_path.name})", flush=True)
     # 127.0.0.1 ONLY — never 0.0.0.0. Local single-user by design.
     uvicorn.run(app, host="127.0.0.1", port=args.port, log_level="info")
