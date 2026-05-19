@@ -12,7 +12,7 @@ Clark learns the underlying dynamics of warehouse operations — picking and pac
 
 Where its predecessor [Jack](https://github.com/jarmstrong158/Jack) was a single-facility PPO + LSTM agent operating on a fixed 7-worker, 14-action state vector, Clark is built around a transformer + LSTM hybrid that handles **variable** numbers of workers and tasks. The same model weights generalize across facilities.
 
-> **Status:** Foundation pre-training is actively in progress. The architecture, training loop, fine-tune workflow, configuration schema, CLI, and setup wizard are stable. Code is open; pre-trained foundation weights will ship in a future release.
+> **Status:** Foundation pre-training is actively in progress. The architecture, training loop, fine-tune workflow, configuration schema, CLI, and setup wizard are stable. Code is open; pre-trained foundation weights will ship in a future release. A fully-local natural-language interface — [clark-mcp](https://github.com/jarmstrong158/clark-mcp) — is built on top via `clark serve` (see [below](#natural-language-interface-clark-mcp)).
 
 ---
 
@@ -20,15 +20,16 @@ Where its predecessor [Jack](https://github.com/jarmstrong158/Jack) was a single
 
 1. [Why Clark](#why-clark)
 2. [Architecture](#architecture)
-3. [Pre-train → fine-tune workflow](#pre-train--fine-tune-workflow)
-4. [Quickstart](#quickstart)
-5. [CLI reference](#cli-reference)
-6. [Project structure](#project-structure)
-7. [Configuring a facility](#configuring-a-facility)
-8. [Performance and status](#performance-and-status)
-9. [How Clark differs from Jack](#how-clark-differs-from-jack)
-10. [Roadmap](#roadmap)
-11. [License](#license)
+3. [Natural-language interface (clark-mcp)](#natural-language-interface-clark-mcp)
+4. [Pre-train → fine-tune workflow](#pre-train--fine-tune-workflow)
+5. [Quickstart](#quickstart)
+6. [CLI reference](#cli-reference)
+7. [Project structure](#project-structure)
+8. [Configuring a facility](#configuring-a-facility)
+9. [Performance and status](#performance-and-status)
+10. [How Clark differs from Jack](#how-clark-differs-from-jack)
+11. [Roadmap](#roadmap)
+12. [License](#license)
 
 ---
 
@@ -103,6 +104,36 @@ Key design points:
 - **bf16 AMP** on CUDA with explicit fp16 fallback for hardware without bf16 support.
 
 Full architectural detail in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). Full per-feature reference in [`NOTE.md`](NOTE.md).
+
+---
+
+## Natural-language interface (clark-mcp)
+
+Clark outputs staffing decisions; **[clark-mcp](https://github.com/jarmstrong158/clark-mcp)**
+makes them usable in plain English, fully offline. It's a separate,
+companion repo:
+
+```
+operator (plain English) ─▶ local LLM (Hermes-3-8B, Ollama)
+                                  │  tool calls (MCP)
+                                  ▼
+                            clark-mcp server ──HTTP──▶ clark serve
+                                                            │
+                                                            ▼  real Clark inference
+```
+
+It is the concrete consumer that `clark serve` exists for (the
+localhost inference API, [`clark/serve/app.py`](clark/serve/app.py)) —
+no cloud, no API cost, no data egress. The model is being domain
+fine-tuned (QLoRA) to drive the tools and explain results honestly:
+ground every number in tool output, refuse rather than fabricate on a
+tool error, and never claim to know *why* the RL policy chose
+something (Clark emits actions, not reasons).
+
+Status: clark-mcp is in active development (tool layer + dataset +
+held-out eval gate built; fine-tune in progress). It is **not**
+required to train or run Clark — Clark is fully usable via the CLI and
+wizard alone. See that repo's README/ARCHITECTURE for detail.
 
 ---
 
@@ -429,6 +460,8 @@ Clark is a successor to Jack, not a wrapper around it. The two share design DNA 
 
 - [x] Episode logging + dashboard
 - [x] Local facility-setup wizard (stdlib HTTP, no service layer — see NOTE.md on why a hosted API is deliberately not built)
+- [x] Minimal localhost inference API (`clark serve`) — fenced to one real consumer ([clark-mcp](https://github.com/jarmstrong158/clark-mcp))
+- [x] Natural-language interface ([clark-mcp](https://github.com/jarmstrong158/clark-mcp)) — local LLM + MCP; tool layer + eval gate built, QLoRA fine-tune in progress
 - [ ] **Foundation pre-training run (in progress)**
 - [ ] Public release of `clark_foundation.pt`
 
