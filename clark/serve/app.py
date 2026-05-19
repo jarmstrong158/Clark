@@ -25,7 +25,7 @@ from pydantic import BaseModel
 
 # Thin adapter: reuse the CLI's real inference path verbatim.
 from cli.main import _run_one_plan_day, _sample_volume_for_date
-from clark.config.schema import FacilityConfig
+from clark.config.schema import FacilityConfig, WorkerConfig
 
 
 class PlanRequest(BaseModel):
@@ -40,6 +40,19 @@ class WhatIfRequest(BaseModel):
     date: Optional[str] = None
     volume: Optional[int] = None        # override the base volume
     absent_workers: list[str] = []      # worker names forced absent
+
+
+class SimulateRequest(BaseModel):
+    """Year-long end-to-end simulation. Unlike /plan and /what_if
+    (which are honest about being OPENING ASSIGNMENTS only), this
+    actually runs the policy through ~260 work days so the grade
+    distribution is a real outcome, not a projection from a snapshot.
+    `extra_workers` lets you sweep roster size — the staffing-
+    sufficiency primitive: 'how does +N staff change the F-rate?'"""
+    facility_id: str
+    extra_workers: int = 0              # additive temps (>=0)
+    n_days: Optional[int] = None        # cap days for interactive use
+    seed: Optional[int] = None
 
 
 def _resolve_date(s: Optional[str]) -> date:
@@ -197,6 +210,89 @@ def build_app(agent: Any, facilities_dir: str | Path,
             },
             "note": "opening-assignment plans for comparison; not an "
                     "end-of-day outcome projection",
+        }
+
+    def _with_extras(cfg: FacilityConfig, n: int) -> FacilityConfig:
+        """Return a copy of cfg with n synthetic temp workers appended.
+        Disables peak_staffing on the copy so `extra_workers` is the
+        SOLE roster delta (otherwise the env's peak temps double-count)."""
+        if n <= 0:
+            return cfg
+        import copy
+        c = copy.deepcopy(cfg)
+        c.peak_staffing = None
+        next_id = max((w.worker_id for w in c.workers), default=-1) + 1
+        for i in range(n):
+            c.workers.append(WorkerConfig(
+                worker_id=next_id + i, name=f"Temp {i + 1}",
+                base_oph=12.0, shift_hours=8.0, shift_start=9.0,
+                role="warehouse", task_eligibility="all",
+                call_off_probability=0.08))
+        return c
+
+    def _simulate_year(cfg: FacilityConfig,
+                       seed: Optional[int],
+                       max_days: Optional[int] = None) -> dict:
+        """End-to-end year simulation: run the trained policy through
+        ~260 work days and return the real grade distribution. The
+        honest staffing-sufficiency primitive — NOT a snapshot
+        projection."""
+        from clark.env.year_env import YearEnv
+        from clark.agent.state import StateBuilder
+        from clark.agent.actions import (get_action_mask,
+                                          get_hustle_mask)
+        if seed is not None:
+            import random as _r
+            import numpy as _np
+            import torch as _t
+            _r.seed(seed)
+            _np.random.seed(seed)
+            _t.manual_seed(seed)
+            if _t.cuda.is_available():
+                _t.cuda.manual_seed_all(seed)
+        env = YearEnv(cfg)
+        builder = StateBuilder(cfg)
+        env.reset()
+        agent.reset_hidden()
+        max_ticks = 200_000   # safety cap (~year is well under this)
+        ticks = 0
+        while not env.is_year_done and ticks < max_ticks:
+            sd = builder.build(env.day_env)
+            mask = get_action_mask(env.day_env)
+            hmask = get_hustle_mask(env.day_env)
+            ta, ha, *_ = agent.select_action_from_dict(
+                sd, mask, hustle_mask=hmask)
+            actions = [(i, int(ta[i]), bool(ha[i]))
+                       for i in range(len(ta))]
+            env.step(actions)
+            ticks += 1
+            # Honest partial sim: stop once we've completed max_days.
+            # _get_year_summary() reads daily_grades, which holds
+            # whatever's been finalized so far — the grade distribution
+            # is correct for the actual days run (sample, not full yr).
+            if max_days is not None and len(env.daily_grades) >= max_days:
+                break
+        return env._get_year_summary()
+
+    @app.post("/simulate")
+    def simulate(req: SimulateRequest):
+        """Full-year end-to-end simulation at a given roster size.
+        Real outcome statistics (grade distribution, OT use,
+        completion) — the staffing-sufficiency primitive."""
+        if req.extra_workers < 0:
+            raise HTTPException(422, "extra_workers must be >= 0")
+        cfg = _load_facility(req.facility_id)
+        cfg = _with_extras(cfg, req.extra_workers)
+        summary = _simulate_year(cfg, seed=req.seed,
+                                 max_days=req.n_days)
+        return {
+            "facility_id": req.facility_id,
+            "extra_workers": req.extra_workers,
+            "n_workers": len(cfg.workers),
+            "days_run": len(summary.get("daily_summaries", [])),
+            "summary": summary,
+            "note": ("real end-to-end simulation; outcome distribution "
+                     "on the days run, not a snapshot projection"),
         }
 
     return app
