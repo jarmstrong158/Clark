@@ -32,6 +32,7 @@ class PlanRequest(BaseModel):
     facility_id: str
     date: Optional[str] = None          # YYYY-MM-DD; default = today
     volume: Optional[int] = None        # default = season-sampled
+    seed: Optional[int] = None          # set for a reproducible plan
 
 
 class WhatIfRequest(BaseModel):
@@ -67,11 +68,18 @@ def build_app(agent: Any, facilities_dir: str | Path,
                 return p
         raise HTTPException(404, f"no facility config {fid!r} in {fdir}")
 
-    def _plan_for(cfg: FacilityConfig, when: date,
-                  volume: Optional[int]) -> list[dict]:
+    def _plan_for(cfg: FacilityConfig, when: date, volume: Optional[int],
+                  forced_absent: Optional[set] = None,
+                  seed: Optional[int] = None) -> list[dict]:
         vol = volume if volume is not None else _sample_volume_for_date(cfg, when)[0]
-        rows = _run_one_plan_day(cfg, agent, when, vol)
+        rows = _run_one_plan_day(cfg, agent, when, vol,
+                                 forced_absent=forced_absent, seed=seed)
         return [{"worker": w, "task": t, "hustle": h} for (w, t, h) in rows]
+
+    def _stable_seed(fid: str, when: date) -> int:
+        import hashlib
+        return int(hashlib.sha1(f"{fid}|{when.isoformat()}".encode()
+                                ).hexdigest()[:8], 16)
 
     @app.get("/health")
     def health():
@@ -103,26 +111,30 @@ def build_app(agent: Any, facilities_dir: str | Path,
         return {
             "facility_id": req.facility_id,
             "date": when.isoformat(),
-            "assignments": _plan_for(cfg, when, req.volume),
+            "assignments": _plan_for(cfg, when, req.volume, seed=req.seed),
         }
 
     @app.post("/what_if")
     def what_if(req: WhatIfRequest):
         """Returns the opening-assignment plan for the BASE scenario and
-        the MODIFIED scenario, for comparison. Honest scope: this is the
-        agent's opening assignment under each scenario — NOT a simulated
-        end-of-day outcome/grade projection (Clark would have to run a
-        full day for that; out of Phase 0 scope, not faked here)."""
-        when = _resolve_date(req.date)
-        base_cfg = FacilityConfig.from_yaml(_config_path(req.facility_id))
-        base = _plan_for(base_cfg, when, None)
+        the MODIFIED scenario, for comparison.
 
-        mod_cfg = FacilityConfig.from_yaml(_config_path(req.facility_id))
-        absent = set(req.absent_workers)
-        for w in mod_cfg.workers:
-            if w.name in absent and hasattr(w, "call_off_probability"):
-                w.call_off_probability = 1.0
-        modified = _plan_for(mod_cfg, when, req.volume)
+        Honest scope: opening assignment under each scenario — NOT a
+        simulated end-of-day outcome/grade projection.
+
+        Faithful comparison: base and modified share one deterministic
+        seed, so they differ ONLY by the modification (volume and/or the
+        forced-absent workers) — not by episode RNG. Absences are forced
+        deterministically (NOT via the probabilistic, max-2/day-capped
+        call-off roll, which silently ignored most requested absences)."""
+        when = _resolve_date(req.date)
+        seed = _stable_seed(req.facility_id, when)
+        cfg = FacilityConfig.from_yaml(_config_path(req.facility_id))
+        base = _plan_for(cfg, when, None, seed=seed)
+
+        modified = _plan_for(cfg, when, req.volume,
+                             forced_absent=set(req.absent_workers),
+                             seed=seed)
 
         return {
             "facility_id": req.facility_id,

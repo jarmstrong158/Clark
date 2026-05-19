@@ -324,14 +324,36 @@ def _sample_volume_for_date(config, target_date: date) -> tuple[int, str]:
     return volume, label
 
 
-def _run_one_plan_day(config, agent, target_date: date, volume: int) -> list[tuple]:
+def _run_one_plan_day(config, agent, target_date: date, volume: int,
+                      forced_absent: set | None = None,
+                      seed: int | None = None) -> list[tuple]:
     """
     Simulate the opening assignment for a single day by running the first agent
     step. Returns list of (worker_name, task_name, hustle).
+
+    forced_absent: worker names deterministically forced absent (bypasses the
+      probabilistic/capped call-off roll) — for faithful what-if scenarios.
+    seed: if set, seeds RNG so the plan is reproducible and what-if base vs
+      modified differ ONLY by the modification, not by episode noise.
+
+    Absent workers (forced OR naturally called off) are reported with
+    task "absent" instead of their masked-idle action — the prior code
+    zipped the agent vector against the static config list and silently
+    misreported absent workers as having a real assignment.
     """
     from clark.env.year_env import YearEnv
     from clark.agent.state import StateBuilder
     from clark.agent.actions import get_action_mask, get_hustle_mask
+
+    if seed is not None:
+        import random as _random
+        import numpy as _np
+        import torch as _torch
+        _random.seed(seed)
+        _np.random.seed(seed)
+        _torch.manual_seed(seed)            # the agent samples via torch
+        if _torch.cuda.is_available():
+            _torch.cuda.manual_seed_all(seed)
 
     env = YearEnv(config)
     builder = StateBuilder(config)
@@ -346,6 +368,18 @@ def _run_one_plan_day(config, agent, target_date: date, volume: int) -> list[tup
         force_dow=dow,
         force_volume=volume,
     )
+
+    # A planning tool answers "what's the plan for the scenario you
+    # specified" — it must NOT inject unrequested random call-offs
+    # (that made /plan irreproducible and /what_if base-vs-modified a
+    # muddy comparison). Clear natural absence, then apply ONLY the
+    # explicitly forced absences. 1:1 index alignment: episode.workers
+    # is built in config.workers order (episode_generator.py:184).
+    ws = env.day_env.episode.workers
+    fa = forced_absent or set()
+    for i, cw in enumerate(config.workers):
+        if i < len(ws):
+            ws[i].is_absent = cw.name in fa
 
     agent.reset_hidden()
 
@@ -363,6 +397,10 @@ def _run_one_plan_day(config, agent, target_date: date, volume: int) -> list[tup
 
     assignments = []
     for i, worker in enumerate(config.workers):
+        if i < len(ws) and ws[i].is_absent:
+            # Honest: an absent worker has no assignment, not a fake one.
+            assignments.append((worker.name, "absent", False))
+            continue
         task_idx = task_actions[i]
         task_name = config.task_ids[task_idx] if task_idx < len(config.task_ids) else "unknown"
         hustle = bool(hustle_actions[i])

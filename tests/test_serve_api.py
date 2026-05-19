@@ -83,6 +83,41 @@ def test_what_if_returns_base_and_modified():
     assert len(body["base"]) == len(body["modified"]) >= 1
 
 
+def test_seed_makes_plan_deterministic():
+    """Audit finding: plans were RNG-noisy. With a seed, identical."""
+    c = _client()
+    j = {"facility_id": FID, "date": "2026-04-01", "seed": 123}
+    a1 = c.post("/plan", json=j).json()["assignments"]
+    a2 = c.post("/plan", json=j).json()["assignments"]
+    assert a1 == a2, "same seed must give an identical plan"
+
+
+def test_what_if_absent_worker_actually_removed():
+    """Audit CRITICAL: absent_workers was a silent no-op. A named
+    absent worker must show task 'absent' in modified and NOT in base,
+    with base/modified otherwise the same (shared seed)."""
+    from clark.config.schema import FacilityConfig
+    cfg = FacilityConfig.from_yaml(CONFIGS / f"{FID}.yaml")
+    victim = cfg.workers[0].name
+
+    r = _client().post("/what_if", json={
+        "facility_id": FID, "date": "2026-04-01",
+        "absent_workers": [victim],
+    })
+    assert r.status_code == 200, r.text
+    body = r.json()
+    base = {x["worker"]: x for x in body["base"]}
+    mod = {x["worker"]: x for x in body["modified"]}
+
+    assert mod[victim]["task"] == "absent", (
+        f"{victim} forced absent but modified shows "
+        f"{mod[victim]['task']!r} — absent_workers is still a no-op"
+    )
+    assert base[victim]["task"] != "absent", (
+        "base must NOT have the worker absent — else not a real contrast"
+    )
+
+
 def test_unknown_facility_404():
     r = _client().post("/plan", json={"facility_id": "does_not_exist"})
     assert r.status_code == 404
