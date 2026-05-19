@@ -157,6 +157,57 @@ def build_app(agent: Any, facilities_dir: str | Path,
                       and _try_plannable(p) is not None})
         return {"facilities": ids}
 
+    @app.get("/capabilities")
+    def capabilities():
+        """Architectural capacity / limits of the Clark RL agent itself
+        (NOT facility data). Reads clark_limits.yaml + schema so the
+        answer cannot drift from the code — the LLM looks this up
+        instead of memorizing facts that change."""
+        from pathlib import Path as _P
+        import importlib
+        limits_path = (_P(__file__).resolve().parents[1] / "config"
+                       / "clark_limits.yaml")
+        try:
+            with open(limits_path) as f:
+                lim = yaml.safe_load(f) or {}
+        except Exception:
+            lim = {}
+        fac = (lim.get("facility") or {})
+        # MAX_TASKS hard-cap lives in the schema validate() (the
+        # transformer task_type_embed has 20 rows). Pull it from there
+        # rather than hard-coding here.
+        try:
+            sch = importlib.import_module("clark.config.schema")
+            mt_src = open(sch.__file__).read()
+            import re as _re
+            m = _re.search(r"num_tasks\s*>\s*(\d+)", mt_src)
+            n_tasks_hard_max = int(m.group(1)) if m else None
+        except Exception:
+            n_tasks_hard_max = None
+        return {
+            "architecture": (
+                "Clark v2 — variable-N variable-M transformer + LSTM "
+                "PPO foundation model. One pre-trained model "
+                "fine-tunes per facility."),
+            "limits": {
+                "n_workers": fac.get("n_workers"),
+                "n_tasks": {"hard_max": n_tasks_hard_max,
+                             "note": "model's task-embedding capacity"},
+                "base_oph": fac.get("base_oph"),
+                "shift_hours": fac.get("shift_hours"),
+                "call_off_probability": fac.get("call_off_probability"),
+            },
+            "training_envelope": (
+                "Foundation pre-trained inside these bounds via a "
+                "3-stage synthetic curriculum (~15k episodes). "
+                "Configs outside bounds are rejected by validation."),
+            "sources": ["clark/config/clark_limits.yaml",
+                         "clark/config/schema.py"],
+            "note": ("Architectural facts ABOUT Clark, not about any "
+                     "facility. For facility specifics use "
+                     "clark_facility_info."),
+        }
+
     @app.get("/facility/{fid}")
     def facility(fid: str):
         p = _config_path(fid)
