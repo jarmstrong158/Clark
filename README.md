@@ -156,13 +156,20 @@ pipeline is deliberately methodical, not a one-shot prompt:
   runtime client, so the bytes the model trains on are byte-identical
   to what it sees in production.
 
-Status: clark-mcp is in active development — tool layer, dataset, and
-the held-out eval gate are built; the QLoRA fine-tune is in progress
-and no fine-tuned weights have shipped yet. It is **not** required to
-train or run Clark — Clark is fully usable via the CLI and wizard
-alone. Full detail (the eval methodology, the protocol, decisions)
-lives in the [clark-mcp](https://github.com/jarmstrong158/clark-mcp)
-repo's README and `docs/ARCHITECTURE.md`.
+Status: clark-mcp is in active development. **Built:** the 6-tool
+MCP layer, the held-out eval gate, a first QLoRA fine-tune (passes
+the gate on its scoped targets — envelope conformance 0→1.0, tool
+selection 0.74→1.0, args 0.56→0.80), a local web UI with a
+**staffing-sufficiency dashboard** (sweep `+0…+N` extra workers and
+see grade distribution at each roster size — powered by Clark's
+`/simulate` endpoint), and a second training iteration in flight to
+fix multi-turn context loss and numeric-fact hallucination the live
+smoke surfaced. **Not done:** no fine-tuned weights shipped yet,
+multi-turn behavior still iterating. clark-mcp is **not** required
+to train or run Clark — Clark is fully usable via the CLI and wizard
+alone. Full detail lives in the
+[clark-mcp](https://github.com/jarmstrong158/clark-mcp) repo's
+README and `docs/ARCHITECTURE.md`.
 
 ---
 
@@ -311,7 +318,10 @@ clark serve                        Minimal localhost inference API.
   --model                 PATH     Checkpoint to load once
   --facilities-dir        PATH     Dir of facility YAMLs
   --port                  N        Default 8000 (127.0.0.1 only)
-                                   5 read routes; consumed by clark-mcp.
+                                   7 read routes: /health /facilities
+                                   /facility/{id} /capabilities /plan
+                                   /what_if /simulate. Consumed by
+                                   clark-mcp.
 
 clark dashboard                    Launch local dashboard server.
 ```

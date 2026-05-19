@@ -299,11 +299,16 @@ There is a **minimal, localhost-only inference API** (`clark serve`,
 (facility registry, train-queue, hosted `/plan`) was **removed**:
 training-via-API was stubbed, auth was a placeholder, and building it
 speculatively only produced skeleton code that overstated readiness.
-The current endpoint is the deliberate opposite of that: five stateless
-read routes (`/health`, `/facilities`, `/facility/{id}`, `/plan`,
-`/what_if`), no auth, no queue, no DB, no cloud — weights loaded once,
-every request runs the same `_run_one_plan_day` primitive `clark plan`
-uses. It was sanctioned only because a **real consumer now exists**: the
+The current endpoint is the deliberate opposite of that: seven
+stateless read routes — `/health`, `/facilities`, `/facility/{id}`,
+`/capabilities` (architectural facts about Clark itself, sourced from
+`clark_limits.yaml` + schema so they can't drift), `/plan`, `/what_if`
+(both honest about being opening assignments only), and `/simulate`
+(the distinct staffing-sufficiency primitive — runs the policy
+end-to-end through ~260 work days at a given roster size so the grade
+distribution is a real outcome, not a snapshot projection). No auth,
+no queue, no DB, no cloud — weights loaded once, every plan/what-if
+request runs the same `_run_one_plan_day` primitive `clark plan` uses. It was sanctioned only because a **real consumer now exists**: the
 local AI warehouse system (a domain-fine-tuned LLM in Ollama →
 [`clark-mcp`](https://github.com/jarmstrong158/clark-mcp) MCP server)
 needs to call Clark over a process boundary. The API is fenced to that:
