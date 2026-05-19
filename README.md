@@ -247,6 +247,12 @@ clark plan                         Generate a shift plan.
   --date                  ISODATE  Defaults to today
   --days                  N        Days ahead to plan (default: 1)
 
+clark serve                        Minimal localhost inference API.
+  --model                 PATH     Checkpoint to load once
+  --facilities-dir        PATH     Dir of facility YAMLs
+  --port                  N        Default 8000 (127.0.0.1 only)
+                                   5 read routes; consumed by clark-mcp.
+
 clark dashboard                    Launch local dashboard server.
 ```
 

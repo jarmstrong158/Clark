@@ -294,15 +294,25 @@ local setup wizard:
   checkpoint and generate shift plans.
 - `clark dashboard` — monitor a training run.
 
-There is no service/API layer. An earlier FastAPI skeleton (facility
-registry, train-queue, `/plan` endpoint) was **removed**: training-via-API
-was stubbed, auth was a placeholder, and the local wizard already covers
-the human workflow end to end. A hosted / multi-tenant / WMS-integration
-deployment is deliberately **out of scope until there is a real consumer**
-to design it around — building it speculatively only produced
-skeleton code that overstated readiness. Model weights are plain
-`.pt` files on disk: a fine-tune writes one, `clark plan` reads it. No
-live weight sharing, no broker, no DB.
+There is a **minimal, localhost-only inference API** (`clark serve`,
+`clark/serve/app.py`) — and nothing more. An earlier FastAPI skeleton
+(facility registry, train-queue, hosted `/plan`) was **removed**:
+training-via-API was stubbed, auth was a placeholder, and building it
+speculatively only produced skeleton code that overstated readiness.
+The current endpoint is the deliberate opposite of that: five stateless
+read routes (`/health`, `/facilities`, `/facility/{id}`, `/plan`,
+`/what_if`), no auth, no queue, no DB, no cloud — weights loaded once,
+every request runs the same `_run_one_plan_day` primitive `clark plan`
+uses. It was sanctioned only because a **real consumer now exists**: the
+local AI warehouse system (a domain-fine-tuned LLM in Ollama →
+[`clark-mcp`](https://github.com/jarmstrong158/clark-mcp) MCP server)
+needs to call Clark over a process boundary. The API is fenced to that:
+anything beyond localhost inference (hosted, multi-tenant, WMS
+integration) remains out of scope until a consumer forces the design.
+Non-facility configs return a clean `422` (not a 500) and are excluded
+from `/facilities`; a seeded `/plan` is fully reproducible. Model
+weights are plain `.pt` files on disk: a fine-tune writes one, `clark
+plan` / `clark serve` reads it. No live weight sharing, no broker, no DB.
 
 ---
 
