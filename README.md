@@ -124,16 +124,45 @@ operator (plain English) ─▶ local LLM (Hermes-3-8B, Ollama)
 
 It is the concrete consumer that `clark serve` exists for (the
 localhost inference API, [`clark/serve/app.py`](clark/serve/app.py)) —
-no cloud, no API cost, no data egress. The model is being domain
-fine-tuned (QLoRA) to drive the tools and explain results honestly:
-ground every number in tool output, refuse rather than fabricate on a
-tool error, and never claim to know *why* the RL policy chose
-something (Clark emits actions, not reasons).
+no cloud, no API cost, no data egress.
 
-Status: clark-mcp is in active development (tool layer + dataset +
-held-out eval gate built; fine-tune in progress). It is **not**
-required to train or run Clark — Clark is fully usable via the CLI and
-wizard alone. See that repo's README/ARCHITECTURE for detail.
+### Training a local LLM to drive Clark honestly
+
+The interesting work here is *teaching a small local model to use
+Clark truthfully*. A base Hermes-3-8B is being domain fine-tuned
+(QLoRA) so it grounds every number in tool output, refuses rather than
+fabricates on a tool error, and never claims to know *why* the RL
+policy chose something (Clark emits actions, not reasons). The
+pipeline is deliberately methodical, not a one-shot prompt:
+
+- **Dataset from the real system, not hand-authored.** Every training
+  example's tool payload is *captured live* from `clark serve` driving
+  real Clark inference — the model can never learn a tool contract
+  that doesn't exist. Assistant turns are derived deterministically
+  from the captured payload (accurate by construction).
+- **Quality-gated, not dumped.** A hand-curated gold set is the bar;
+  the generated set is audited against it and rebalanced so no
+  behavior dominates and every target behavior (incl. honest refusal
+  and non-introspection) is represented. A first skewed draft was
+  rejected and rebuilt rather than shipped.
+- **A held-out eval gate before any training.** A zero-leakage
+  held-out split + automatic metrics (tool selection, argument
+  accuracy, grounding fidelity, honest-failure, non-introspection)
+  produce a recorded base-model baseline. The fine-tune must *beat
+  that bar without regressing the behaviors already good* — measured,
+  not vibes.
+- **Train == inference, provably.** One shared tool-calling protocol
+  is the single source of truth for both the training data and the
+  runtime client, so the bytes the model trains on are byte-identical
+  to what it sees in production.
+
+Status: clark-mcp is in active development — tool layer, dataset, and
+the held-out eval gate are built; the QLoRA fine-tune is in progress
+and no fine-tuned weights have shipped yet. It is **not** required to
+train or run Clark — Clark is fully usable via the CLI and wizard
+alone. Full detail (the eval methodology, the protocol, decisions)
+lives in the [clark-mcp](https://github.com/jarmstrong158/clark-mcp)
+repo's README and `docs/ARCHITECTURE.md`.
 
 ---
 
