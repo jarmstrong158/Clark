@@ -40,7 +40,26 @@ def test_health():
 def test_facilities_lists_shipped_configs():
     r = _client().get("/facilities")
     assert r.status_code == 200
-    assert FID in r.json()["facilities"]
+    facs = r.json()["facilities"]
+    assert FID in facs
+    # standard_vocab.yaml is a task-vocabulary reference doc, NOT a
+    # plannable facility — it must never be advertised (it used to be,
+    # and /plan on it 500'd, polluting the fine-tune dataset).
+    assert "standard_vocab" not in facs
+
+
+def test_non_facility_config_excluded_and_4xx():
+    """standard_vocab.yaml loads as YAML but is not a plannable
+    facility. Every route must give a clean 4xx, never an unhandled
+    500."""
+    c = _client()
+    rf = c.get("/facility/standard_vocab")
+    assert rf.status_code == 422, rf.text
+    rp = c.post("/plan", json={"facility_id": "standard_vocab"})
+    assert rp.status_code == 422, rp.text
+    rw = c.post("/what_if", json={
+        "facility_id": "standard_vocab", "absent_workers": []})
+    assert rw.status_code == 422, rw.text
 
 
 def test_facility_returns_config():

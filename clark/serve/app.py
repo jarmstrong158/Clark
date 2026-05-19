@@ -68,10 +68,55 @@ def build_app(agent: Any, facilities_dir: str | Path,
                 return p
         raise HTTPException(404, f"no facility config {fid!r} in {fdir}")
 
+    def _try_plannable(path: Path) -> Optional[FacilityConfig]:
+        """Load a YAML and return it ONLY if it's a usable, plannable
+        FacilityConfig. Returns None for files that exist and are valid
+        YAML but are not facilities — e.g. `standard_vocab.yaml`, the
+        task-vocabulary reference doc (no workers; `tasks` is a list,
+        not a facility mapping). Never raises: callers decide the HTTP
+        shape so a non-facility yields a clean 4xx, not a 500."""
+        try:
+            cfg = FacilityConfig.from_yaml(path)
+        except Exception:
+            return None
+        if not cfg.workers:
+            return None
+        errors, _ = cfg.validate()
+        if errors:
+            return None
+        return cfg
+
+    def _load_facility(fid: str) -> FacilityConfig:
+        """Resolve + load a plannable facility, or raise the right 4xx:
+        404 if no config by that id, 422 if the config exists but is not
+        a plannable facility (so /plan never leaks an unhandled 500)."""
+        cfg = _try_plannable(_config_path(fid))
+        if cfg is None:
+            raise HTTPException(
+                422, f"{fid!r} is not a plannable facility config "
+                     f"(no workers / failed validation)")
+        return cfg
+
     def _plan_for(cfg: FacilityConfig, when: date, volume: Optional[int],
                   forced_absent: Optional[set] = None,
                   seed: Optional[int] = None) -> list[dict]:
-        vol = volume if volume is not None else _sample_volume_for_date(cfg, when)[0]
+        if volume is not None:
+            vol = volume
+        else:
+            # The seed contract is "same seed -> same plan", but the
+            # season volume draw uses the global `random` module and
+            # ran BEFORE _run_one_plan_day's reseed — so an omitted
+            # volume sampled off un-seeded global RNG, making a seeded
+            # /plan (and what-if base vs modified) silently irreproducible
+            # depending on prior RNG history. Seed the volume draw too.
+            if seed is not None:
+                import random as _r
+                import numpy as _np
+                import torch as _t
+                _r.seed(seed)
+                _np.random.seed(seed)
+                _t.manual_seed(seed)
+            vol = _sample_volume_for_date(cfg, when)[0]
         rows = _run_one_plan_day(cfg, agent, when, vol,
                                  forced_absent=forced_absent, seed=seed)
         return [{"worker": w, "task": t, "hustle": h} for (w, t, h) in rows]
@@ -95,18 +140,23 @@ def build_app(agent: Any, facilities_dir: str | Path,
         if not fdir.is_dir():
             return {"facilities": []}
         ids = sorted({p.stem for p in fdir.iterdir()
-                      if p.suffix in (".yaml", ".yml")})
+                      if p.suffix in (".yaml", ".yml")
+                      and _try_plannable(p) is not None})
         return {"facilities": ids}
 
     @app.get("/facility/{fid}")
     def facility(fid: str):
         p = _config_path(fid)
+        if _try_plannable(p) is None:
+            raise HTTPException(
+                422, f"{fid!r} is not a plannable facility config "
+                     f"(no workers / failed validation)")
         with open(p) as f:
             return {"facility_id": fid, "config": yaml.safe_load(f)}
 
     @app.post("/plan")
     def plan(req: PlanRequest):
-        cfg = FacilityConfig.from_yaml(_config_path(req.facility_id))
+        cfg = _load_facility(req.facility_id)
         when = _resolve_date(req.date)
         return {
             "facility_id": req.facility_id,
@@ -129,7 +179,7 @@ def build_app(agent: Any, facilities_dir: str | Path,
         call-off roll, which silently ignored most requested absences)."""
         when = _resolve_date(req.date)
         seed = _stable_seed(req.facility_id, when)
-        cfg = FacilityConfig.from_yaml(_config_path(req.facility_id))
+        cfg = _load_facility(req.facility_id)
         base = _plan_for(cfg, when, None, seed=seed)
 
         modified = _plan_for(cfg, when, req.volume,
