@@ -12,7 +12,7 @@ Clark learns the underlying dynamics of warehouse operations — picking and pac
 
 Where its predecessor [Jack](https://github.com/jarmstrong158/Jack) was a single-facility PPO + LSTM agent operating on a fixed 7-worker, 14-action state vector, Clark is built around a transformer + LSTM hybrid that handles **variable** numbers of workers and tasks. The same model weights generalize across facilities.
 
-> **Status:** Foundation pre-training is actively in progress. The architecture, training loop, fine-tune workflow, configuration schema, CLI, and setup wizard are stable. Code is open; pre-trained foundation weights will ship in a future release. A fully-local natural-language interface — [clark-mcp](https://github.com/jarmstrong158/clark-mcp) — is built on top via `clark serve` (see [below](#natural-language-interface-clark-mcp)).
+> **Status:** Foundation pre-training **completed** (15 000 episodes, ~11 h on a single RTX 5070 Ti; clean termination, value head stable at end). The architecture, training loop, fine-tune workflow, configuration schema, CLI, and setup wizard are stable. Code is open; a public release of `clark_foundation.pt` is a separate decision (see Roadmap). A fully-local natural-language interface — [clark-mcp](https://github.com/jarmstrong158/clark-mcp) — is built on top via `clark serve` (see [below](#natural-language-interface-clark-mcp)).
 
 ---
 
@@ -427,7 +427,19 @@ The bottom half is the per-episode and curriculum view:
 
 ## Performance and status
 
-Foundation pre-training is in progress. The training infrastructure has been validated end-to-end (PPO updates, day-boundary cadence, multi-process env stepping, pipelined CPU/GPU overlap), and the policy importance-sampling ratio has been confirmed to behave correctly (clip fraction in the healthy 5–20% range after a per-worker ratio refactor).
+Foundation pre-training **completed** at episode 15 000 (target reached, clean termination — `status.alive=False`, value head stable, no end-of-run divergence). ~11 h on a single RTX 5070 Ti. The training infrastructure was validated end-to-end (PPO updates, day-boundary cadence, multi-process env stepping, pipelined CPU/GPU overlap), and the policy importance-sampling ratio behaved correctly throughout (clip fraction in the healthy 5–20% range after the per-worker ratio refactor).
+
+**Headline numbers at completion** (rolling window of the final 500 days across stage-3 synthetic configs up to N=40, M=7):
+
+| Metric | Clark @ ep 15 000 |
+|---|---|
+| ship_win (fully-shipped-day rate) | ~78% |
+| cmp_year (order completion rate) | ~94% |
+| A/B grade rate (last 500 days) | ~44% |
+| F-rate (last 500 days) | ~20% |
+| v_loss sliding-100 median (stability) | 0.019 (alarm > 0.5) |
+
+**Honest read of that F-rate:** ~60% of F-days at base rosters miss by <5% of orders with the policy already pushing (100% OT use, restock kept full) — narrow infeasibility on hard synthetic configs, deliberately *not* reward-hacked away. This is exactly what `clark-mcp`'s staffing-sufficiency sweep is built to *surface* truthfully (and the same data shows +2 workers turns the easy facilities' year-grade C → B).
 
 For reference, **Jack** — Clark's single-facility predecessor that shares the reward structure and the PPO loop — achieved the following on its target facility:
 
@@ -501,8 +513,8 @@ Clark is a successor to Jack, not a wrapper around it. The two share design DNA 
 - [x] Local facility-setup wizard (stdlib HTTP, no service layer — see NOTE.md on why a hosted API is deliberately not built)
 - [x] Minimal localhost inference API (`clark serve`) — fenced to one real consumer ([clark-mcp](https://github.com/jarmstrong158/clark-mcp))
 - [x] Natural-language interface ([clark-mcp](https://github.com/jarmstrong158/clark-mcp)) — local LLM + MCP; tool layer + eval gate built, QLoRA fine-tune in progress
-- [ ] **Foundation pre-training run (in progress)**
-- [ ] Public release of `clark_foundation.pt`
+- [x] **Foundation pre-training run** — completed at episode 15 000 / 15 000, clean termination, value head stable. See *Performance and status* above.
+- [ ] Public release of `clark_foundation.pt` (separate decision; weights live on disk, never tracked in git)
 
 ---
 
