@@ -1,16 +1,24 @@
 """PROBE-AGENT-V3: stage-3 transition value-head + PPO-health audit."""
 import sys, os, json, gc
+from pathlib import Path as _Path
 import numpy as np
 import torch
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# Diagnostic tools run from the repo root and resolve their paths
+# relative to it — they used to hardcode the original author's
+# absolute paths, which broke for everyone else.
+_REPO = _Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(_REPO))
 from clark.agent.transformer import ClarkActorCritic
 
-CKPT = "C:/Users/jarms/repos/clark/clark/data/checkpoints/clark_foundation.pt"
-METRICS = "C:/Users/jarms/repos/clark/clark/data/logs/pretrain/training_metrics.json"
-EPLOG = "C:/Users/jarms/repos/clark/clark/data/logs/pretrain/episode_log.json"
+CKPT    = str(_REPO / "clark" / "data" / "checkpoints" / "clark_foundation.pt")
+METRICS = str(_REPO / "clark" / "data" / "logs" / "pretrain" / "training_metrics.json")
+EPLOG   = str(_REPO / "clark" / "data" / "logs" / "pretrain" / "episode_log.json")
 
 # === LOAD CHECKPOINT ===
+# This is a developer diagnostic against a known-trusted local
+# checkpoint; weights_only=False is acceptable here. For library
+# code paths see clark/agent/ppo.py ClarkAgent.load (safe default).
 ckpt = torch.load(CKPT, map_location="cpu", weights_only=False)
 sd = ckpt.get("model_state_dict") or ckpt.get("state_dict") or ckpt.get("model")
 opt = ckpt.get("optimizer_state_dict") or ckpt.get("optimizer")

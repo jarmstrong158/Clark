@@ -70,6 +70,15 @@ def build_app(agent: Any, facilities_dir: str | Path,
     once by the caller); `facilities_dir` holds the *.yaml configs."""
     fdir = Path(facilities_dir)
     app = FastAPI(title="Clark local inference", version="0.1.0")
+    # The agent carries mutable LSTM hidden state and is reset per
+    # request inside _run_one_plan_day. FastAPI runs sync handlers in
+    # a threadpool, so overlapping /plan, /what_if, or /simulate
+    # requests would race through the same agent. Serialize agent use
+    # with a process-wide lock. This is a localhost single-consumer
+    # service (clark-mcp); throughput isn't the bottleneck, correctness
+    # is.
+    import threading as _threading
+    _agent_lock = _threading.Lock()
 
     def _config_path(fid: str) -> Path:
         # Reject path-traversal; only flat <id>.yaml/.yml in fdir.
@@ -130,8 +139,10 @@ def build_app(agent: Any, facilities_dir: str | Path,
                 _np.random.seed(seed)
                 _t.manual_seed(seed)
             vol = _sample_volume_for_date(cfg, when)[0]
-        rows = _run_one_plan_day(cfg, agent, when, vol,
-                                 forced_absent=forced_absent, seed=seed)
+        with _agent_lock:  # serialize mutable agent state across requests
+            rows = _run_one_plan_day(cfg, agent, when, vol,
+                                     forced_absent=forced_absent,
+                                     seed=seed)
         return [{"worker": w, "task": t, "hustle": h} for (w, t, h) in rows]
 
     def _stable_seed(fid: str, when: date) -> int:
@@ -304,25 +315,32 @@ def build_app(agent: Any, facilities_dir: str | Path,
         env = YearEnv(cfg)
         builder = StateBuilder(cfg)
         env.reset()
-        agent.reset_hidden()
-        max_ticks = 200_000   # safety cap (~year is well under this)
-        ticks = 0
-        while not env.is_year_done and ticks < max_ticks:
-            sd = builder.build(env.day_env)
-            mask = get_action_mask(env.day_env)
-            hmask = get_hustle_mask(env.day_env)
-            ta, ha, *_ = agent.select_action_from_dict(
-                sd, mask, hustle_mask=hmask)
-            actions = [(i, int(ta[i]), bool(ha[i]))
-                       for i in range(len(ta))]
-            env.step(actions)
-            ticks += 1
-            # Honest partial sim: stop once we've completed max_days.
-            # _get_year_summary() reads daily_grades, which holds
-            # whatever's been finalized so far — the grade distribution
-            # is correct for the actual days run (sample, not full yr).
-            if max_days is not None and len(env.daily_grades) >= max_days:
-                break
+        # Hold the agent lock for the whole year simulation — the
+        # LSTM state needs to evolve linearly day-by-day without
+        # another request resetting it mid-year. `with` ensures the
+        # lock releases even if the inner loop raises.
+        with _agent_lock:
+            agent.reset_hidden()
+            max_ticks = 200_000   # safety cap (~year is well under this)
+            ticks = 0
+            while not env.is_year_done and ticks < max_ticks:
+                sd = builder.build(env.day_env)
+                mask = get_action_mask(env.day_env)
+                hmask = get_hustle_mask(env.day_env)
+                ta, ha, *_ = agent.select_action_from_dict(
+                    sd, mask, hustle_mask=hmask)
+                actions = [(i, int(ta[i]), bool(ha[i]))
+                           for i in range(len(ta))]
+                env.step(actions)
+                ticks += 1
+                # Honest partial sim: stop once we've completed
+                # max_days. _get_year_summary() reads daily_grades,
+                # which holds whatever's been finalized so far — the
+                # grade distribution is correct for the actual days
+                # run (sample, not full yr).
+                if max_days is not None and \
+                        len(env.daily_grades) >= max_days:
+                    break
         return env._get_year_summary()
 
     @app.post("/simulate")

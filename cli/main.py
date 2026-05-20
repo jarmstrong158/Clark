@@ -576,7 +576,9 @@ def cmd_dashboard(args: argparse.Namespace):
             self.send_response(code)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(body)))
-            self.send_header("Access-Control-Allow-Origin", "*")
+            # No wildcard CORS — these servers are localhost-only and
+            # same-origin in normal use. Wildcard '*' would let any
+            # web page in the user's browser read responses.
             self.end_headers()
             self.wfile.write(body)
 
@@ -1080,8 +1082,28 @@ def cmd_wizard(args: argparse.Namespace):
                 self._send(400, "application/json", b'{"error":"invalid JSON"}')
                 return
 
+            # Defense in depth: reject cross-origin POSTs. Browsers
+            # CAN reach localhost from any page; the wizard does
+            # state-changing things (save session, kick off training
+            # subprocess) that should never be triggered by random
+            # tabs the user has open.
+            import re as _re
+            origin = self.headers.get("Origin", "")
+            if origin and origin not in (
+                    f"http://localhost:{port}",
+                    f"http://127.0.0.1:{port}"):
+                self._send(403, "application/json",
+                           b'{"error":"cross-origin POSTs not allowed"}')
+                return
+
             if path == "/sessions":
                 sid = body.get("session_id") or str(uuid.uuid4())
+                # Sanitize: only safe filename chars. Blocks ../
+                # traversal, absolute paths, NULs, etc.
+                if not _re.fullmatch(r"[A-Za-z0-9_-]{1,64}", sid):
+                    self._send(400, "application/json",
+                               b'{"error":"invalid session_id"}')
+                    return
                 now = datetime.now(timezone.utc).isoformat(timespec="seconds")
                 fpath = sessions_dir / f"{sid}.json"
                 created_at = now
@@ -1131,8 +1153,22 @@ def cmd_wizard(args: argparse.Namespace):
                     self._send(400, "application/json",
                                b'{"error":"yaml_path required"}')
                     return
+                # Path confinement: the wizard writes configs under
+                # user_configs_dir; refuse to spawn a training run
+                # against an arbitrary YAML elsewhere on disk (would
+                # otherwise let a same-origin attacker target any
+                # readable file as if it were a facility config).
                 try:
-                    result = _start_training(yaml_path)
+                    yp = Path(yaml_path).resolve()
+                    allowed = user_configs_dir.resolve()
+                    yp.relative_to(allowed)
+                except (ValueError, OSError):
+                    self._send(400, "application/json",
+                               b'{"error":"yaml_path must be under '
+                               b'user_configs_dir"}')
+                    return
+                try:
+                    result = _start_training(str(yp))
                     self._send(200, "application/json",
                                _json.dumps(result).encode("utf-8"))
                 except Exception as e:
@@ -1146,7 +1182,9 @@ def cmd_wizard(args: argparse.Namespace):
             self.send_response(code)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(body)))
-            self.send_header("Access-Control-Allow-Origin", "*")
+            # No wildcard CORS — these servers are localhost-only and
+            # same-origin in normal use. Wildcard '*' would let any
+            # web page in the user's browser read responses.
             self.end_headers()
             self.wfile.write(body)
 

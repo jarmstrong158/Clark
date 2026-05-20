@@ -76,7 +76,9 @@ def pretrain(
     if os.path.exists(output_path):
         try:
             import torch as _torch
-            _ckpt = _torch.load(output_path, map_location="cpu", weights_only=False)
+            _trusted = os.environ.get("CLARK_TRUST_CHECKPOINT") == "1"
+            _ckpt = _torch.load(output_path, map_location="cpu",
+                                weights_only=not _trusted)
             agent = ClarkAgent.load(output_path, **agent_kwargs)
             start_episode = int(_ckpt.get("episode", 0)) + 1
             # Force live PPO_DEFAULTS hparams onto the resumed agent.
@@ -394,7 +396,9 @@ def pretrain_batched(
     if os.path.exists(output_path):
         try:
             import torch as _torch
-            _ckpt = _torch.load(output_path, map_location="cpu", weights_only=False)
+            _trusted = os.environ.get("CLARK_TRUST_CHECKPOINT") == "1"
+            _ckpt = _torch.load(output_path, map_location="cpu",
+                                weights_only=not _trusted)
             agent = ClarkAgent.load(output_path, **agent_kwargs)
             start_episode = int(_ckpt.get("episode", 0)) + 1
             # Force live PPO_DEFAULTS hparams onto the resumed agent.

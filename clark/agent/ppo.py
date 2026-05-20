@@ -1005,7 +1005,28 @@ class ClarkAgent:
         forwarded to ClarkAgent.__init__ (use_amp, compile_model, etc.).
         """
         dev = torch.device(device)
-        data = torch.load(path, map_location=dev, weights_only=False)
+        # weights_only=True is the safe default (refuses pickled code in
+        # the checkpoint). Clark's own checkpoints only store tensors +
+        # JSON-compatible metadata (hparams dict, arch_version str,
+        # facility_config YAML str, optimizer state), all of which load
+        # under the safe path. If you have a legacy/third-party pickle
+        # checkpoint with custom Python objects, you must explicitly
+        # set CLARK_TRUST_CHECKPOINT=1 in the environment — making the
+        # trust decision visible, not silent.
+        import os as _os
+        trusted = _os.environ.get("CLARK_TRUST_CHECKPOINT") == "1"
+        try:
+            data = torch.load(path, map_location=dev,
+                              weights_only=not trusted)
+        except Exception as e:
+            if trusted:
+                raise
+            raise RuntimeError(
+                f"torch.load(weights_only=True) failed for {path}: "
+                f"{e}. This checkpoint may contain non-tensor objects. "
+                f"If you trust its origin, re-run with "
+                f"CLARK_TRUST_CHECKPOINT=1 set."
+            ) from e
 
         saved_version = data.get("arch_version", "unknown")
         if saved_version != ARCH_VERSION:

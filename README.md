@@ -1,7 +1,7 @@
 # Clark
 
 [![License: PolyForm NC 1.0.0](https://img.shields.io/badge/License-PolyForm%20NC%201.0.0-orange.svg)](LICENSE)
-[![Python](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
 [![Architecture](https://img.shields.io/badge/arch-clark--v2-blue)](docs/ARCHITECTURE.md)
 
 **A foundation reinforcement learning model for warehouse workforce scheduling.**
@@ -271,7 +271,8 @@ clark plan \
 ### Tests
 
 ```bash
-# Full suite from the repo root (pytest config in pyproject.toml)
+# Install the dev extras (pytest etc.), then run from the repo root.
+pip install -e ".[dev]"
 pytest
 ```
 
