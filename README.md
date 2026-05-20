@@ -1,6 +1,6 @@
 # Clark
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![License: PolyForm NC 1.0.0](https://img.shields.io/badge/License-PolyForm%20NC%201.0.0-orange.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
 [![Architecture](https://img.shields.io/badge/arch-clark--v2-blue)](docs/ARCHITECTURE.md)
 
@@ -12,7 +12,7 @@ Clark learns the underlying dynamics of warehouse operations — picking and pac
 
 Where its predecessor [Jack](https://github.com/jarmstrong158/Jack) was a single-facility PPO + LSTM agent operating on a fixed 7-worker, 14-action state vector, Clark is built around a transformer + LSTM hybrid that handles **variable** numbers of workers and tasks. The same model weights generalize across facilities.
 
-> **Status:** Foundation pre-training **completed** (15 000 episodes, ~11 h on a single RTX 5070 Ti; clean termination, value head stable at end). The architecture, training loop, fine-tune workflow, configuration schema, CLI, and setup wizard are stable. Code is open; a public release of `clark_foundation.pt` is a separate decision (see Roadmap). A fully-local natural-language interface — [clark-mcp](https://github.com/jarmstrong158/clark-mcp) — is built on top via `clark serve` (see [below](#natural-language-interface-clark-mcp)).
+> **Status:** Foundation pre-training **completed** (15 000 episodes, ~11 h on a single RTX 5070 Ti; clean termination, value head stable at end). The architecture, training loop, fine-tune workflow, configuration schema, CLI, and setup wizard are stable. **Trained weights and managed deployments are a commercial offering — the source is open for review under [PolyForm Noncommercial 1.0.0](LICENSE); for production / commercial use, see [Use Clark](#use-clark--commercial-access).** A fully-local natural-language interface — [clark-mcp](https://github.com/jarmstrong158/clark-mcp) — is built on top via `clark serve` (see [below](#natural-language-interface-clark-mcp)).
 
 ---
 
@@ -27,9 +27,10 @@ Where its predecessor [Jack](https://github.com/jarmstrong158/Jack) was a single
 7. [Project structure](#project-structure)
 8. [Configuring a facility](#configuring-a-facility)
 9. [Performance and status](#performance-and-status)
-10. [How Clark differs from Jack](#how-clark-differs-from-jack)
-11. [Roadmap](#roadmap)
-12. [License](#license)
+10. [Use Clark / Commercial access](#use-clark--commercial-access)
+11. [How Clark differs from Jack](#how-clark-differs-from-jack)
+12. [Roadmap](#roadmap)
+13. [License](#license)
 
 ---
 
@@ -245,9 +246,10 @@ clark validate my_warehouse.yaml
 ### Train
 
 ```bash
-# Pre-train the foundation model (multi-day GPU job — only run if you want
-# to retrain from scratch; otherwise wait for the released checkpoint).
-clark pretrain --episodes 10000 --device cuda --n-envs 32 --mp
+# Pre-train the foundation model from scratch (~11 h on an RTX 5070 Ti).
+# OK under the noncommercial license; for commercial deployment of the
+# trained foundation, see "Use Clark / Commercial access" below.
+clark pretrain --episodes 15000 --device cuda --n-envs 32 --mp
 
 # Fine-tune the foundation model on your facility (~30 min on consumer GPU)
 clark finetune \
@@ -454,7 +456,24 @@ For reference, **Jack** — Clark's single-facility predecessor that shares the 
 
 Clark's design goal: match Jack's per-facility numbers after fine-tuning, while requiring an order of magnitude fewer per-facility training episodes thanks to the foundation model.
 
-A trained `clark_foundation.pt` will be released here once pre-training and curriculum validation complete. Until then, you can run pre-training yourself (multi-day GPU job) or train per-facility from a fresh init (slower than fine-tuning but works).
+Trained foundation weights are **not publicly released** — they are part of the commercial offering (see [Use Clark](#use-clark--commercial-access)). For noncommercial use (research, evaluation, learning) the source is open under [PolyForm NC](LICENSE); you can pre-train your own foundation from scratch (~11 h on a consumer GPU) or train per-facility from a fresh init.
+
+---
+
+## Use Clark / Commercial access
+
+The **source is open** under [PolyForm Noncommercial 1.0.0](LICENSE) — read, study, audit, run for research / personal / educational use, contribute back.
+
+The **trained foundation checkpoint** (`clark_foundation.pt`) and **production deployments** are commercial:
+
+- **Trained foundation weights** — skip the ~11 h pre-train; start fine-tuning on your facility in minutes.
+- **Per-facility fine-tune service** — bring your roster + volume history; we deliver a fine-tuned checkpoint matched to your operation.
+- **Hosted inference / managed deployment** — `clark serve` running with the trained foundation, plus the [clark-mcp](https://github.com/jarmstrong158/clark-mcp) natural-language interface (chat + staffing-sufficiency dashboard) for your team.
+- **Operational support and integration** — facility config authoring (Clark's `wizard` is the on-ramp), WMS integration if needed, ongoing monitoring.
+
+For commercial access: **open a GitHub Issue** in this repo with the label `commercial-access` and a one-line description of your use case. (A direct contact channel is being set up; the Issue route is the canonical channel until then.)
+
+> *Why noncommercial?* The model represents real RL engineering effort and the foundation checkpoint is the work-product worth selling. Source-available keeps the project honest, auditable, and useful for the research/learning audience; the noncommercial restriction backs the commercial offering. If your use is genuinely noncommercial (academic, personal, evaluation, journalism) you do not need permission — the license already grants it.
 
 ---
 
@@ -514,13 +533,13 @@ Clark is a successor to Jack, not a wrapper around it. The two share design DNA 
 - [x] Minimal localhost inference API (`clark serve`) — fenced to one real consumer ([clark-mcp](https://github.com/jarmstrong158/clark-mcp))
 - [x] Natural-language interface ([clark-mcp](https://github.com/jarmstrong158/clark-mcp)) — local LLM + MCP; tool layer + eval gate built, QLoRA fine-tune in progress
 - [x] **Foundation pre-training run** — completed at episode 15 000 / 15 000, clean termination, value head stable. See *Performance and status* above.
-- [ ] Public release of `clark_foundation.pt` (separate decision; weights live on disk, never tracked in git)
+- [x] Trained foundation weights — *commercial, not publicly released by design* (see [Use Clark](#use-clark--commercial-access))
 
 ---
 
 ## License
 
-MIT. See [`LICENSE`](LICENSE).
+[PolyForm Noncommercial 1.0.0](LICENSE). Source-available — read, study, run, modify, and contribute back for any noncommercial purpose. Commercial use (including selling services that use Clark or its derivatives, or running Clark in production for a for-profit operation) requires a separate agreement — see [Use Clark](#use-clark--commercial-access).
 
 Trained model weights, when released, are licensed separately and may have additional terms.
 
