@@ -1,0 +1,68 @@
+# Jack baseline — Jack's hardcoded single-facility setup, translated to
+# clark's FacilityConfig schema so the Clark foundation can be fine-tuned
+# on the exact same problem Jack was trained from scratch on.
+#
+# Source: github.com/jarmstrong158/Jack — volt_sim/config.py.
+# Used for the "Validated on Jack's facility" comparison in clark's
+# README: does Clark foundation + ~500 fine-tune episodes match Jack's
+# ~9 simulated years of training from scratch?
+
+facility:
+  name: "Jack baseline (translated)"
+  timezone: "America/New_York"
+
+workers:
+  - { id: 0, name: "Marcus", base_oph: 17.00, shift_hours: 9.75, shift_start: 9.0, role: "manager",            task_eligibility: "all" }
+  - { id: 1, name: "Nolan",  base_oph: 15.35, shift_hours: 8.50, shift_start: 9.0, role: "assistant_manager", task_eligibility: "all" }
+  - { id: 2, name: "Felix",  base_oph: 16.23, shift_hours: 8.50, shift_start: 9.0, role: "warehouse",         task_eligibility: "all" }
+  - { id: 3, name: "Blake",  base_oph: 18.30, shift_hours: 8.50, shift_start: 9.0, role: "warehouse",         task_eligibility: "all" }
+  - { id: 4, name: "Reid",   base_oph: 18.94, shift_hours: 8.50, shift_start: 9.0, role: "warehouse",         task_eligibility: "all" }
+  - { id: 5, name: "Trent",  base_oph: 15.28, shift_hours: 8.50, shift_start: 9.0, role: "warehouse",         task_eligibility: "all" }
+  - { id: 6, name: "Omar",   base_oph: 14.88, shift_hours: 8.50, shift_start: 9.0, role: "warehouse",         task_eligibility: "all" }
+
+tasks:
+  enabled: ["pick", "pack", "restock", "side_project", "management", "idle", "cycle_count"]
+
+volume:
+  seasonal_ranges:
+    January:   [60, 100]
+    February:  [60, 100]
+    March:     [150, 250]
+    April:     [300, 450]
+    May:       [350, 500]
+    June:      [350, 500]
+    July:      [280, 400]
+    August:    [280, 400]
+    September: [250, 350]
+    October:   [200, 300]
+    November:  [150, 220]
+    December:  [60, 100]
+  weekly_curve:
+    monday:    [0.86, 1.00]
+    tuesday:   [0.71, 0.85]
+    wednesday: [0.56, 0.70]
+    thursday:  [0.41, 0.55]
+    friday:    [0.00, 0.40]
+
+business_rules:
+  # Shift / schedule — Jack's exact values
+  day_start_hour:    9.0
+  eod_hour:         17.5
+  order_cutoff_hour: 17.0
+  lunch_hour:       13.0
+  lunch_duration:    0.5
+
+  # Management — Jack uses 1.5h minimum + backlog tracking
+  management_daily_hours_required:    1.5
+  management_min_daily_hours:         1.5
+  management_backlog_week_threshold: 10.0
+  management_backlog_weekly_penalty: -50.0
+
+  # OT — Jack's wall-clock-bounded 1h push
+  ot_wall_clock_max: 1.0
+  ot_hard_stop_hour: 18.5
+
+  # Cycle count — 2 × 1.5h per week, Marcus + Nolan eligible (clark
+  # picks eligibility by role: manager + assistant_manager)
+  cycle_count_weekly_hours:    3.0
+  cycle_count_max_overdue_weeks: 4

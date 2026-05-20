@@ -196,7 +196,7 @@ def finetune(
 
         if ep % save_interval == 0:
             agent.save(output_path, ep, config)
-            print(f"  [Checkpoint saved → {output_path}]")
+            print(f"  [Checkpoint saved -> {output_path}]")
 
     # Final save
     agent.save(output_path, n_episodes, config)
