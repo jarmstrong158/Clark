@@ -1,0 +1,66 @@
+# Example Facility — Returns / QC focused operation
+# 8 workers; demonstrates a different operational profile than the
+# default outbound-pick/pack hubs. Returns and quality-check are the
+# dominant tasks; OPH is lower (accuracy-weighted work), shifts are
+# longer (10 h), no morning pick round, smaller volume but with
+# strict per-order quality requirements. Models a reverse-logistics
+# center.
+
+facility:
+  name: "Example Returns Hub"
+  timezone: "America/Los_Angeles"
+
+workers:
+  - { id: 0, name: "QC Manager",      base_oph: 11.0, shift_hours: 10.0, shift_start: 7.0, role: manager,           task_eligibility: all, call_off_probability: 0.015, max_ot_hours: 1.0, hustle_daily_cap: 6.0 }
+  - { id: 1, name: "QC Lead",         base_oph: 10.5, shift_hours: 9.5,  shift_start: 7.0, role: assistant_manager, task_eligibility: all, call_off_probability: 0.025, max_ot_hours: 1.0, hustle_daily_cap: 6.0 }
+  - { id: 2, name: "Inspector A",     base_oph: 9.8,  shift_hours: 10.0, shift_start: 7.0, role: warehouse,         task_eligibility: all, call_off_probability: 0.05,  max_ot_hours: 1.0, hustle_daily_cap: 5.5 }
+  - { id: 3, name: "Inspector B",     base_oph: 10.2, shift_hours: 10.0, shift_start: 7.0, role: warehouse,         task_eligibility: all, call_off_probability: 0.05,  max_ot_hours: 1.0, hustle_daily_cap: 5.5 }
+  - { id: 4, name: "Inspector C",     base_oph: 9.4,  shift_hours: 10.0, shift_start: 7.0, role: warehouse,         task_eligibility: all, call_off_probability: 0.05,  max_ot_hours: 1.0, hustle_daily_cap: 5.5, individual_debuff: { type: stomach_issues, probability: 0.1, cooldown_days: 6, effect: oph_penalty, oph_multiplier: 0.75 } }
+  - { id: 5, name: "Receiver A",      base_oph: 12.0, shift_hours: 10.0, shift_start: 7.0, role: warehouse,         task_eligibility: all, call_off_probability: 0.05,  max_ot_hours: 1.0, hustle_daily_cap: 6.0 }
+  - { id: 6, name: "Receiver B",      base_oph: 11.8, shift_hours: 10.0, shift_start: 7.0, role: warehouse,         task_eligibility: all, call_off_probability: 0.05,  max_ot_hours: 1.0, hustle_daily_cap: 6.0 }
+  - { id: 7, name: "Restocker",       base_oph: 13.5, shift_hours: 10.0, shift_start: 7.0, role: warehouse,         task_eligibility: all, call_off_probability: 0.05,  max_ot_hours: 1.0, hustle_daily_cap: 6.5 }
+
+tasks:
+  enabled: ["pick", "pack", "restock", "side_project", "management", "idle", "cycle_count", "receiving", "returns_processing", "quality_check"]
+
+volume:
+  # Returns volume — counter-seasonal vs outbound (peaks after Q4
+  # gifting season), much smaller per-unit but higher per-unit work
+  seasonal_ranges:
+    January:   [180, 280]   # post-holiday returns peak
+    February:  [160, 240]
+    March:     [110, 180]
+    April:     [90,  150]
+    May:       [80,  130]
+    June:      [80,  130]
+    July:      [90,  140]
+    August:    [100, 160]
+    September: [110, 170]
+    October:   [120, 190]
+    November:  [110, 180]
+    December:  [80,  130]   # outbound is busy; returns slow
+  weekly_curve:
+    monday:    [0.70, 0.95]   # weekend backlog hits Monday
+    tuesday:   [0.60, 0.80]
+    wednesday: [0.55, 0.75]
+    thursday:  [0.50, 0.70]
+    friday:    [0.30, 0.55]
+
+business_rules:
+  day_start_hour:    7.0
+  eod_hour:         17.5      # 10-h shifts incl 30-min lunch + small breaks
+  order_cutoff_hour: 16.5
+  lunch_hour:       12.0
+  lunch_duration:    0.5
+  management_daily_hours_required: 2.0
+  management_min_daily_hours:      1.0
+  management_backlog_week_threshold: 8.0
+  management_backlog_weekly_penalty: -40.0
+  ot_wall_clock_max: 1.0
+  ot_hard_stop_hour: 18.5
+  cycle_count_weekly_hours:    4.0    # tighter audits in a QC-heavy op
+  cycle_count_max_overdue_weeks: 3
+  morning_pick_enabled: false         # no outbound morning round
+  pack_stations: 3
+  carts_available: 8
+  pick_buffer_capacity: 48

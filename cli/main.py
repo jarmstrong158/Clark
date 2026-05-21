@@ -590,12 +590,15 @@ def cmd_dashboard(args: argparse.Namespace):
     print(f"  Auto-refreshes every 10s while training is running.")
     print(f"  Press Ctrl+C to stop.\n")
 
-    # Open browser after a short delay
-    def _open():
-        import time
-        time.sleep(0.5)
-        webbrowser.open(url)
-    threading.Thread(target=_open, daemon=True).start()
+    # Open browser after a short delay — unless CLARK_NO_BROWSER=1
+    # (set by tests / headless / scripted launches to avoid
+    # spamming the user with N tabs).
+    if os.environ.get("CLARK_NO_BROWSER") != "1":
+        def _open():
+            import time
+            time.sleep(0.5)
+            webbrowser.open(url)
+        threading.Thread(target=_open, daemon=True).start()
 
     try:
         server.serve_forever()
@@ -1194,11 +1197,12 @@ def cmd_wizard(args: argparse.Namespace):
     print(f"  Sessions dir: {sessions_dir}")
     print(f"  Press Ctrl+C to stop.\n")
 
-    def _open():
-        import time as _time
-        _time.sleep(0.5)
-        webbrowser.open(url)
-    threading.Thread(target=_open, daemon=True).start()
+    if os.environ.get("CLARK_NO_BROWSER") != "1":
+        def _open():
+            import time as _time
+            _time.sleep(0.5)
+            webbrowser.open(url)
+        threading.Thread(target=_open, daemon=True).start()
 
     try:
         server.serve_forever()

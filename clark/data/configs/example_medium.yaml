@@ -1,0 +1,80 @@
+# Example Facility — Medium-sized 3PL hub
+# 12 workers; fills the size gap between example_small (5) and
+# example_large (25). Models a real-world pattern: two shift starts
+# (early kit-out crew + main shift), Saturday operations on summer
+# peaks, returns processing enabled, modest individual debuffs.
+# Volume curve sized for ~70% of physical capacity on peak Monday.
+
+facility:
+  name: "Example Medium 3PL Hub"
+  timezone: "America/Chicago"
+
+workers:
+  # Management — full shift starting at 8 AM
+  - { id: 0, name: "Operations Manager",  base_oph: 16.0, shift_hours: 9.5, shift_start: 8.0,  role: manager,            task_eligibility: all, call_off_probability: 0.01, max_ot_hours: 1.5, hustle_daily_cap: 8.0 }
+  - { id: 1, name: "Floor Lead",          base_oph: 15.0, shift_hours: 8.5, shift_start: 8.0,  role: assistant_manager, task_eligibility: all, call_off_probability: 0.02, max_ot_hours: 1.5, hustle_daily_cap: 8.0 }
+
+  # Early crew — 6 AM start, lighter shift, sets up the day
+  - { id: 2, name: "Early Picker A",      base_oph: 17.5, shift_hours: 8.0, shift_start: 6.0,  role: warehouse,         task_eligibility: all, call_off_probability: 0.04, max_ot_hours: 1.0, hustle_daily_cap: 7.0 }
+  - { id: 3, name: "Early Picker B",      base_oph: 16.2, shift_hours: 8.0, shift_start: 6.0,  role: warehouse,         task_eligibility: all, call_off_probability: 0.04, max_ot_hours: 1.0, hustle_daily_cap: 7.0, individual_debuff: { type: family_needs, probability: 0.18, cooldown_days: 7, effect: lose_hours, hours_lost_range: [1.0, 2.5] } }
+
+  # Main shift — 8.5 hours starting at 9 AM
+  - { id: 4, name: "Picker 1",            base_oph: 18.4, shift_hours: 8.5, shift_start: 9.0,  role: warehouse,         task_eligibility: all, call_off_probability: 0.05, max_ot_hours: 1.0, hustle_daily_cap: 7.5 }
+  - { id: 5, name: "Picker 2",            base_oph: 17.1, shift_hours: 8.5, shift_start: 9.0,  role: warehouse,         task_eligibility: all, call_off_probability: 0.05, max_ot_hours: 1.0, hustle_daily_cap: 7.5 }
+  - { id: 6, name: "Picker 3",            base_oph: 19.0, shift_hours: 8.5, shift_start: 9.0,  role: warehouse,         task_eligibility: all, call_off_probability: 0.05, max_ot_hours: 1.0, hustle_daily_cap: 7.5 }
+  - { id: 7, name: "Packer 1",            base_oph: 14.5, shift_hours: 8.5, shift_start: 9.0,  role: warehouse,         task_eligibility: all, call_off_probability: 0.05, max_ot_hours: 1.0, hustle_daily_cap: 7.5 }
+  - { id: 8, name: "Packer 2",            base_oph: 15.8, shift_hours: 8.5, shift_start: 9.0,  role: warehouse,         task_eligibility: all, call_off_probability: 0.05, max_ot_hours: 1.0, hustle_daily_cap: 7.5, individual_debuff: { type: soreness, probability: 0.12, cooldown_days: 4, effect: oph_penalty, oph_multiplier: 0.85 } }
+  - { id: 9, name: "Packer 3",            base_oph: 16.1, shift_hours: 8.5, shift_start: 9.0,  role: warehouse,         task_eligibility: all, call_off_probability: 0.05, max_ot_hours: 1.0, hustle_daily_cap: 7.5 }
+
+  # Returns specialist + floater (handle inbound/returns and fill gaps)
+  - { id: 10, name: "Returns Specialist", base_oph: 13.8, shift_hours: 8.5, shift_start: 9.0,  role: warehouse,         task_eligibility: all, call_off_probability: 0.04, max_ot_hours: 1.0, hustle_daily_cap: 6.0 }
+  - { id: 11, name: "Float",              base_oph: 15.5, shift_hours: 8.5, shift_start: 9.0,  role: warehouse,         task_eligibility: all, call_off_probability: 0.06, max_ot_hours: 1.0, hustle_daily_cap: 7.0 }
+
+tasks:
+  enabled: ["pick", "pack", "restock", "side_project", "management", "idle", "cycle_count", "receiving", "returns_processing"]
+
+volume:
+  seasonal_ranges:
+    January:   [120, 200]
+    February:  [120, 200]
+    March:     [180, 280]
+    April:     [240, 360]
+    May:       [280, 400]
+    June:      [320, 460]
+    July:      [320, 460]
+    August:    [320, 460]
+    September: [280, 400]
+    October:   [240, 360]
+    November:  [200, 320]
+    December:  [120, 200]
+  weekly_curve:
+    monday:    [0.80, 1.00]
+    tuesday:   [0.70, 0.90]
+    wednesday: [0.60, 0.80]
+    thursday:  [0.50, 0.70]
+    friday:    [0.20, 0.50]
+
+business_rules:
+  day_start_hour:    6.0       # earliest worker arrives (early crew)
+  eod_hour:         17.5
+  order_cutoff_hour: 17.0
+  lunch_hour:       12.5
+  lunch_duration:    0.5
+  management_daily_hours_required: 3.0
+  management_min_daily_hours:      1.5
+  management_backlog_week_threshold: 10.0
+  management_backlog_weekly_penalty: -50.0
+  ot_wall_clock_max: 1.5
+  ot_hard_stop_hour: 18.5
+  cycle_count_weekly_hours:    3.0
+  cycle_count_max_overdue_weeks: 4
+  morning_pick_enabled: true
+  morning_pick_carts_min: 2
+  morning_pick_carts_max: 4
+  morning_pick_per_cart_min: 2
+  morning_pick_per_cart_max: 6
+  pack_stations: 4
+  carts_available: 12
+  pick_buffer_capacity: 96     # 12 workers × 8
+  work_saturday: true          # summer-peak Saturday operations
+  saturday_volume_fraction: 0.5

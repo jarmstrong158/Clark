@@ -140,3 +140,58 @@ def test_what_if_absent_worker_actually_removed():
 def test_unknown_facility_404():
     r = _client().post("/plan", json={"facility_id": "does_not_exist"})
     assert r.status_code == 404
+
+
+def test_concurrent_plan_safe():
+    """The agent has a mutable LSTM hidden state and is reset per
+    request. FastAPI runs sync handlers on a threadpool — without the
+    agent_lock added in build_app, overlapping /plan requests would
+    race through the same hidden state and either crash or produce
+    nondeterministic output.
+
+    Pin the fix: fire many concurrent identical /plan calls and
+    require all to return 200 with the same well-formed shape (no
+    exceptions, no shape drift). This wouldn't *guarantee* races
+    are gone (concurrency tests rarely do) but it does fail loudly
+    if any request errors under contention."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    client = _client()
+    body = {"facility_id": FID, "date": "2026-04-01", "seed": 7}
+    n = 8
+
+    def go(_):
+        r = client.post("/plan", json=body)
+        return r.status_code, r.json() if r.status_code == 200 else None
+
+    with ThreadPoolExecutor(max_workers=n) as ex:
+        results = list(ex.map(go, range(n)))
+
+    for code, body_ in results:
+        assert code == 200, f"concurrent /plan returned {code}"
+        assert body_ and "assignments" in body_
+        assert isinstance(body_["assignments"], list)
+        for row in body_["assignments"]:
+            assert set(row) == {"worker", "task", "hustle"}
+
+
+def test_simulate_capacity_lookup_and_capabilities():
+    """Smoke /simulate (small n_days, no extras) and /capabilities.
+    Pins both routes against the actual served app — both were added
+    after the original test suite was written."""
+    client = _client()
+    r = client.get("/capabilities")
+    assert r.status_code == 200
+    cap = r.json()
+    assert "limits" in cap and "n_workers" in cap["limits"]
+    assert cap["limits"]["n_workers"]["max"] >= 2
+
+    r = client.post("/simulate", json={
+        "facility_id": FID, "extra_workers": 0,
+        "n_days": 5, "seed": 1})
+    assert r.status_code == 200, r.text
+    s = r.json()["summary"]
+    # 5 days run — should have a grade distribution with the right keys
+    grades = s.get("grade_distribution", {})
+    assert set(grades.keys()).issubset({"A", "B", "C", "D", "F"})
+    assert sum(grades.values()) <= 5
