@@ -564,7 +564,7 @@ Clark is a successor to Jack, not a wrapper around it. The two share design DNA 
 - [x] Episode logging + dashboard
 - [x] Local facility-setup wizard (stdlib HTTP, no service layer — see NOTE.md on why a hosted API is deliberately not built)
 - [x] Minimal localhost inference API (`clark serve`) — fenced to one real consumer ([clark-mcp](https://github.com/jarmstrong158/clark-mcp))
-- [x] Natural-language interface ([clark-mcp](https://github.com/jarmstrong158/clark-mcp)) — local LLM + 6-tool MCP server + web UI + staffing dashboard; QLoRA iter-2 (`clark-hermes3:ft`) deployed locally, iter-3 retraining for conversational-synthesis
+- [x] Natural-language interface ([clark-mcp](https://github.com/jarmstrong158/clark-mcp)) — local LLM + 7-tool MCP server + web UI + staffing dashboard; QLoRA fine-tune (`clark-hermes3:ft`) deployed locally — see the [natural-language-interface status block](#natural-language-interface-clark-mcp) above for the current iter and metrics
 - [x] **Foundation pre-training run** — completed at episode 15 000 / 15 000, clean termination, value head stable. See *Performance and status* above.
 - [x] **Validated on Jack's facility** — Clark foundation + 50 fine-tune episodes beats Jack's failure rate and A+B share on Jack's exact config (~0.2 sim years vs Jack's ~9.4). Detail in *Performance and status*.
 - [x] Trained foundation weights — *commercial, not publicly released by design* (see [Use Clark](#use-clark--commercial-access))
