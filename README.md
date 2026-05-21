@@ -157,25 +157,24 @@ pipeline is deliberately methodical, not a one-shot prompt:
   runtime client, so the bytes the model trains on are byte-identical
   to what it sees in production.
 
+<!-- AUTO:CLARK-MCP-STATUS-BEGIN -->
 Status: clark-mcp is in active development. **Built and deployed
-locally:** the 6-tool MCP layer; a held-out eval gate (n=121, six
-automatic metrics + a new autoregressive *conversational_synthesis*
-probe); two completed QLoRA iterations — iter-2 (`clark-hermes3:ft`)
-beats base on every measured metric (format conformance 0→**1.00**,
+locally:** the 7-tool MCP layer; a held-out eval gate (n=121, six
+automatic metrics + a live autoregressive *conversational_synthesis*
+probe); QLoRA iter-2 (`clark-hermes3:ft`) deployed locally — beats
+base on every measured metric (format conformance 0→**1.00**,
 tool_selection 0.77→**0.96**, tool_args 0.59→**0.77**,
 numeric_grounding 0.30→**1.00**, honest_failure/grounding/
 non_introspection held); a local web UI with a **staffing-sufficiency
 dashboard** (sweep `+0…+N` extra workers and see grade distribution
 at each roster size — same `/simulate` primitive that powered the
-Jack head-to-head above). **In flight:** iter-3 retrain targeting
-*conversational numeric synthesis* (model can list 4 facilities but
-hallucinate "5"; iter-2 passes 1/4 live synthesis probes — iter-3
-adds 14 multi-turn aggregation examples + the live probe to the
-gate). **Not done:** no public weight release (that's the commercial
-product). clark-mcp is **not** required to train or run Clark —
-Clark is fully usable via the CLI and wizard alone. Full detail
-lives in the [clark-mcp](https://github.com/jarmstrong158/clark-mcp)
-repo's README and `docs/ARCHITECTURE.md`.
+Jack head-to-head above). **Not done:** no public weight release
+(that's the commercial product). clark-mcp is **not** required to
+train or run Clark — Clark is fully usable via the CLI and wizard
+alone. Full detail lives in the
+[clark-mcp](https://github.com/jarmstrong158/clark-mcp) repo's
+README and `docs/ARCHITECTURE.md`.
+<!-- AUTO:CLARK-MCP-STATUS-END -->
 
 ---
 
