@@ -157,20 +157,25 @@ pipeline is deliberately methodical, not a one-shot prompt:
   runtime client, so the bytes the model trains on are byte-identical
   to what it sees in production.
 
-Status: clark-mcp is in active development. **Built:** the 6-tool
-MCP layer, the held-out eval gate, a first QLoRA fine-tune (passes
-the gate on its scoped targets — envelope conformance 0→1.0, tool
-selection 0.74→1.0, args 0.56→0.80), a local web UI with a
-**staffing-sufficiency dashboard** (sweep `+0…+N` extra workers and
-see grade distribution at each roster size — powered by Clark's
-`/simulate` endpoint), and a second training iteration in flight to
-fix multi-turn context loss and numeric-fact hallucination the live
-smoke surfaced. **Not done:** no fine-tuned weights shipped yet,
-multi-turn behavior still iterating. clark-mcp is **not** required
-to train or run Clark — Clark is fully usable via the CLI and wizard
-alone. Full detail lives in the
-[clark-mcp](https://github.com/jarmstrong158/clark-mcp) repo's
-README and `docs/ARCHITECTURE.md`.
+Status: clark-mcp is in active development. **Built and deployed
+locally:** the 6-tool MCP layer; a held-out eval gate (n=121, six
+automatic metrics + a new autoregressive *conversational_synthesis*
+probe); two completed QLoRA iterations — iter-2 (`clark-hermes3:ft`)
+beats base on every measured metric (format conformance 0→**1.00**,
+tool_selection 0.77→**0.96**, tool_args 0.59→**0.77**,
+numeric_grounding 0.30→**1.00**, honest_failure/grounding/
+non_introspection held); a local web UI with a **staffing-sufficiency
+dashboard** (sweep `+0…+N` extra workers and see grade distribution
+at each roster size — same `/simulate` primitive that powered the
+Jack head-to-head above). **In flight:** iter-3 retrain targeting
+*conversational numeric synthesis* (model can list 4 facilities but
+hallucinate "5"; iter-2 passes 1/4 live synthesis probes — iter-3
+adds 14 multi-turn aggregation examples + the live probe to the
+gate). **Not done:** no public weight release (that's the commercial
+product). clark-mcp is **not** required to train or run Clark —
+Clark is fully usable via the CLI and wizard alone. Full detail
+lives in the [clark-mcp](https://github.com/jarmstrong158/clark-mcp)
+repo's README and `docs/ARCHITECTURE.md`.
 
 ---
 
@@ -560,7 +565,7 @@ Clark is a successor to Jack, not a wrapper around it. The two share design DNA 
 - [x] Episode logging + dashboard
 - [x] Local facility-setup wizard (stdlib HTTP, no service layer — see NOTE.md on why a hosted API is deliberately not built)
 - [x] Minimal localhost inference API (`clark serve`) — fenced to one real consumer ([clark-mcp](https://github.com/jarmstrong158/clark-mcp))
-- [x] Natural-language interface ([clark-mcp](https://github.com/jarmstrong158/clark-mcp)) — local LLM + MCP; tool layer + eval gate built, QLoRA fine-tune in progress
+- [x] Natural-language interface ([clark-mcp](https://github.com/jarmstrong158/clark-mcp)) — local LLM + 6-tool MCP server + web UI + staffing dashboard; QLoRA iter-2 (`clark-hermes3:ft`) deployed locally, iter-3 retraining for conversational-synthesis
 - [x] **Foundation pre-training run** — completed at episode 15 000 / 15 000, clean termination, value head stable. See *Performance and status* above.
 - [x] **Validated on Jack's facility** — Clark foundation + 50 fine-tune episodes beats Jack's failure rate and A+B share on Jack's exact config (~0.2 sim years vs Jack's ~9.4). Detail in *Performance and status*.
 - [x] Trained foundation weights — *commercial, not publicly released by design* (see [Use Clark](#use-clark--commercial-access))
