@@ -160,23 +160,26 @@ pipeline is deliberately methodical, not a one-shot prompt:
 <!-- AUTO:CLARK-MCP-STATUS-BEGIN -->
 Status: clark-mcp is in active development. **Built and deployed
 locally:** the 7-tool MCP layer (incl. `clark_staffing_sweep`); a
-held-out eval gate (n=173, eight metrics including a live
-autoregressive *conversational_synthesis* probe); QLoRA **iter-4**
-(`clark-hermes3:ft`) deployed locally — latest eval vs base:
-format_validity 0.000→**1.000**,
+held-out teacher-forced eval gate (n=173, eight metrics) plus an
+autoregressive live-probe suite (`tools/live_audit.py`); QLoRA
+fine-tune (`clark-hermes3:ft`) deployed locally — latest eval vs
+base: format_validity 0.000→**1.000**,
 tool_selection 0.719→**0.977**,
 tool_args 0.520→**0.760**,
-numeric_grounding 0.071→**1.000**,
-**conversational_synthesis** —→**—**;
+numeric_grounding 0.071→**1.000**;
 honest_failure/grounding/non_introspection held at ≈1.000.
-A local web UI with a **staffing-sufficiency dashboard** (sweep
-`+0…+N` extra workers and see grade distribution at each roster
-size — same `/simulate` primitive that powered the Jack head-to-head
-above). **Not done:** no public weight release (that's the commercial
-product). clark-mcp is **not** required to train or run Clark —
-Clark is fully usable via the CLI and wizard alone. Full detail
-lives in the [clark-mcp](https://github.com/jarmstrong158/clark-mcp)
-repo's README and `docs/ARCHITECTURE.md`.
+The runtime ships with schema-constrained decoding on by default
+(`CLARK_CONSTRAINED=1`) so the `<tool_call>` envelope is enforced
+at decode time and `facility_id` is constrained to the live enum —
+no fabricated facility names possible. A local web UI with a
+**staffing-sufficiency dashboard** (sweep `+0…+N` extra workers and
+see grade distribution at each roster size — same `/simulate`
+primitive that powered the Jack head-to-head above). **Not done:**
+no public weight release (that's the commercial product). clark-mcp
+is **not** required to train or run Clark — Clark is fully usable
+via the CLI and wizard alone. Full detail lives in the
+[clark-mcp](https://github.com/jarmstrong158/clark-mcp) repo's
+README and `docs/ARCHITECTURE.md`.
 <!-- AUTO:CLARK-MCP-STATUS-END -->
 
 ---
