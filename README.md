@@ -159,21 +159,24 @@ pipeline is deliberately methodical, not a one-shot prompt:
 
 <!-- AUTO:CLARK-MCP-STATUS-BEGIN -->
 Status: clark-mcp is in active development. **Built and deployed
-locally:** the 7-tool MCP layer; a held-out eval gate (n=173, eight
-automatic teacher-forced metrics); QLoRA iter-4 (`clark-hermes3:ft`)
-deployed locally — beats base on every measured metric (format
-conformance 0→**1.00**, tool_selection 0.72→**0.98**, tool_args
-0.52→**0.76**, numeric_grounding 0.07→**1.00**, honest_failure
-0.71→**1.00**, grounding/non_introspection held at 1.00,
-multi-turn-context held at 0.92); a local web UI with a
-**staffing-sufficiency dashboard** (sweep `+0…+N` extra workers and
-see grade distribution at each roster size — same `/simulate`
-primitive that powered the Jack head-to-head above). **Not done:**
-no public weight release (that's the commercial product). clark-mcp
-is **not** required to train or run Clark — Clark is fully usable
-via the CLI and wizard alone. Full detail lives in the
-[clark-mcp](https://github.com/jarmstrong158/clark-mcp) repo's
-README and `docs/ARCHITECTURE.md`.
+locally:** the 7-tool MCP layer (incl. `clark_staffing_sweep`); a
+held-out eval gate (n=173, eight metrics including a live
+autoregressive *conversational_synthesis* probe); QLoRA **iter-4**
+(`clark-hermes3:ft`) deployed locally — latest eval vs base:
+format_validity 0.000→**1.000**,
+tool_selection 0.719→**0.977**,
+tool_args 0.520→**0.760**,
+numeric_grounding 0.071→**1.000**,
+**conversational_synthesis** —→**—**;
+honest_failure/grounding/non_introspection held at ≈1.000.
+A local web UI with a **staffing-sufficiency dashboard** (sweep
+`+0…+N` extra workers and see grade distribution at each roster
+size — same `/simulate` primitive that powered the Jack head-to-head
+above). **Not done:** no public weight release (that's the commercial
+product). clark-mcp is **not** required to train or run Clark —
+Clark is fully usable via the CLI and wizard alone. Full detail
+lives in the [clark-mcp](https://github.com/jarmstrong158/clark-mcp)
+repo's README and `docs/ARCHITECTURE.md`.
 <!-- AUTO:CLARK-MCP-STATUS-END -->
 
 ---
