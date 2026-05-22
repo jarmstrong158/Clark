@@ -259,6 +259,7 @@ def cmd_finetune(args: argparse.Namespace):
             n_episodes=args.episodes,
             lr=args.lr,
             freeze_encoder=args.freeze_encoder,
+            save_interval=args.save_interval,
         )
     except KeyboardInterrupt:
         print("\nFine-tuning interrupted.")
@@ -674,6 +675,10 @@ def build_parser() -> argparse.ArgumentParser:
                       help="Learning rate (default: 5e-5).")
     p_ft.add_argument("--freeze-encoder", action="store_true",
                       help="Freeze encoder layers (prevents catastrophic forgetting).")
+    p_ft.add_argument("--save-interval", type=int, default=10,
+                      help="Checkpoint every N episodes (default: 10). Lower "
+                           "value = more frequent saves so an early Ctrl-C "
+                           "still leaves a usable checkpoint on disk.")
 
     # plan
     p_plan = sub.add_parser("plan", help="Generate a shift plan using a trained model.")
