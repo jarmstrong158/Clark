@@ -151,22 +151,14 @@
     },
     {
       "id": "filler_tolerance",
-      "prompt": "When your facility falls behind on orders mid-day, how should non-essential work be handled?",
-      "help": "Non-essential work includes side projects, training, returns processing, loading prep, quality checks, and receiving — tasks that don't directly ship today's orders. Every operation wants workers busy AND orders out — this question is about which one wins when they conflict.",
+      "_only_if_any_filler_task_enabled": true,
+      "prompt": "How aggressively should side work pause when orders pile up?",
+      "help": "Only shown if your facility runs filler tasks (side projects, training, returns processing, loading prep, quality checks, receiving). Orders ALWAYS take priority — this question is just about how aggressive the pause is. The 'orders sometimes miss their ship date' option has been removed; that's not a tradeoff Clark should be making.",
       "options": [
-        {
-          "id": "always_busy",
-          "label": "Keep side work moving even when orders are stacking up",
-          "subtitle": "Workers spread across non-order tasks even when the order queue is building. Trade-off: orders sometimes miss their ship date because staff is committed elsewhere. Best for facilities where side work is genuinely revenue-generating (e.g. heavy returns, contracted side projects).",
-          "weight_deltas": {
-            "per_filler_unit": 0.3,
-            "side_project_during_crunch": -2.0
-          }
-        },
         {
           "id": "balanced",
           "label": "Pause side work when pressure builds, resume when caught up",
-          "subtitle": "Agent automatically shifts workers off side work and onto order flow (picking, packing, shipping) when the order queue builds. Side work resumes once the queue is manageable. This is where most operations land.",
+          "subtitle": "Workers shift off side work and onto order flow when the queue builds; side work resumes once the queue is manageable. This is where most operations land.",
           "weight_deltas": {
             "per_filler_unit": 0.1,
             "side_project_during_crunch": -5.0
@@ -174,8 +166,8 @@
         },
         {
           "id": "strict",
-          "label": "Side work only when zero orders are pending",
-          "subtitle": "Any backlog at all means non-order tasks stop completely. Strongest service guarantee, but workers may sit idle on light days when there's nothing in the queue.",
+          "label": "Side work ONLY when zero orders are pending",
+          "subtitle": "Any backlog at all halts non-order tasks completely. Strongest service guarantee; workers may sit idle on light days when there's nothing in the queue.",
           "weight_deltas": {
             "per_filler_unit": 0.0,
             "side_project_during_crunch": -10.0

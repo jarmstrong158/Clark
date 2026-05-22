@@ -965,10 +965,48 @@ function updateStep2NextEnabled() {
 }
 
 // ─── Question rendering ────────────────────────────────────────
+// "Filler tasks" — secondary work that doesn't ship today's orders.
+// Used to gate the filler_tolerance question: it's a useless prompt
+// when none of these are enabled, and we don't want users tuning
+// numbers that govern behavior that can't happen.
+const FILLER_TASKS = new Set([
+  "side_project", "training", "returns_processing",
+  "loading", "quality_check", "receiving",
+]);
+function _anyFillerTaskEnabled() {
+  // Quick mode hardcodes a 5-task primary set with no fillers — always false.
+  if (state.mode === "quick") return false;
+  // Advanced mode: check current tasksEnabled. If user hasn't visited
+  // the Tasks step yet, tasksEnabled is null → seeded from primary only
+  // (matches renderStandardTasks() default), so still no fillers.
+  if (!Array.isArray(state.tasksEnabled)) return false;
+  return state.tasksEnabled.some(t => FILLER_TASKS.has(t));
+}
+function _questionVisible(q) {
+  // Honor the _only_if_any_filler_task_enabled flag in presets.json
+  // so questions about non-existent-task behavior get skipped instead
+  // of asked-and-ignored.
+  if (q._only_if_any_filler_task_enabled && !_anyFillerTaskEnabled()) {
+    return false;
+  }
+  return true;
+}
+function _visibleQuestions() {
+  return presets.questions.filter(_questionVisible);
+}
+
 function renderQuestions() {
   const wrap = document.getElementById("questions");
   wrap.innerHTML = "";
-  presets.questions.forEach(q => {
+  const qs = _visibleQuestions();
+  if (qs.length < presets.questions.length) {
+    const note = document.createElement("p");
+    note.style.cssText = "color:var(--muted);font-size:12px;margin:-12px 0 16px 0;font-style:italic;";
+    const skipped = presets.questions.length - qs.length;
+    note.textContent = `(${skipped} question${skipped === 1 ? "" : "s"} skipped — only relevant when filler tasks are enabled in the Tasks step.)`;
+    wrap.appendChild(note);
+  }
+  qs.forEach(q => {
     const block = document.createElement("div");
     block.style.marginBottom = "32px";
     block.innerHTML = `
@@ -997,8 +1035,9 @@ function selectAnswer(qid, oid, persist = true) {
     .forEach(c => {
       c.classList.toggle("selected", c.dataset.optionId === oid);
     });
-  // Enable Next once every question has an answer
-  const allAnswered = presets.questions.every(q => state.answers[q.id]);
+  // Enable Next once every VISIBLE question has an answer
+  // (skipped-via-_only_if questions don't block continue).
+  const allAnswered = _visibleQuestions().every(q => state.answers[q.id]);
   // Pain-points step's "Continue →" button is `step6Next` in the
   // renumbered flow.
   const btn = document.getElementById("step6Next");
@@ -1339,8 +1378,11 @@ function onWorkSaturdayChange() {
 function buildConfig() {
   const arch = presets.archetypes.find(a => a.id === state.selectedArchetype);
   const weights = { ...(arch ? arch.defaults.weights : {}) };
-  // Apply deltas from each answered question
-  for (const q of presets.questions) {
+  // Apply deltas from each answered + visible question. Skipped
+  // questions (e.g. filler_tolerance when no filler tasks enabled)
+  // don't contribute deltas — their numbers governed behavior that
+  // can't happen.
+  for (const q of _visibleQuestions()) {
     const optId = state.answers[q.id];
     if (!optId) continue;
     const opt = q.options.find(o => o.id === optId);
