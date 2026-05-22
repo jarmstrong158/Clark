@@ -199,8 +199,9 @@
     border-radius: 4px; padding: 12px; margin-bottom: 8px;
     display: grid; gap: 8px;
   }
+  /* Top row: identity + numbers. Bottom row: eligible-task chips. */
   .row-card .grid {
-    display: grid; grid-template-columns: 1.4fr 1fr 0.7fr 0.7fr 0.7fr 1.5fr auto;
+    display: grid; grid-template-columns: 1.4fr 1fr 0.7fr 0.7fr 0.7fr auto;
     gap: 8px; align-items: center;
   }
   .row-card .grid input, .row-card .grid select {
@@ -219,6 +220,32 @@
     font-size: 12px;
   }
   .row-card .remove-btn:hover { border-color: var(--error); }
+  .row-card .elig-row {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    padding-top: 2px;
+  }
+  .row-card .elig-row .elig-label {
+    color: var(--muted); font-size: 11px; text-transform: uppercase;
+    letter-spacing: .05em; margin-right: 4px;
+  }
+  .chip {
+    display: inline-flex; align-items: center; gap: 4px;
+    background: var(--bg); border: 1px solid var(--border);
+    border-radius: 99px; padding: 3px 10px;
+    font-size: 12px; cursor: pointer; user-select: none;
+    transition: background 0.12s, border-color 0.12s;
+  }
+  .chip:hover { border-color: var(--accent-hover); }
+  .chip.selected {
+    background: var(--selected); border-color: var(--selected-border);
+  }
+  .chip.all-chip { font-weight: 600; }
+  .chip.all-chip.selected {
+    background: var(--accent); color: var(--bg); border-color: var(--accent);
+  }
+  .chip.disabled {
+    opacity: 0.45; cursor: not-allowed;
+  }
   /* Task checkbox grid */
   .task-grid {
     display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
@@ -331,10 +358,31 @@
     </div>
   </section>
 
-  <!-- STEP 2: workers (ADVANCED ONLY) -->
+  <!-- STEP 2: tasks (ADVANCED ONLY) — comes BEFORE workers so worker
+       eligibility can pick from a known task list. -->
   <section class="step" data-step="2" data-mode="advanced">
+    <h2>What work happens here?</h2>
+    <p class="step-help">Check the standard tasks your facility runs. <code>pick</code>, <code>pack</code>, and <code>idle</code> are always on (Clark requires them). Add custom tasks below for anything specific to your operation — these become assignable to your workers in the next step.</p>
+
+    <h3 style="font-size:14px;color:var(--muted);margin:8px 0 4px 0;">Standard tasks</h3>
+    <div id="standardTasks" class="task-grid"></div>
+
+    <h3 style="font-size:14px;color:var(--muted);margin:24px 0 4px 0;">Custom tasks (specialized work at your facility)</h3>
+    <small class="hint">For work that isn't in the standard list — e.g. "labeling", "kitting", "QC audit". <code>reward_weight</code> scales how much Clark values doing this task (1.0 = same as a unit of shipped orders). Custom tasks defined here will appear as assignable tasks in the workers step.</small>
+    <div id="customTasksList"></div>
+    <button class="secondary" onclick="addCustomTaskRow()" style="margin-top:8px;">+ Add custom task</button>
+
+    <div class="nav">
+      <button class="secondary" onclick="goToPrevStep()">← Back</button>
+      <button class="primary" id="step2Next" onclick="goToNextStep()">Continue →</button>
+    </div>
+  </section>
+
+  <!-- STEP 3: workers (ADVANCED ONLY) — comes AFTER tasks so eligibility
+       can be a multi-select against the actual task list. -->
+  <section class="step" data-step="3" data-mode="advanced">
     <h2>Your team</h2>
-    <p class="step-help">Who works at this facility? Add a row per person. Click "Seed from archetype" to start from a template roster and edit, or "Add worker" to build from scratch. Leave blank to use the archetype's template workers as-is.</p>
+    <p class="step-help">Who works at this facility? Add a row per person. Click "Seed from archetype" to start from a template roster and edit, or "Add worker" to build from scratch. Eligible tasks are picked from the task list you set up in the previous step. Leave the roster empty to use the archetype's template workers as-is.</p>
 
     <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;">
       <button class="secondary" onclick="seedWorkersFromArchetype()">Seed from archetype</button>
@@ -344,25 +392,6 @@
     </div>
 
     <div id="workersList"></div>
-
-    <div class="nav">
-      <button class="secondary" onclick="goToPrevStep()">← Back</button>
-      <button class="primary" id="step2Next" onclick="goToNextStep()">Continue →</button>
-    </div>
-  </section>
-
-  <!-- STEP 3: tasks (ADVANCED ONLY) -->
-  <section class="step" data-step="3" data-mode="advanced">
-    <h2>What work happens here?</h2>
-    <p class="step-help">Check the standard tasks your facility runs. <code>pick</code>, <code>pack</code>, and <code>idle</code> are always on (Clark requires them). Add custom tasks below for anything specific.</p>
-
-    <h3 style="font-size:14px;color:var(--muted);margin:8px 0 4px 0;">Standard tasks</h3>
-    <div id="standardTasks" class="task-grid"></div>
-
-    <h3 style="font-size:14px;color:var(--muted);margin:24px 0 4px 0;">Custom tasks</h3>
-    <small class="hint">For work that isn't in the standard list. <code>reward_weight</code> scales how much Clark values doing this task (1.0 = same as a unit of shipped orders).</small>
-    <div id="customTasksList"></div>
-    <button class="secondary" onclick="addCustomTaskRow()" style="margin-top:8px;">+ Add custom task</button>
 
     <div class="nav">
       <button class="secondary" onclick="goToPrevStep()">← Back</button>
@@ -712,8 +741,10 @@ function goToStep(n) {
   // Review step is the LAST visible step in either mode (step 7).
   if (n === 7) runValidation();
   // Initialize new sections lazily — first time the user lands.
-  if (n === 2) initWorkersStep();
-  if (n === 3) initTasksStep();
+  // (Tasks comes BEFORE workers so the worker step's eligibility
+  // picker has a known task list to choose from.)
+  if (n === 2) initTasksStep();
+  if (n === 3) initWorkersStep();
   if (n === 4) initEquipmentStep();
   persistDraft();
 }
@@ -955,6 +986,27 @@ function renderWorkers() {
     `${state.workers.length} worker${state.workers.length === 1 ? "" : "s"}` +
     (state.workers.length === 0 ? " — archetype defaults will be used" : "");
 }
+// Available eligible-task options for a worker = (current selection of
+// standard tasks from the Tasks step) + (custom tasks defined there).
+// If the user hasn't visited the Tasks step yet, fall back to a
+// sensible default (all standard tasks + any customs already created).
+function availableTaskIds() {
+  let standard = state.tasksEnabled;
+  if (!Array.isArray(standard) || standard.length === 0) {
+    standard = [...STANDARD_TASKS];
+  }
+  const custom = state.customTasks
+    .filter(ct => ct && ct.task_id)
+    .map(ct => ct.task_id);
+  // Dedupe + preserve order: core tasks first (pick/pack/idle), then
+  // other standards in their canonical order, then custom.
+  const seen = new Set();
+  const out = [];
+  for (const t of STANDARD_TASKS) if (standard.includes(t) && !seen.has(t)) { seen.add(t); out.push(t); }
+  for (const t of custom) if (!seen.has(t)) { seen.add(t); out.push(t); }
+  return out;
+}
+
 function buildWorkerCard(w, i) {
   const card = document.createElement("div");
   card.className = "row-card";
@@ -982,13 +1034,71 @@ function buildWorkerCard(w, i) {
         <div class="col-label">starts</div>
         <input type="number" min="5" max="11" step="0.5" value="${w.shift_start}" oninput="updateWorker(${i},'shift_start',parseFloat(this.value))">
       </div>
-      <div>
-        <div class="col-label">eligible</div>
-        <input type="text" placeholder="all OR pick,pack,..." value="${escapeHtml(typeof w.task_eligibility === 'string' ? w.task_eligibility : (w.task_eligibility || []).join(','))}" oninput="updateWorker(${i},'task_eligibility',this.value)">
-      </div>
       <button class="remove-btn" onclick="removeWorker(${i})">×</button>
+    </div>
+    <div class="elig-row" id="elig-row-${i}">
+      <!-- populated by renderEligRow() -->
     </div>`;
+  // Eligibility chips live in their own row so the layout doesn't get
+  // squeezed when there are many tasks.
+  setTimeout(() => renderEligRow(i), 0);
   return card;
+}
+
+function renderEligRow(i) {
+  const row = document.getElementById(`elig-row-${i}`);
+  if (!row) return;
+  const w = state.workers[i];
+  if (!w) return;
+  const tasks = availableTaskIds();
+  const allSelected = w.task_eligibility === "all";
+  const selectedSet = new Set(
+    Array.isArray(w.task_eligibility) ? w.task_eligibility : []
+  );
+  row.innerHTML = "";
+  const lbl = document.createElement("span");
+  lbl.className = "elig-label";
+  lbl.textContent = "eligible tasks:";
+  row.appendChild(lbl);
+
+  // "All tasks" chip — toggling it flips between "all" and an explicit
+  // list (defaults to all selected when switching off-then-on).
+  const allChip = document.createElement("span");
+  allChip.className = "chip all-chip" + (allSelected ? " selected" : "");
+  allChip.textContent = "all tasks";
+  allChip.onclick = () => {
+    if (allSelected) {
+      // Switch from "all" → explicit list with everything selected;
+      // user can then deselect individuals.
+      state.workers[i].task_eligibility = [...tasks];
+    } else {
+      state.workers[i].task_eligibility = "all";
+    }
+    renderEligRow(i);
+    persistDraft();
+  };
+  row.appendChild(allChip);
+
+  // Individual task chips
+  tasks.forEach(t => {
+    const chip = document.createElement("span");
+    const isOn = allSelected || selectedSet.has(t);
+    chip.className = "chip" + (isOn ? " selected" : "") +
+                     (allSelected ? " disabled" : "");
+    chip.textContent = t;
+    if (!allSelected) {
+      chip.onclick = () => {
+        const cur = Array.isArray(state.workers[i].task_eligibility)
+          ? [...state.workers[i].task_eligibility] : [];
+        const setIds = new Set(cur);
+        if (setIds.has(t)) setIds.delete(t); else setIds.add(t);
+        state.workers[i].task_eligibility = [...setIds];
+        renderEligRow(i);
+        persistDraft();
+      };
+    }
+    row.appendChild(chip);
+  });
 }
 function addWorkerRow() {
   state.workers.push(DEFAULT_WORKER());
@@ -1066,6 +1176,17 @@ function toggleStandardTask(t, on) {
   const set = new Set(state.tasksEnabled || []);
   if (on) set.add(t); else set.delete(t);
   state.tasksEnabled = [...set];
+  // If a task was removed from the global list, drop it from any
+  // worker's explicit eligibility list too (so the saved YAML stays
+  // consistent — workers can't be eligible for tasks the facility
+  // doesn't run).
+  if (!on) {
+    state.workers.forEach(w => {
+      if (Array.isArray(w.task_eligibility)) {
+        w.task_eligibility = w.task_eligibility.filter(x => x !== t);
+      }
+    });
+  }
   persistDraft();
 }
 function renderCustomTasks() {
