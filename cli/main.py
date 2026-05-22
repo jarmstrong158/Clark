@@ -266,6 +266,11 @@ def cmd_finetune(args: argparse.Namespace):
         print("\nFine-tuning interrupted.")
         sys.exit(1)
     except Exception as e:
+        # Print the full traceback BEFORE _die — `str(e)` alone
+        # loses the call-site context, which the wizard's subprocess
+        # log needs to diagnose CUDA / module-load failures.
+        import traceback as _tb
+        _tb.print_exc()
         _die(f"Fine-tuning failed: {e}")
 
 
@@ -1068,8 +1073,14 @@ def cmd_wizard(args: argparse.Namespace):
         # defaults the log dir to a sibling of --output. The job_log_dir we
         # create above just holds the subprocess stdout for the wizard's
         # progress view; the real episode logs live next to the checkpoint.
+        # `-u` (unbuffered) is critical: without it, Python's stdout is
+        # block-buffered when redirected to a file, so the wizard's log
+        # tail only sees output after the subprocess exits. With
+        # crashes, the user gets either a stale empty file or a
+        # post-mortem dump — never the in-progress lines that would
+        # let them tell if training is actually progressing.
         cmd = [
-            sys.executable, "-m", "cli.main", "finetune",
+            sys.executable, "-u", "-m", "cli.main", "finetune",
             "--config", str(yaml_path),
             "--base", str(base_model),
             "--output", str(ckpt_path),
