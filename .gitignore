@@ -21,6 +21,10 @@ venv/
 clark/data/checkpoints/
 clark/data/logs/
 clark/data/facilities/
+# User-authored facility YAMLs (wizard /generate output, wizard
+# sessions). Template configs in clark/data/configs/ stay tracked;
+# only per-user state under user/ is ignored.
+clark/data/configs/user/
 
 # IDE / editor noise
 .idea/
