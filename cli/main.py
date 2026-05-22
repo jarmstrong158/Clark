@@ -1272,7 +1272,14 @@ def cmd_wizard(args: argparse.Namespace):
             self.end_headers()
             self.wfile.write(body)
 
-    server = http.server.HTTPServer(("localhost", port), WizardHandler)
+    # ThreadingHTTPServer (not HTTPServer): single-threaded would queue
+    # every browser fetch behind any slow handler — including the
+    # synchronous subprocess.Popen in /train/start. When training
+    # kicked off, concurrent /validate or /generate calls from the
+    # same tab failed with "TypeError: Failed to fetch" because they
+    # were waiting on the busy thread. Threading lets each request
+    # finish independently.
+    server = http.server.ThreadingHTTPServer(("localhost", port), WizardHandler)
     url = f"http://localhost:{port}"
     print(f"  Wizard:       {url}")
     print(f"  Sessions dir: {sessions_dir}")
