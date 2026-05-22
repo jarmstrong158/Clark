@@ -1,9 +1,7 @@
 """
 Clark CLI — Foundation Model for Warehouse Optimization
 Entry point: `clark` (set via pyproject.toml: clark = "cli.main:app")
-
-Note: typer is not installed. Using argparse as fallback.
-Install typer with: pip install typer
+Uses argparse (stdlib) — no extra deps.
 """
 from __future__ import annotations
 

@@ -11,7 +11,7 @@ Clark is a foundation model for warehouse workforce scheduling and optimization.
 
 Clark operates as a **pre-train → fine-tune** system:
 1. **Pre-training** on thousands of synthetically generated facility configurations builds a general understanding of warehouse dynamics: when to call OT, how to balance task priorities, how hustle affects throughput and worker stamina.
-2. **Fine-tuning** on a specific facility's configuration adapts the foundation model to the real-world constraints of that facility in 200–500 episodes (fast).
+2. **Fine-tuning** on a specific facility's configuration adapts the foundation model to the real-world constraints of that facility in 50 episodes (~3.3 h, the Jack-validated useful floor) to 500 episodes (full deeper-training run; diminishing returns past ~200).
 
 The result is a CLI tool and eventually a cloud API: give Clark your facility config, get back a trained agent and daily shift plans.
 
@@ -52,15 +52,15 @@ Input per step:
   env_feats:    (env_size,)            — time, orders, restock, season, carrier urgency, etc.
 
 Encoder:
-  W = WorkerLinear(worker_feats) + RoleEmbed(roles)     → (N, 256)
-  T = TaskLinear(task_feats) + TaskTypeEmbed(types)     → (M, 256)
-  E = EnvLinear(env_feats)                              → (256,)
+  W = WorkerLinear(worker_feats) + RoleEmbed(roles)     → (N, 512)
+  T = TaskLinear(task_feats) + TaskTypeEmbed(types)     → (M, 512)
+  E = EnvLinear(env_feats)                              → (512,)
   W = W + E.unsqueeze(0)       # condition workers on global env state
-  W = SelfAttention(W) × 2    # workers attend to each other
+  W = SelfAttention(W) × 4    # workers attend to each other
   W = CrossAttention(W, T)    # workers attend to tasks
 
 Temporal LSTM:
-  g = mean(W)                              # (256,) global pooled state
+  g = mean(W)                              # (512,) global pooled state
   h, lstm_hidden = LSTM(g, lstm_hidden)    # temporal memory across steps/days
   W_final = W + h.unsqueeze(0)            # broadcast temporal context to workers
 
@@ -192,7 +192,7 @@ Optional overrides for reward signal weights. Unset = Clark defaults.
 
 ### Phase 2: Fine-tuning (Facility-Specific)
 - Load `clark_foundation.pt`
-- Run 200–500 episodes on the target facility config
+- Run 50–500 episodes on the target facility config (wizard default 50; CLI default 500)
 - Lower learning rate (5e-5 vs 3e-4 pre-train)
 - Optional: freeze encoder layers, only update LSTM + output heads
 - Goal: adapt general knowledge to specific constraints

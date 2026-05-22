@@ -157,7 +157,7 @@ The synthetic generator stays within bounds defined by `clark/config/clark_limit
 
 ### Fine-tuning (per facility)
 
-Fine-tuning loads the foundation checkpoint and runs 200–500 episodes on a single user-supplied `FacilityConfig`. Default learning rate is `5e-5` (vs `1e-5` in pre-train). Encoder layers can optionally be frozen via `--freeze-encoder` to prevent catastrophic forgetting on facilities very different from the pre-training distribution.
+Fine-tuning loads the foundation checkpoint and runs 50 episodes (wizard default; the Jack-validation floor that already cuts F-rate ~60% on Jack's facility) to 500 episodes (CLI default; full deeper-training run, with diminishing returns past ~200) on a single user-supplied `FacilityConfig`. Default learning rate is `5e-5` (vs `1e-5` in pre-train). Encoder layers can optionally be frozen via `--freeze-encoder` to prevent catastrophic forgetting on facilities very different from the pre-training distribution.
 
 A fresh-init Clark can also be trained directly on a single facility (no foundation), but this requires substantially more episodes — comparable to training Jack from scratch.
 

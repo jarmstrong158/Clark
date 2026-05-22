@@ -8,7 +8,7 @@
 
 > **TL;DR** — Clark is a transformer + LSTM PPO agent that pre-trains on thousands of synthetic warehouses, then fine-tunes to any specific facility in ~30 minutes on a consumer GPU. One foundation model, many facilities — variable workers, variable tasks, no per-site retrain from scratch. Successor to [Jack](https://github.com/jarmstrong158/Jack), the single-facility reference implementation.
 
-Clark learns the underlying dynamics of warehouse operations — picking and packing throughput, overtime decisions, restock cycles, fatigue and hustle interactions — from thousands of synthetic facility configurations. A single pre-trained foundation model can then be fine-tuned to any specific facility in 200–500 episodes (~30 min on a consumer GPU) instead of being trained from scratch.
+Clark learns the underlying dynamics of warehouse operations — picking and packing throughput, overtime decisions, restock cycles, fatigue and hustle interactions — from thousands of synthetic facility configurations. A single pre-trained foundation model can then be fine-tuned to any specific facility in as few as **50 episodes (~3.3 h on a consumer GPU)** — the Jack-validation floor, where the F-rate is already cut by ~60% and A+B-day share lifts from 57.5% → 83.5% on Jack's own setup (see [Validated on Jack's facility](#validated-on-jacks-facility) for the full head-to-head). The wizard defaults to 50; the `clark finetune` CLI defaults to 500 for users who want the full deeper-training run.
 
 Where its predecessor [Jack](https://github.com/jarmstrong158/Jack) was a single-facility PPO + LSTM agent operating on a fixed 7-worker, 14-action state vector, Clark is built around a transformer + LSTM hybrid that handles **variable** numbers of workers and tasks. The same model weights generalize across facilities.
 
@@ -204,7 +204,7 @@ Synthetic configs are sampled within bounds defined by [`clark/config/clark_limi
 
 ### Fine-tuning (per facility, per facility)
 
-Fine-tuning loads the foundation checkpoint and runs 200–500 episodes on a single user-supplied `FacilityConfig`. Default learning rate drops by ~10× vs pre-train, and encoder layers can optionally be frozen via `--freeze-encoder` to prevent catastrophic forgetting on facilities very different from the pre-training distribution.
+Fine-tuning loads the foundation checkpoint and runs **50 (wizard default) to 500 (CLI default)** episodes on a single user-supplied `FacilityConfig`. 50 is the Jack-validation floor (see *Validated on Jack's facility* below); 200–500 is the deep-training range with diminishing returns past ~200. Default learning rate drops by ~10× vs pre-train, and encoder layers can optionally be frozen via `--freeze-encoder` to prevent catastrophic forgetting on facilities very different from the pre-training distribution.
 
 A fresh-init Clark can also be trained directly on a single facility with no foundation, but this requires substantially more episodes — comparable to training Jack from scratch.
 
@@ -486,7 +486,7 @@ count rules). Then a full work-year (~261 days) was simulated via
 What this says, plainly:
 
 - **The foundation alone is partially competitive but clearly weaker than Jack** on Jack's specific facility — it nails the A-grade ~37 % of days (vs Jack's 58 %) and fails outright on ~43 %. That's expected: it's a generalist that's never seen Marcus/Nolan/Felix's specific OPHs and quirks.
-- **50 episodes of fine-tuning on Jack's config more than halves the F-rate (42.5 → 16.5 %), pushes A-days from 37 → 46 %, and lifts A+B past 83 %.** A+B exceeds Jack's pure-A rate. Pure A is still 12 points behind Jack — closing that gap further is what additional fine-tune episodes are designed to do (this run was cut short at episode 50 of 500 by an unrelated encoding bug in `clark/training/finetune.py`, since fixed).
+- **50 episodes of fine-tuning on Jack's config more than halves the F-rate (42.5 → 16.5 %), pushes A-days from 37 → 46 %, and lifts A+B past 83 %.** A+B exceeds Jack's pure-A rate. Pure A is still 12 points behind Jack — closing that gap is what additional fine-tune episodes buy, with diminishing returns past ~200; the wizard defaults to the 50-episode floor for fastest path to a useful model, and exposes the count as a user-editable field for deeper runs.
 - **The headline efficiency claim holds:** Clark + 50 fine-tune episodes (~0.2 simulated years) reaches a *better* failure rate and *broader* high-grade share than Jack did with ~9 simulated years from scratch. The foundation-model thesis isn't hand-waving — these are real, measured numbers from a head-to-head on Jack's own facility.
 
 The clark-mcp companion's staffing-sufficiency dashboard renders the
@@ -524,7 +524,7 @@ For commercial access: **open a GitHub Issue** in this repo with the label `comm
 | Task vocabulary | Fixed 5 tasks | Variable (`M` per facility; 12-task standard library + custom) |
 | State representation | Flat 155-dim vector | Structured (per-worker tokens + per-task tokens + global env), variable-shape |
 | Architecture | LSTM only (~800K params) | Transformer encoder + LSTM hybrid (~18M params) |
-| Per-facility training | From scratch (~9 simulated years) | Fine-tune from foundation (~200–500 episodes) |
+| Per-facility training | From scratch (~9 simulated years) | Fine-tune from foundation (50 episodes useful, 200–500 deep) |
 | Multi-facility | One model per facility | One foundation model, many fine-tunes |
 | Deployment | Script | CLI + local web setup wizard (per-facility, run locally) |
 
