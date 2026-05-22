@@ -80,15 +80,29 @@ def build_app(agent: Any, facilities_dir: str | Path,
     import threading as _threading
     _agent_lock = _threading.Lock()
 
+    # Scan order: top-level templates first, then the user/ subdir
+    # where the wizard writes user-authored facility YAMLs. iterdir
+    # alone misses user/ entirely (subdirs are filtered out by the
+    # `.yaml` suffix check), so user-authored facilities were
+    # silently invisible to /facilities, /facility/{id}, /plan, etc.
+    # — see test_v3.yaml + wizard-Quick-mode UX.
+    def _scan_dirs():
+        out = [fdir]
+        user_sub = fdir / "user"
+        if user_sub.is_dir():
+            out.append(user_sub)
+        return out
+
     def _config_path(fid: str) -> Path:
-        # Reject path-traversal; only flat <id>.yaml/.yml in fdir.
+        # Reject path-traversal; only flat <id>.yaml/.yml in scanned dirs.
         if "/" in fid or "\\" in fid or ".." in fid:
             raise HTTPException(400, "invalid facility_id")
-        for ext in (".yaml", ".yml"):
-            p = fdir / f"{fid}{ext}"
-            if p.exists():
-                return p
-        raise HTTPException(404, f"no facility config {fid!r} in {fdir}")
+        for scan in _scan_dirs():
+            for ext in (".yaml", ".yml"):
+                p = scan / f"{fid}{ext}"
+                if p.exists():
+                    return p
+        raise HTTPException(404, f"no facility config {fid!r} in {fdir} or user/")
 
     def _try_plannable(path: Path) -> Optional[FacilityConfig]:
         """Load a YAML and return it ONLY if it's a usable, plannable
@@ -163,10 +177,12 @@ def build_app(agent: Any, facilities_dir: str | Path,
     def facilities():
         if not fdir.is_dir():
             return {"facilities": []}
-        ids = sorted({p.stem for p in fdir.iterdir()
-                      if p.suffix in (".yaml", ".yml")
-                      and _try_plannable(p) is not None})
-        return {"facilities": ids}
+        ids = set()
+        for scan in _scan_dirs():
+            for p in scan.iterdir():
+                if p.suffix in (".yaml", ".yml") and _try_plannable(p) is not None:
+                    ids.add(p.stem)
+        return {"facilities": sorted(ids)}
 
     @app.get("/capabilities")
     def capabilities():
