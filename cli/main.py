@@ -1040,7 +1040,7 @@ def cmd_wizard(args: argparse.Namespace):
             "yaml_text": yaml_text,
         }
 
-    def _start_training(yaml_path: str) -> dict:
+    def _start_training(yaml_path: str, episodes: int = 50) -> dict:
         """Spawn cmd_finetune as a detached subprocess. Returns a job_id
         that future /train/{id}/status calls can use.
 
@@ -1048,6 +1048,13 @@ def cmd_wizard(args: argparse.Namespace):
         + validation as a manual `clark finetune` run. The subprocess's
         stdout/stderr stream to a per-job log file so a wizard progress
         view can tail it later.
+
+        Default episodes lowered 500 → 50 to match the Jack-validation
+        floor (50 eps already cuts F-rate 60% and lifts A+B share
+        57.5%→83.5% per the README's Validated-on-Jack table). At
+        ~4 min/ep on a consumer GPU, that's ~3.5h end-to-end vs the
+        old default's ~36h. Users wanting deeper training pass a
+        higher value from the wizard's review step.
         """
         import subprocess as _sp
         import uuid as _uuid
@@ -1084,6 +1091,7 @@ def cmd_wizard(args: argparse.Namespace):
             "--config", str(yaml_path),
             "--base", str(base_model),
             "--output", str(ckpt_path),
+            "--episodes", str(int(episodes)),
         ]
         proc = _sp.Popen(cmd, cwd=str(repo_root), stdout=stdout_log,
                          stderr=_sp.STDOUT)
@@ -1230,18 +1238,23 @@ def cmd_wizard(args: argparse.Namespace):
                                _json.dumps({"error": str(e)}).encode("utf-8"))
 
             elif path == "/train/start":
-                # Body: {"yaml_path": "..."}  — kicks off finetune subprocess.
-                # Foundation checkpoint must already exist; we don't auto-pretrain.
+                # Body: {"yaml_path": "...", "episodes": 50}
+                # `episodes` defaults to 50 (Jack-validated floor) and is
+                # clamped to [10, 5000] server-side. The wizard's review
+                # step exposes it; users can crank up for deeper training.
                 yaml_path = body.get("yaml_path")
                 if not yaml_path:
                     self._send(400, "application/json",
                                b'{"error":"yaml_path required"}')
                     return
+                try:
+                    episodes = int(body.get("episodes", 50))
+                except (TypeError, ValueError):
+                    episodes = 50
+                episodes = max(10, min(5000, episodes))
                 # Path confinement: the wizard writes configs under
                 # user_configs_dir; refuse to spawn a training run
-                # against an arbitrary YAML elsewhere on disk (would
-                # otherwise let a same-origin attacker target any
-                # readable file as if it were a facility config).
+                # against an arbitrary YAML elsewhere on disk.
                 try:
                     yp = Path(yaml_path).resolve()
                     allowed = user_configs_dir.resolve()
@@ -1252,7 +1265,7 @@ def cmd_wizard(args: argparse.Namespace):
                                b'user_configs_dir"}')
                     return
                 try:
-                    result = _start_training(str(yp))
+                    result = _start_training(str(yp), episodes=episodes)
                     self._send(200, "application/json",
                                _json.dumps(result).encode("utf-8"))
                 except Exception as e:

@@ -571,6 +571,22 @@
     <h3 style="font-size: 14px; color: var(--muted); margin: 24px 0 4px 0;">Generated YAML preview</h3>
     <div id="yamlPreview" class="summary-block" style="max-height: 240px;">Click <b>Generate config</b> to materialize the YAML.</div>
 
+    <h3 style="font-size: 14px; color: var(--muted); margin: 24px 0 4px 0;">Training episodes</h3>
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:6px;">
+      <input type="number" id="episodesInput" min="10" max="5000" value="50"
+             oninput="refreshEpisodesEta()"
+             style="width:100px;padding:8px 12px;background:var(--panel-2);
+                    border:1px solid var(--border);border-radius:4px;
+                    color:var(--text);font-size:14px;">
+      <span id="episodesEta" style="color:var(--muted);font-size:13px;"></span>
+    </div>
+    <small style="color:var(--muted);font-size:12px;line-height:1.5;display:block;">
+      <b>50</b> ≈ 3.5 h — the Jack-validation floor: cuts F-rate ~60% and pushes A+B-day share from 57.5% → 83.5% on Jack's own facility, beating Jack-from-scratch with 1/50 the training time.<br>
+      <b>100</b> ≈ 7 h — safety margin, modest gains over 50.<br>
+      <b>200</b> ≈ 14 h — README's recommended low end, last point with material per-50-eps gains.<br>
+      <b>500</b> ≈ 36 h — old default; past ~200 you're chasing fractions of a percent.
+    </small>
+
     <div class="nav">
       <button class="secondary" onclick="goToPrevStep()">← Back</button>
       <div>
@@ -739,7 +755,10 @@ function goToStep(n) {
   state.currentStep = n;
   refreshDots();
   // Review step is the LAST visible step in either mode (step 7).
-  if (n === 7) runValidation();
+  if (n === 7) {
+    runValidation();
+    refreshEpisodesEta();   // populate initial "≈ 3.3 hours" text
+  }
   // Initialize new sections lazily — first time the user lands.
   // (Tasks comes BEFORE workers so the worker step's eligibility
   // picker has a known task list to choose from.)
@@ -1413,15 +1432,42 @@ async function generateYaml() {
   }
 }
 
+// Live ETA next to the episodes input. Per-episode wall time is
+// ~4 min on a consumer GPU (consistent with the test_v3 run that
+// produced the 50/100/200/500 numbers in the help text).
+function refreshEpisodesEta() {
+  const inp = document.getElementById("episodesInput");
+  const out = document.getElementById("episodesEta");
+  if (!inp || !out) return;
+  const n = parseInt(inp.value, 10);
+  if (!Number.isFinite(n) || n < 1) {
+    out.textContent = "(enter a positive number)";
+    return;
+  }
+  const mins = n * 4;  // ~4 min/ep avg
+  const hours = mins / 60;
+  out.textContent = `≈ ${hours < 2 ? mins.toFixed(0) + " min" :
+                          hours < 24 ? hours.toFixed(1) + " hours" :
+                          (hours / 24).toFixed(1) + " days"} on a consumer GPU`;
+}
+
 async function startTraining() {
   if (!_generatedYamlPath) {
     alert("Generate the config first.");
     return;
   }
+  const epEl = document.getElementById("episodesInput");
+  let episodes = parseInt(epEl?.value || "50", 10);
+  if (!Number.isFinite(episodes) || episodes < 10) episodes = 50;
+  if (episodes > 5000) episodes = 5000;
+  const etaMin = episodes * 4;
+  const etaStr = etaMin < 120 ? `${etaMin} min` :
+                  etaMin < 1440 ? `${(etaMin/60).toFixed(1)} h` :
+                  `${(etaMin/1440).toFixed(1)} days`;
   if (!confirm(
-    "Fine-tuning typically takes hours on consumer GPU and is CPU-heavy " +
-    "without one. The trainer runs as a background process — you can " +
-    "close this wizard once it starts. Continue?"
+    `Training for ${episodes} episodes (~${etaStr} on a consumer GPU). ` +
+    `The trainer runs as a background process — you can close this ` +
+    `wizard once it starts. Continue?`
   )) return;
 
   const statusDiv = document.getElementById("trainStatus");
@@ -1432,7 +1478,7 @@ async function startTraining() {
     const r = await fetch("/train/start", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ yaml_path: _generatedYamlPath }),
+      body: JSON.stringify({ yaml_path: _generatedYamlPath, episodes }),
     });
     const res = await r.json();
     if (res.error) {
