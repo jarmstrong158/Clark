@@ -917,27 +917,49 @@ def cmd_wizard(args: argparse.Namespace):
                 base["workers"] = new_workers
 
         # Tasks: replace enabled + custom when either is provided.
-        tasks_in = cfg.get("tasks")
-        if isinstance(tasks_in, dict):
-            t_out = dict(base.get("tasks") or {})
-            if isinstance(tasks_in.get("enabled"), list) and tasks_in["enabled"]:
-                t_out["enabled"] = list(tasks_in["enabled"])
-            if isinstance(tasks_in.get("custom"), list):
-                custom_clean = []
-                for ct in tasks_in["custom"]:
-                    if not isinstance(ct, dict) or not ct.get("task_id"):
-                        continue
-                    custom_clean.append({
-                        "id": str(ct["task_id"]).strip(),
-                        "display_name": str(ct.get("display_name", ct["task_id"])).strip(),
-                        "output_type": str(ct.get("output_type", "hours")),
-                        "hustle_eligible": bool(ct.get("hustle_eligible", False)),
-                        "eligible_roles": list(ct.get("eligible_roles") or ["warehouse"]),
-                        "reward_weight": float(ct.get("reward_weight", 1.0)),
-                    })
-                if custom_clean:
-                    t_out["custom"] = custom_clean
-            base["tasks"] = t_out
+        # QUICK MODE: force a minimal-viable task set regardless of what
+        # the template carries. Live observation on test_v3: an 8-worker
+        # facility with all 12 standard tasks enabled spent 47/64
+        # worker-hours/day on secondary tasks (loading/receiving/
+        # returns/QC/training/side_project) and only 1 hour on
+        # management — capping grade at C even when 100% of orders
+        # shipped, because management duty was starved. Quick-start
+        # users overwhelmingly want core ops only; add the rest in
+        # Advanced if you actually run them every day.
+        QUICK_MODE_TASKS = ["pick", "pack", "restock", "management", "idle"]
+        if cfg.get("mode") == "quick":
+            base["tasks"] = {"enabled": list(QUICK_MODE_TASKS), "custom": []}
+            # Strip worker task_eligibility entries that reference tasks
+            # we just disabled (e.g. the example_small template workers
+            # list "side_project" in their eligibility — without this
+            # cleanup the schema validator emits a soft warning).
+            allowed = set(QUICK_MODE_TASKS)
+            for w in base.get("workers", []):
+                te = w.get("task_eligibility")
+                if isinstance(te, list):
+                    w["task_eligibility"] = [t for t in te if t in allowed] or "all"
+        else:
+            tasks_in = cfg.get("tasks")
+            if isinstance(tasks_in, dict):
+                t_out = dict(base.get("tasks") or {})
+                if isinstance(tasks_in.get("enabled"), list) and tasks_in["enabled"]:
+                    t_out["enabled"] = list(tasks_in["enabled"])
+                if isinstance(tasks_in.get("custom"), list):
+                    custom_clean = []
+                    for ct in tasks_in["custom"]:
+                        if not isinstance(ct, dict) or not ct.get("task_id"):
+                            continue
+                        custom_clean.append({
+                            "id": str(ct["task_id"]).strip(),
+                            "display_name": str(ct.get("display_name", ct["task_id"])).strip(),
+                            "output_type": str(ct.get("output_type", "hours")),
+                            "hustle_eligible": bool(ct.get("hustle_eligible", False)),
+                            "eligible_roles": list(ct.get("eligible_roles") or ["warehouse"]),
+                            "reward_weight": float(ct.get("reward_weight", 1.0)),
+                        })
+                    if custom_clean:
+                        t_out["custom"] = custom_clean
+                base["tasks"] = t_out
 
         # Business rule overrides — only the keys the user actually set
         # on the equipment + shift-schedule + Saturday step. Everything

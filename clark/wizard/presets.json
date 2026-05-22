@@ -12,7 +12,7 @@
         "workers_typical": 8,
         "shift_hours": 8.0,
         "shift_start": 8.0,
-        "tasks": ["pick", "pack", "restock", "receiving", "returns_processing", "side_project", "idle"],
+        "tasks": ["pick", "pack", "restock", "management", "idle"],
         "weights": {
           "per_order_shipped": 5.0,
           "per_order_incomplete": -10.0,
@@ -34,7 +34,7 @@
         "workers_typical": 15,
         "shift_hours": 8.0,
         "shift_start": 7.0,
-        "tasks": ["pick", "pack", "restock", "receiving", "loading", "quality_check", "returns_processing", "side_project", "idle"],
+        "tasks": ["pick", "pack", "restock", "management", "idle"],
         "weights": {
           "per_order_shipped": 5.0,
           "per_order_incomplete": -15.0,

@@ -362,10 +362,18 @@
        eligibility can pick from a known task list. -->
   <section class="step" data-step="2" data-mode="advanced">
     <h2>What work happens here?</h2>
-    <p class="step-help">Check the standard tasks your facility runs. <code>pick</code>, <code>pack</code>, and <code>idle</code> are always on (Clark requires them). Add custom tasks below for anything specific to your operation — these become assignable to your workers in the next step.</p>
+    <p class="step-help">Only enable tasks your facility <b>actually does every day</b>. Every enabled task consumes worker-hours from your roster — too many enabled tasks on a small roster means the model has to choose between shipping orders and meeting secondary duties, which caps the achievable grade. Pick lean.</p>
 
-    <h3 style="font-size:14px;color:var(--muted);margin:8px 0 4px 0;">Standard tasks</h3>
-    <div id="standardTasks" class="task-grid"></div>
+    <h3 style="font-size:14px;color:var(--muted);margin:8px 0 4px 0;">Primary tasks (recommended for every facility)</h3>
+    <small class="hint">Pick, pack, idle are always on (Clark requires them). Restock + management are strongly recommended unless your facility genuinely doesn't do them.</small>
+    <div id="primaryTasks" class="task-grid"></div>
+
+    <h3 style="font-size:14px;color:var(--muted);margin:24px 0 4px 0;">
+      Optional secondary tasks
+      <span style="background:rgba(252,129,129,0.12);color:#fc8181;border:1px solid #fc8181;border-radius:3px;padding:1px 6px;font-size:11px;margin-left:6px;">consumes worker-hours · may demote grades</span>
+    </h3>
+    <small class="hint">Only enable these if your facility runs them as a <b>regular daily activity</b> with dedicated worker-hours. Each one you enable subtracts from the hours available for pick/pack/restock/management. On a small roster (≤8 workers), enabling more than 1–2 secondary tasks typically caps you at C-grade because management duty gets starved. <a href="#" onclick="document.getElementById('secondaryTasks').style.display='grid';this.parentNode.style.display='none';return false;" id="showSecondaryLink">Show all 7 optional tasks ↓</a></small>
+    <div id="secondaryTasks" class="task-grid" style="display:none;"></div>
 
     <h3 style="font-size:14px;color:var(--muted);margin:24px 0 4px 0;">Custom tasks (specialized work at your facility)</h3>
     <small class="hint">For work that isn't in the standard list — e.g. "labeling", "kitting", "QC audit". <code>reward_weight</code> scales how much Clark values doing this task (1.0 = same as a unit of shipped orders). Custom tasks defined here will appear as assignable tasks in the workers step.</small>
@@ -618,6 +626,16 @@ const STANDARD_TASKS = [
   "training",
 ];
 const CORE_TASKS = new Set(["pick", "pack", "idle"]);
+// "Primary" tasks render in the always-visible top group. "Secondary"
+// tasks render in a collapsed expander with the explicit "consumes
+// worker-hours, may demote grades" warning — see PRIMARY_TASKS_SET
+// usage in renderStandardTasks(). cycle_count is borderline (real
+// warehouses run it but it's weekly not daily) so it lives in
+// secondary by default.
+const PRIMARY_TASKS_SET = new Set(["pick", "pack", "idle", "restock", "management"]);
+const SECONDARY_TASKS = ["cycle_count", "side_project", "receiving",
+                          "loading", "returns_processing",
+                          "quality_check", "training"];
 
 const state = {
   sessionId: null,
@@ -1167,18 +1185,32 @@ function initTasksStep() {
   renderCustomTasks();
 }
 function renderStandardTasks() {
-  const grid = document.getElementById("standardTasks");
-  grid.innerHTML = "";
-  // Default: if state.tasksEnabled is null, treat archetype defaults as the
-  // starting point (or all standard tasks pre-selected for the archetype).
+  const primaryGrid = document.getElementById("primaryTasks");
+  const secondaryGrid = document.getElementById("secondaryTasks");
+  if (!primaryGrid || !secondaryGrid) return;
+  primaryGrid.innerHTML = "";
+  secondaryGrid.innerHTML = "";
+  // Default: lean. If state.tasksEnabled is null (first visit), seed with
+  // PRIMARY tasks only — pick/pack/idle (core) + restock + management.
+  // This matches the Quick-mode default in cli/main.py _generate_yaml.
+  // Users who actually run secondary tasks (training, QC, loading, etc.)
+  // expand the "Optional secondary tasks" section + opt in explicitly.
+  // The previous behavior (seed from archetype.defaults.tasks = 7-9
+  // tasks) led to small-roster facilities silently capped at C-grade
+  // because management hours got starved by secondary task load.
   if (state.tasksEnabled === null) {
-    const arch = presets.archetypes.find(a => a.id === state.selectedArchetype);
-    state.tasksEnabled = [...(arch?.defaults?.tasks || ["pick", "pack", "idle"])];
-    for (const c of CORE_TASKS) {
-      if (!state.tasksEnabled.includes(c)) state.tasksEnabled.push(c);
-    }
+    state.tasksEnabled = ["pick", "pack", "idle", "restock", "management"];
   }
-  STANDARD_TASKS.forEach(t => {
+  // If user has any secondary tasks enabled, auto-expand the section
+  // so they can SEE what they've already enabled (don't hide state).
+  const hasSecondary = state.tasksEnabled.some(t => !PRIMARY_TASKS_SET.has(t));
+  if (hasSecondary) {
+    secondaryGrid.style.display = "grid";
+    const lnk = document.getElementById("showSecondaryLink");
+    if (lnk) lnk.parentNode.style.display = "none";
+  }
+  // Primary group (always visible)
+  STANDARD_TASKS.filter(t => PRIMARY_TASKS_SET.has(t)).forEach(t => {
     const isCore = CORE_TASKS.has(t);
     const checked = state.tasksEnabled.includes(t) || isCore;
     const div = document.createElement("label");
@@ -1187,7 +1219,18 @@ function renderStandardTasks() {
       <input type="checkbox" ${checked ? "checked" : ""} ${isCore ? "disabled" : ""}
              onchange="toggleStandardTask('${t}', this.checked)">
       <span>${t}${isCore ? " <small style='color:var(--muted)'>(core, required)</small>" : ""}</span>`;
-    grid.appendChild(div);
+    primaryGrid.appendChild(div);
+  });
+  // Secondary group (collapsed by default; the "Show all" link reveals)
+  SECONDARY_TASKS.forEach(t => {
+    const checked = state.tasksEnabled.includes(t);
+    const div = document.createElement("label");
+    div.className = "task-check";
+    div.innerHTML = `
+      <input type="checkbox" ${checked ? "checked" : ""}
+             onchange="toggleStandardTask('${t}', this.checked)">
+      <span>${t}</span>`;
+    secondaryGrid.appendChild(div);
   });
 }
 function toggleStandardTask(t, on) {
