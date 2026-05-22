@@ -250,6 +250,16 @@ def cmd_finetune(args: argparse.Namespace):
     print(f"Episodes: {args.episodes}  LR: {args.lr}  freeze-encoder: {args.freeze_encoder}")
     print()
 
+    # Resolve --save-interval=0 to the auto-picked default. ceil-style
+    # divide-by-3 so a 5-episode run saves at ep 2 + ep 4 + final
+    # (not just at the very end), and a 50-episode run still saves
+    # every 10 — matches the prior behavior at the long-run end.
+    eff_save_interval = args.save_interval
+    if eff_save_interval == 0:
+        eff_save_interval = max(1, min(10, args.episodes // 3))
+        print(f"  [auto] --save-interval not set; using {eff_save_interval} "
+              f"(episodes={args.episodes} // 3, clamped to [1, 10])")
+
     try:
         from clark.training.finetune import finetune
         finetune(
@@ -259,7 +269,7 @@ def cmd_finetune(args: argparse.Namespace):
             n_episodes=args.episodes,
             lr=args.lr,
             freeze_encoder=args.freeze_encoder,
-            save_interval=args.save_interval,
+            save_interval=eff_save_interval,
         )
     except KeyboardInterrupt:
         print("\nFine-tuning interrupted.")
@@ -675,10 +685,14 @@ def build_parser() -> argparse.ArgumentParser:
                       help="Learning rate (default: 5e-5).")
     p_ft.add_argument("--freeze-encoder", action="store_true",
                       help="Freeze encoder layers (prevents catastrophic forgetting).")
-    p_ft.add_argument("--save-interval", type=int, default=10,
-                      help="Checkpoint every N episodes (default: 10). Lower "
-                           "value = more frequent saves so an early Ctrl-C "
-                           "still leaves a usable checkpoint on disk.")
+    # save-interval = 0 means "auto-pick from --episodes": ceil(episodes/3)
+    # capped at 10, floor 1. Keeps small runs (--episodes 5 → save every 2)
+    # checkpointing usefully often without spamming saves on long runs.
+    p_ft.add_argument("--save-interval", type=int, default=0,
+                      help="Checkpoint every N episodes. 0 (default) = auto-"
+                           "pick based on --episodes (max(1, min(10, "
+                           "episodes // 3))), so small runs save more "
+                           "frequently. Pass an explicit int to override.")
 
     # plan
     p_plan = sub.add_parser("plan", help="Generate a shift plan using a trained model.")

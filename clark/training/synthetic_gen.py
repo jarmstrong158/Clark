@@ -483,13 +483,17 @@ def _generate_rules(cs: CurriculumStage, n_workers: int) -> BusinessRules:
     # runway and keeps ot_wall_clock_max consistent with the real window.
     otw_lo, otw_hi = BOUNDS["ot_wall_clock_max"]
     MIN_OT_WINDOW = 0.5  # >= 3 ticks (STEP_DURATION = 1/6 h)
+    OT_HARD_STOP_MAX = 23.0  # matches clark_limits.yaml ot_hard_stop_hour.max
     win_lo = max(otw_lo, MIN_OT_WINDOW)
     win_hi = max(win_lo, min(otw_hi, 2.0))
+    # Shrink the window cap so eod + ot_wall stays under the hard-stop
+    # bound. Pre-fix the test_synthetic_gen suite caught (eod=22.0,
+    # ot_wall=2.0 → ot_stop=24.0 > 23.0 limit) lived precisely here.
+    # eod is bounded to 22.0 by clark_limits.yaml; OT_HARD_STOP_MAX -
+    # eod is always >= 1.0 at eod=22.0, well above MIN_OT_WINDOW, so
+    # this can't accidentally re-collapse the window.
+    win_hi = min(win_hi, OT_HARD_STOP_MAX - eod)
     ot_wall = max(MIN_OT_WINDOW, round(random.uniform(win_lo, win_hi) * 2) / 2)
-    # No absolute clamp: anchoring strictly off `eod` guarantees the
-    # window is ALWAYS exactly `ot_wall` (>= MIN_OT_WINDOW). `eod` is
-    # already bounded by eod_hi and ot_wall <= 2.0, so ot_stop stays in
-    # a sane envelope without a cap that could re-collapse the window.
     ot_stop = round(eod + ot_wall, 1)
 
     # Cycle counts

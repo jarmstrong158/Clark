@@ -13,7 +13,7 @@ Clark operates as a **pre-train → fine-tune** system:
 1. **Pre-training** on thousands of synthetically generated facility configurations builds a general understanding of warehouse dynamics: when to call OT, how to balance task priorities, how hustle affects throughput and worker stamina.
 2. **Fine-tuning** on a specific facility's configuration adapts the foundation model to the real-world constraints of that facility in 50 episodes (~3.3 h, the Jack-validated useful floor) to 500 episodes (full deeper-training run; diminishing returns past ~200).
 
-The result is a CLI tool and eventually a cloud API: give Clark your facility config, get back a trained agent and daily shift plans.
+The result is a CLI tool plus a minimal localhost inference API (`clark serve`) that the natural-language interface ([clark-mcp](https://github.com/jarmstrong158/clark-mcp)) consumes: give Clark your facility config, get back a trained agent and daily shift plans, all running locally. A hosted/cloud API is **not on the roadmap** — the trained foundation weights are the commercial product (see Use Clark in the README), and the local-only deployment surface is by design.
 
 ---
 

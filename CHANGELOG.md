@@ -2,6 +2,24 @@
 
 Major shipped items. For day-to-day commit history use `git log`.
 
+## Lessons learned
+
+- **Minimal `tasks.enabled` beats over-spec'd by ~95pp on A-grade rate.**
+  On `test_v3` (8 workers), a config with the full 12 standard
+  tasks enabled spent 47 of 64 worker-hours/day on secondary tasks
+  (loading / receiving / returns / QC / training / side_project)
+  and only ~0.5 h/day on management. Result after 25 fine-tune
+  episodes: 84% ship_win but **0% A-grade days** (capped at C
+  because management duty was structurally starved). Same model
+  and same workers, trimmed to the minimal 5-task primary set
+  (pick / pack / restock / management / idle): **94% A-grade days
+  + 97% ship_win after just 5 episodes**, ~30 min wall time. The
+  config was the bottleneck, not the model. Wizard's Quick mode
+  was updated to hardcode the minimal set; Advanced mode groups
+  secondary tasks behind a warning ("consumes worker-hours · may
+  demote grades") with a "Show all" expander, so users can't
+  accidentally enable them.
+
 ## Architecture and training
 
 - **Variable-shape transformer + LSTM architecture** (`clark-v2`) — see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).

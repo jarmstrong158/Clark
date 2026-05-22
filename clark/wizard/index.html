@@ -403,7 +403,7 @@
 
     <div class="nav">
       <button class="secondary" onclick="goToPrevStep()">← Back</button>
-      <button class="primary" id="step3aNext" onclick="goToNextStep()">Continue →</button>
+      <button class="primary" id="step3Next" onclick="goToNextStep()">Continue →</button>
     </div>
   </section>
 
@@ -470,7 +470,7 @@
 
     <div class="nav">
       <button class="secondary" onclick="goToPrevStep()">← Back</button>
-      <button class="primary" id="step4aNext" onclick="goToNextStep()">Continue →</button>
+      <button class="primary" id="step4Next" onclick="goToNextStep()">Continue →</button>
     </div>
   </section>
 
@@ -554,10 +554,15 @@
     </div>
   </section>
 
-  <!-- STEP 6: pain-points -->
-  <section class="step" data-step="6" data-mode="both">
+  <!-- STEP 6: pain-points (ADVANCED ONLY).
+       Quick mode skips this entirely and uses audit-tuned default
+       reward weights — every question here adjusts ONE reward
+       weight, and the defaults are reasonable for most operations.
+       Power users (3PLs with contractual SLAs, etc.) need
+       Advanced mode to tune these. -->
+  <section class="step" data-step="6" data-mode="advanced">
     <h2>Tell us what matters to you</h2>
-    <p class="step-help">These questions translate your operational priorities into how the model values different outcomes during training. No "right" answers — pick what's true for your business.</p>
+    <p class="step-help">Optional reward-weight tuning. Each question adjusts one or two of Clark's audit-tuned reward signals. Defaults are reasonable for most operations — only override if your business has a specific cost structure that argues for it (e.g. 3PL with hard contractual SLA penalties, in-house DC with cheap labor and free OT, etc.).</p>
     <div id="questions"></div>
     <div class="nav">
       <button class="secondary" onclick="goToPrevStep()">← Back</button>
