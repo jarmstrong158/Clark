@@ -183,6 +183,89 @@
   .session-row .name { font-weight: 500; }
   .session-row .meta { color: var(--muted); font-size: 12px; }
   .session-row button { padding: 4px 12px; font-size: 12px; }
+  /* ── Advanced-mode additions ───────────────────────────── */
+  .mode-card { flex: 1; min-width: 300px; margin-bottom: 0; }
+  .mode-card .label .pill {
+    color: var(--muted); font-weight: 400; font-size: 13px;
+    margin-left: 6px;
+  }
+  /* Steps with data-mode="advanced" stay hidden unless the user picks
+     advanced mode (JS toggles `body[data-mode="advanced"]`). */
+  body[data-mode="quick"] .step[data-mode="advanced"],
+  body[data-mode="quick"] .advanced-only { display: none !important; }
+  /* Worker / task / custom-task rows */
+  .row-card {
+    background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: 4px; padding: 12px; margin-bottom: 8px;
+    display: grid; gap: 8px;
+  }
+  .row-card .grid {
+    display: grid; grid-template-columns: 1.4fr 1fr 0.7fr 0.7fr 0.7fr 1.5fr auto;
+    gap: 8px; align-items: center;
+  }
+  .row-card .grid input, .row-card .grid select {
+    background: var(--bg); color: var(--text);
+    border: 1px solid var(--border); border-radius: 3px;
+    padding: 6px 8px; font: inherit; font-size: 13px;
+    min-width: 0;  /* allow grid to shrink them */
+  }
+  .row-card .grid .col-label {
+    color: var(--muted); font-size: 11px; text-transform: uppercase;
+    letter-spacing: .05em;
+  }
+  .row-card .remove-btn {
+    background: transparent; color: var(--error);
+    border: 1px solid var(--border); padding: 4px 10px;
+    font-size: 12px;
+  }
+  .row-card .remove-btn:hover { border-color: var(--error); }
+  /* Task checkbox grid */
+  .task-grid {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
+    margin-top: 8px;
+  }
+  .task-check {
+    display: flex; align-items: center; gap: 8px;
+    background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: 4px; padding: 8px 12px; cursor: pointer;
+    font-size: 13px;
+  }
+  .task-check.disabled {
+    opacity: 0.5; cursor: not-allowed;
+    background: var(--bg);
+  }
+  .task-check input { margin: 0; }
+  .custom-task-row {
+    display: grid;
+    grid-template-columns: 1fr 1.4fr 1fr 1fr 0.7fr auto;
+    gap: 6px; margin-top: 6px;
+  }
+  .custom-task-row input, .custom-task-row select {
+    background: var(--panel-2); color: var(--text);
+    border: 1px solid var(--border); border-radius: 3px;
+    padding: 6px 8px; font: inherit; font-size: 13px;
+    min-width: 0;
+  }
+  .form-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
+    margin-top: 8px;
+  }
+  .form-grid .input-row { margin-bottom: 0; }
+  .form-grid .input-row label { min-width: 0; }
+  .form-grid .input-row input[type="number"] {
+    flex: 1;
+    padding: 8px 12px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text);
+    font-size: 14px;
+    font-family: inherit;
+  }
+  small.hint {
+    color: var(--muted); font-size: 11px; display: block;
+    margin-top: 2px;
+  }
 </style>
 </head>
 <body>
@@ -198,22 +281,30 @@
 
 <main>
 
-  <div class="step-indicator">
-    <div class="step-dot" data-step="0"></div>
-    <div class="step-dot" data-step="1"></div>
-    <div class="step-dot" data-step="2"></div>
-    <div class="step-dot" data-step="3"></div>
-    <div class="step-dot" data-step="4"></div>
-  </div>
+  <!-- Step indicator is built dynamically by refreshDots() in JS so the
+       dot count matches the visible-step count for the active mode. -->
+  <div class="step-indicator" id="stepIndicator"></div>
 
   <!-- STEP 0: name + resume -->
-  <section class="step active" data-step="0">
+  <section class="step active" data-step="0" data-mode="both">
     <h2>Let's set up your warehouse</h2>
-    <p class="step-help">First, give this facility a name. You can save your progress and come back to finish later.</p>
+    <p class="step-help">Give this facility a name, then pick how you want to set it up.</p>
 
     <div class="input-row">
       <label for="nameInput">Facility name</label>
       <input type="text" id="nameInput" placeholder="e.g. Acme Fulfillment NJ" oninput="updateName(this.value)">
+    </div>
+
+    <h3 style="font-size: 15px; color: var(--muted); margin: 24px 0 8px 0;">How do you want to set this up?</h3>
+    <div id="modeCards" style="display:flex;gap:12px;flex-wrap:wrap;">
+      <div class="option-card mode-card" data-mode-value="quick" onclick="selectMode('quick')">
+        <div class="label">Quick start <span class="pill">· ~2 min</span></div>
+        <div class="desc">Pick an archetype (e-com / 3PL), describe your volume, answer 5 priority questions. Clark uses sensible defaults for the worker roster, tasks, equipment, and shift schedule based on the archetype. Best for: getting a feel for Clark, or facilities that closely match a standard archetype.</div>
+      </div>
+      <div class="option-card mode-card" data-mode-value="advanced" onclick="selectMode('advanced')">
+        <div class="label">Advanced setup <span class="pill">· ~15–20 min</span></div>
+        <div class="desc">Everything in Quick start, PLUS: build your real worker roster (names, OPH, shifts, roles), pick which tasks happen at your facility (12 standard + custom), set equipment caps and shift schedule, configure Saturday ops and peak-season temp staffing. Best for: a real facility where the archetype defaults don't match your operation.</div>
+      </div>
     </div>
 
     <div style="margin-top: 24px;">
@@ -225,23 +316,129 @@
 
     <div class="nav">
       <span></span>
-      <button class="primary" id="step0Next" onclick="goToStep(1)" disabled>Continue →</button>
+      <button class="primary" id="step0Next" onclick="goToNextStep()" disabled>Continue →</button>
     </div>
   </section>
 
   <!-- STEP 1: archetype picker -->
-  <section class="step" data-step="1">
+  <section class="step" data-step="1" data-mode="both">
     <h2>What kind of warehouse is this?</h2>
-    <p class="step-help">Pick the closest match — this sets sensible defaults that you'll be able to refine in the next steps.</p>
+    <p class="step-help">Pick the closest match — this sets sensible defaults. In Advanced mode the next steps let you override every default; in Quick start they ship as-is.</p>
     <div id="archetypes"></div>
     <div class="nav">
-      <button class="secondary" onclick="goToStep(0)">← Back</button>
-      <button class="primary" id="step1Next" onclick="goToStep(2)" disabled>Continue →</button>
+      <button class="secondary" onclick="goToPrevStep()">← Back</button>
+      <button class="primary" id="step1Next" onclick="goToNextStep()" disabled>Continue →</button>
     </div>
   </section>
 
-  <!-- STEP 2: volume profile -->
-  <section class="step" data-step="2">
+  <!-- STEP 2: workers (ADVANCED ONLY) -->
+  <section class="step" data-step="2" data-mode="advanced">
+    <h2>Your team</h2>
+    <p class="step-help">Who works at this facility? Add a row per person. Click "Seed from archetype" to start from a template roster and edit, or "Add worker" to build from scratch. Leave blank to use the archetype's template workers as-is.</p>
+
+    <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;">
+      <button class="secondary" onclick="seedWorkersFromArchetype()">Seed from archetype</button>
+      <button class="secondary" onclick="addWorkerRow()">+ Add worker</button>
+      <button class="secondary" onclick="clearWorkers()" style="color:var(--error);border-color:var(--border);">Clear all</button>
+      <span style="color:var(--muted);font-size:12px;align-self:center;margin-left:auto;" id="workersCount"></span>
+    </div>
+
+    <div id="workersList"></div>
+
+    <div class="nav">
+      <button class="secondary" onclick="goToPrevStep()">← Back</button>
+      <button class="primary" id="step2Next" onclick="goToNextStep()">Continue →</button>
+    </div>
+  </section>
+
+  <!-- STEP 3: tasks (ADVANCED ONLY) -->
+  <section class="step" data-step="3" data-mode="advanced">
+    <h2>What work happens here?</h2>
+    <p class="step-help">Check the standard tasks your facility runs. <code>pick</code>, <code>pack</code>, and <code>idle</code> are always on (Clark requires them). Add custom tasks below for anything specific.</p>
+
+    <h3 style="font-size:14px;color:var(--muted);margin:8px 0 4px 0;">Standard tasks</h3>
+    <div id="standardTasks" class="task-grid"></div>
+
+    <h3 style="font-size:14px;color:var(--muted);margin:24px 0 4px 0;">Custom tasks</h3>
+    <small class="hint">For work that isn't in the standard list. <code>reward_weight</code> scales how much Clark values doing this task (1.0 = same as a unit of shipped orders).</small>
+    <div id="customTasksList"></div>
+    <button class="secondary" onclick="addCustomTaskRow()" style="margin-top:8px;">+ Add custom task</button>
+
+    <div class="nav">
+      <button class="secondary" onclick="goToPrevStep()">← Back</button>
+      <button class="primary" id="step3aNext" onclick="goToNextStep()">Continue →</button>
+    </div>
+  </section>
+
+  <!-- STEP 4: equipment + shift schedule (ADVANCED ONLY) -->
+  <section class="step" data-step="4" data-mode="advanced">
+    <h2>Equipment & shift schedule</h2>
+    <p class="step-help">Physical constraints and daily timing. Leave equipment fields blank for "unlimited."</p>
+
+    <h3 style="font-size:14px;color:var(--muted);margin:8px 0 4px 0;">Equipment caps</h3>
+    <div class="form-grid">
+      <div class="input-row">
+        <label for="packStations">Pack stations
+          <small class="hint">blank = unlimited</small>
+        </label>
+        <input type="number" id="packStations" min="1" max="30" placeholder="e.g. 4">
+      </div>
+      <div class="input-row">
+        <label for="cartsAvailable">Carts available
+          <small class="hint">blank = unlimited</small>
+        </label>
+        <input type="number" id="cartsAvailable" min="1" max="100" placeholder="e.g. 12">
+      </div>
+      <div class="input-row" style="grid-column: 1 / span 2;">
+        <label for="pickBufferCap">Pick buffer capacity
+          <small class="hint">picked-but-not-packed cap. Blank = unlimited. Recommended ~6-12× worker count.</small>
+        </label>
+        <input type="number" id="pickBufferCap" min="10" max="500" placeholder="e.g. 80">
+      </div>
+    </div>
+
+    <h3 style="font-size:14px;color:var(--muted);margin:24px 0 4px 0;">Shift schedule (24h clock)</h3>
+    <div class="form-grid">
+      <div class="input-row">
+        <label for="dayStart">Day starts at</label>
+        <input type="number" id="dayStart" min="5" max="11" step="0.5" value="9">
+      </div>
+      <div class="input-row">
+        <label for="eod">End of day</label>
+        <input type="number" id="eod" min="13" max="22" step="0.5" value="17.5">
+      </div>
+      <div class="input-row">
+        <label for="orderCutoff">Order cutoff
+          <small class="hint">orders after this won't ship today</small>
+        </label>
+        <input type="number" id="orderCutoff" min="12" max="21" step="0.5" value="17">
+      </div>
+      <div class="input-row">
+        <label for="lunchHour">Lunch at</label>
+        <input type="number" id="lunchHour" min="11" max="14" step="0.5" value="13">
+      </div>
+      <div class="input-row">
+        <label for="lunchDuration">Lunch duration (h)
+          <small class="hint">0 = no lunch break</small>
+        </label>
+        <input type="number" id="lunchDuration" min="0" max="1.5" step="0.25" value="0.5">
+      </div>
+      <div class="input-row">
+        <label for="carrierPickup">Carrier pickup
+          <small class="hint">blank = no hard deadline</small>
+        </label>
+        <input type="number" id="carrierPickup" min="12" max="22" step="0.5" placeholder="e.g. 16">
+      </div>
+    </div>
+
+    <div class="nav">
+      <button class="secondary" onclick="goToPrevStep()">← Back</button>
+      <button class="primary" id="step4aNext" onclick="goToNextStep()">Continue →</button>
+    </div>
+  </section>
+
+  <!-- STEP 5: volume profile (BOTH modes; Saturday/peak inputs are advanced-only) -->
+  <section class="step" data-step="5" data-mode="both">
     <h2>What does your volume look like?</h2>
     <p class="step-help">Tell us your typical order volume and which months and days are heaviest. This shapes the workload Clark trains against — every facility's pattern is different.</p>
 
@@ -285,25 +482,54 @@
     <p style="color: var(--muted); font-size: 13px; margin: 0 0 12px 0;">Which day of the week typically gets the most orders? Pick "No clear peak" if it's evenly spread.</p>
     <div id="weekdayPicker"></div>
 
+    <div class="advanced-only" style="margin-top:28px;">
+      <h3 style="font-size: 15px; margin: 0 0 6px 0;">Saturday operations</h3>
+      <p style="color: var(--muted); font-size: 13px; margin: 0 0 8px 0;">If you ship Saturdays, what fraction of Monday's volume do you typically see?</p>
+      <label style="display:flex;align-items:center;gap:10px;">
+        <input type="checkbox" id="workSaturday" onchange="onWorkSaturdayChange()">
+        <span>Work Saturdays</span>
+      </label>
+      <div id="saturdayFracRow" style="display:none;margin-top:8px;" class="input-row">
+        <label for="saturdayVolumeFraction">Saturday volume fraction</label>
+        <input type="number" id="saturdayVolumeFraction" min="0.1" max="1.0" step="0.05" value="0.4">
+      </div>
+
+      <h3 style="font-size: 15px; margin: 24px 0 6px 0;">Peak-season temp staffing</h3>
+      <p style="color: var(--muted); font-size: 13px; margin: 0 0 8px 0;">Auto-applies to whichever months you marked as "peak" above. Leave at 0 for no temps.</p>
+      <div class="form-grid">
+        <div class="input-row">
+          <label for="peakExtraWorkers">Extra temp workers</label>
+          <input type="number" id="peakExtraWorkers" min="0" max="20" value="0">
+        </div>
+        <div class="input-row">
+          <label for="peakTempOphLow">Temp OPH range (low–high)</label>
+          <div style="display:flex;gap:6px;flex:1;">
+            <input type="number" id="peakTempOphLow" min="1" max="40" step="0.5" value="8" style="flex:1;padding:8px 12px;background:var(--panel-2);border:1px solid var(--border);border-radius:4px;color:var(--text);">
+            <input type="number" id="peakTempOphHigh" min="1" max="40" step="0.5" value="15" style="flex:1;padding:8px 12px;background:var(--panel-2);border:1px solid var(--border);border-radius:4px;color:var(--text);">
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div class="nav">
-      <button class="secondary" onclick="goToStep(1)">← Back</button>
-      <button class="primary" id="step2Next" onclick="goToStep(3)" disabled>Continue →</button>
+      <button class="secondary" onclick="goToPrevStep()">← Back</button>
+      <button class="primary" id="step5Next" onclick="goToNextStep()" disabled>Continue →</button>
     </div>
   </section>
 
-  <!-- STEP 3: pain-points (was step 2) -->
-  <section class="step" data-step="3">
+  <!-- STEP 6: pain-points -->
+  <section class="step" data-step="6" data-mode="both">
     <h2>Tell us what matters to you</h2>
     <p class="step-help">These questions translate your operational priorities into how the model values different outcomes during training. No "right" answers — pick what's true for your business.</p>
     <div id="questions"></div>
     <div class="nav">
-      <button class="secondary" onclick="goToStep(2)">← Back</button>
-      <button class="primary" id="step3Next" onclick="goToStep(4)" disabled>Review →</button>
+      <button class="secondary" onclick="goToPrevStep()">← Back</button>
+      <button class="primary" id="step6Next" onclick="goToNextStep()" disabled>Review →</button>
     </div>
   </section>
 
-  <!-- STEP 4: validate + preview (was step 3) -->
-  <section class="step" data-step="4">
+  <!-- STEP 7: validate + preview -->
+  <section class="step" data-step="7" data-mode="both">
     <h2>Review and validate</h2>
     <p class="step-help">Here's the configuration Clark will train against. Validation flags anything that might cause issues.</p>
 
@@ -317,7 +543,7 @@
     <div id="yamlPreview" class="summary-block" style="max-height: 240px;">Click <b>Generate config</b> to materialize the YAML.</div>
 
     <div class="nav">
-      <button class="secondary" onclick="goToStep(3)">← Back</button>
+      <button class="secondary" onclick="goToPrevStep()">← Back</button>
       <div>
         <button class="secondary" id="generateBtn" onclick="generateYaml()">Generate config</button>
         <button class="primary" id="trainBtn" onclick="startTraining()" disabled>Train on my facility</button>
@@ -340,27 +566,80 @@ const WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday"];
 // Month intensity cycles through these values when user clicks
 const INTENSITIES = ["normal", "slow", "peak"];
 
+const STANDARD_TASKS = [
+  "pick", "pack", "idle",  // core — always on, can't disable
+  "restock", "management", "cycle_count", "side_project",
+  "receiving", "loading", "returns_processing", "quality_check",
+  "training",
+];
+const CORE_TASKS = new Set(["pick", "pack", "idle"]);
+
 const state = {
   sessionId: null,
   facilityName: "",
+  mode: null,                   // "quick" | "advanced"
   selectedArchetype: null,
-  // Volume profile (step 2)
+  // Volume profile
   monthIntensity: {},   // monthName → "slow" | "normal" | "peak"
-  // Per-intensity actual ranges in orders/day. User enters the real
-  // numbers from their facility (e.g. slow=[60,100], normal=[200,300],
-  // peak=[300,440]) — no derived multipliers, captures asymmetric
-  // variance accurately.
   seasonRanges: {
     slow:   { low: null, high: null },
     normal: { low: null, high: null },
     peak:   { low: null, high: null },
   },
   busiestWeekday: null, // weekday name or "none"
-  // Pain-point answers (step 3)
+  // Pain-point answers
   answers: {},          // questionId → optionId
+  // ─── Advanced-only state ─────────────────────────────────
+  workers: [],          // [{name, role, base_oph, shift_hours, shift_start, task_eligibility}]
+  tasksEnabled: null,   // null = use archetype default; otherwise list[str]
+  customTasks: [],      // [{task_id, display_name, output_type, hustle_eligible, eligible_roles, reward_weight}]
+  rules: {},            // any of: pack_stations, carts_available, pick_buffer_capacity,
+                        //          day_start_hour, eod_hour, order_cutoff_hour,
+                        //          lunch_hour, lunch_duration, carrier_pickup_hour,
+                        //          work_saturday, saturday_volume_fraction
+  peakStaffing: null,   // null OR {extra_workers, temp_oph_range:[low,high]}
   currentStep: 0,
 };
 let presets = null;     // loaded from /presets
+
+// ─── Step visibility / mode-driven navigation ──────────────────
+// Returns ordered list of step numbers visible for the current mode.
+function visibleSteps() {
+  const all = [...document.querySelectorAll(".step[data-step]")];
+  return all
+    .filter(s => {
+      const m = s.dataset.mode || "both";
+      return m === "both" || m === state.mode;
+    })
+    .map(s => parseInt(s.dataset.step))
+    .sort((a, b) => a - b);
+}
+function refreshDots() {
+  const wrap = document.getElementById("stepIndicator");
+  if (!wrap) return;
+  wrap.innerHTML = "";
+  const steps = visibleSteps();
+  steps.forEach(n => {
+    const d = document.createElement("div");
+    d.className = "step-dot";
+    d.dataset.step = String(n);
+    if (n < state.currentStep) d.classList.add("done");
+    if (n === state.currentStep) d.classList.add("active");
+    wrap.appendChild(d);
+  });
+}
+function goToNextStep() {
+  const steps = visibleSteps();
+  const i = steps.indexOf(state.currentStep);
+  const next = (i >= 0 && i + 1 < steps.length) ? steps[i + 1] : state.currentStep;
+  goToStep(next);
+}
+function goToPrevStep() {
+  const steps = visibleSteps();
+  const i = steps.indexOf(state.currentStep);
+  const prev = (i > 0) ? steps[i - 1] : 0;
+  goToStep(prev);
+}
 
 // ─── Boot ──────────────────────────────────────────────────────
 async function boot() {
@@ -376,6 +655,9 @@ async function boot() {
   renderWeekdays();
   renderQuestions();
   await refreshSessionsList();
+  // Default to quick mode for dot rendering; user must still actively pick.
+  document.body.dataset.mode = "quick";
+  refreshDots();
   // Restore in-flight from localStorage if we have one
   const draft = localStorage.getItem("clark_wizard_draft");
   if (draft) {
@@ -384,9 +666,14 @@ async function boot() {
       if (d.facilityName) {
         document.getElementById("nameInput").value = d.facilityName;
         updateName(d.facilityName);
+        if (d.mode) selectMode(d.mode);
         if (d.selectedArchetype) {
           selectArchetype(d.selectedArchetype, false);
         }
+        if (Array.isArray(d.workers)) state.workers = d.workers;
+        if (Array.isArray(d.tasksEnabled)) state.tasksEnabled = d.tasksEnabled;
+        if (Array.isArray(d.customTasks)) state.customTasks = d.customTasks;
+        if (d.rules && typeof d.rules === "object") state.rules = d.rules;
         // Restore volume profile
         if (d.seasonRanges) {
           state.seasonRanges = d.seasonRanges;
@@ -418,16 +705,33 @@ async function boot() {
 // ─── Step navigation ───────────────────────────────────────────
 function goToStep(n) {
   document.querySelectorAll(".step").forEach(s => s.classList.remove("active"));
-  document.querySelector(`.step[data-step="${n}"]`).classList.add("active");
-  document.querySelectorAll(".step-dot").forEach((d, i) => {
-    d.classList.remove("active", "done");
-    if (i < n) d.classList.add("done");
-    if (i === n) d.classList.add("active");
-  });
+  const target = document.querySelector(`.step[data-step="${n}"]`);
+  if (target) target.classList.add("active");
   state.currentStep = n;
-  // Review step is now step 4 (was 3 before volume step was inserted)
-  if (n === 4) runValidation();
+  refreshDots();
+  // Review step is the LAST visible step in either mode (step 7).
+  if (n === 7) runValidation();
+  // Initialize new sections lazily — first time the user lands.
+  if (n === 2) initWorkersStep();
+  if (n === 3) initTasksStep();
+  if (n === 4) initEquipmentStep();
   persistDraft();
+}
+
+// ─── Mode selection ────────────────────────────────────────────
+function selectMode(m) {
+  state.mode = m;
+  document.body.dataset.mode = m;
+  document.querySelectorAll(".mode-card").forEach(c => {
+    c.classList.toggle("selected", c.dataset.modeValue === m);
+  });
+  refreshDots();
+  updateStep0NextEnabled();
+  persistDraft();
+}
+function updateStep0NextEnabled() {
+  document.getElementById("step0Next").disabled =
+    !state.facilityName || !state.mode;
 }
 
 // ─── Name handling ─────────────────────────────────────────────
@@ -435,7 +739,7 @@ function updateName(v) {
   state.facilityName = v.trim();
   document.getElementById("facilityName").textContent =
     state.facilityName || "Untitled facility";
-  document.getElementById("step0Next").disabled = !state.facilityName;
+  updateStep0NextEnabled();
   persistDraft();
 }
 
@@ -580,6 +884,7 @@ function isRangeValid(bucket) {
 function updateStep2NextEnabled() {
   // Required: normal range. Slow/peak only required if user marked any
   // month with that intensity. Also need a weekday choice.
+  // (Volume step's button id is `step5Next` in the renumbered flow.)
   const needsSlow = Object.values(state.monthIntensity).includes("slow");
   const needsPeak = Object.values(state.monthIntensity).includes("peak");
   const ok =
@@ -587,7 +892,8 @@ function updateStep2NextEnabled() {
     (!needsSlow || isRangeValid("slow")) &&
     (!needsPeak || isRangeValid("peak")) &&
     state.busiestWeekday;
-  document.getElementById("step2Next").disabled = !ok;
+  const btn = document.getElementById("step5Next");
+  if (btn) btn.disabled = !ok;
 }
 
 // ─── Question rendering ────────────────────────────────────────
@@ -625,8 +931,225 @@ function selectAnswer(qid, oid, persist = true) {
     });
   // Enable Next once every question has an answer
   const allAnswered = presets.questions.every(q => state.answers[q.id]);
-  document.getElementById("step3Next").disabled = !allAnswered;
+  // Pain-points step's "Continue →" button is `step6Next` in the
+  // renumbered flow.
+  const btn = document.getElementById("step6Next");
+  if (btn) btn.disabled = !allAnswered;
   if (persist) persistDraft();
+}
+
+// ─── Workers step (advanced only) ──────────────────────────────
+const ROLES = ["warehouse", "lead", "assistant_manager", "manager"];
+const DEFAULT_WORKER = () => ({
+  name: "", role: "warehouse", base_oph: 15, shift_hours: 8,
+  shift_start: 9, task_eligibility: "all",
+});
+function initWorkersStep() {
+  renderWorkers();
+}
+function renderWorkers() {
+  const list = document.getElementById("workersList");
+  list.innerHTML = "";
+  state.workers.forEach((w, i) => list.appendChild(buildWorkerCard(w, i)));
+  document.getElementById("workersCount").textContent =
+    `${state.workers.length} worker${state.workers.length === 1 ? "" : "s"}` +
+    (state.workers.length === 0 ? " — archetype defaults will be used" : "");
+}
+function buildWorkerCard(w, i) {
+  const card = document.createElement("div");
+  card.className = "row-card";
+  card.innerHTML = `
+    <div class="grid">
+      <div>
+        <div class="col-label">name</div>
+        <input type="text" placeholder="e.g. Marcus" value="${escapeHtml(w.name)}" oninput="updateWorker(${i},'name',this.value)">
+      </div>
+      <div>
+        <div class="col-label">role</div>
+        <select onchange="updateWorker(${i},'role',this.value)">
+          ${ROLES.map(r => `<option value="${r}"${r === w.role ? " selected" : ""}>${r}</option>`).join("")}
+        </select>
+      </div>
+      <div>
+        <div class="col-label">base OPH</div>
+        <input type="number" min="1" max="50" step="0.5" value="${w.base_oph}" oninput="updateWorker(${i},'base_oph',parseFloat(this.value))">
+      </div>
+      <div>
+        <div class="col-label">shift h</div>
+        <input type="number" min="4" max="12" step="0.5" value="${w.shift_hours}" oninput="updateWorker(${i},'shift_hours',parseFloat(this.value))">
+      </div>
+      <div>
+        <div class="col-label">starts</div>
+        <input type="number" min="5" max="11" step="0.5" value="${w.shift_start}" oninput="updateWorker(${i},'shift_start',parseFloat(this.value))">
+      </div>
+      <div>
+        <div class="col-label">eligible</div>
+        <input type="text" placeholder="all OR pick,pack,..." value="${escapeHtml(typeof w.task_eligibility === 'string' ? w.task_eligibility : (w.task_eligibility || []).join(','))}" oninput="updateWorker(${i},'task_eligibility',this.value)">
+      </div>
+      <button class="remove-btn" onclick="removeWorker(${i})">×</button>
+    </div>`;
+  return card;
+}
+function addWorkerRow() {
+  state.workers.push(DEFAULT_WORKER());
+  renderWorkers(); persistDraft();
+}
+function removeWorker(i) {
+  state.workers.splice(i, 1);
+  renderWorkers(); persistDraft();
+}
+function clearWorkers() {
+  state.workers = [];
+  renderWorkers(); persistDraft();
+}
+function updateWorker(i, key, value) {
+  if (!state.workers[i]) return;
+  state.workers[i][key] = value;
+  persistDraft();
+}
+function seedWorkersFromArchetype() {
+  const arch = presets.archetypes.find(a => a.id === state.selectedArchetype);
+  if (!arch) { alert("Pick an archetype on Step 1 first."); return; }
+  const n = arch.defaults?.workers_typical || 5;
+  const shift_h = arch.defaults?.shift_hours || 8;
+  const shift_s = arch.defaults?.shift_start || 9;
+  state.workers = [];
+  state.workers.push({ name: "Manager", role: "manager", base_oph: 16,
+                        shift_hours: shift_h + 1, shift_start: shift_s,
+                        task_eligibility: "all" });
+  if (n >= 4) state.workers.push({ name: "Lead", role: "lead", base_oph: 18,
+                                    shift_hours: shift_h, shift_start: shift_s,
+                                    task_eligibility: "all" });
+  const remaining = Math.max(0, n - state.workers.length);
+  for (let k = 0; k < remaining; k++) {
+    const letter = String.fromCharCode(65 + k);  // A, B, C, ...
+    state.workers.push({
+      name: `Worker ${letter}`, role: "warehouse",
+      base_oph: 15, shift_hours: shift_h, shift_start: shift_s,
+      task_eligibility: "all",
+    });
+  }
+  renderWorkers(); persistDraft();
+}
+
+// ─── Tasks step (advanced only) ────────────────────────────────
+function initTasksStep() {
+  renderStandardTasks();
+  renderCustomTasks();
+}
+function renderStandardTasks() {
+  const grid = document.getElementById("standardTasks");
+  grid.innerHTML = "";
+  // Default: if state.tasksEnabled is null, treat archetype defaults as the
+  // starting point (or all standard tasks pre-selected for the archetype).
+  if (state.tasksEnabled === null) {
+    const arch = presets.archetypes.find(a => a.id === state.selectedArchetype);
+    state.tasksEnabled = [...(arch?.defaults?.tasks || ["pick", "pack", "idle"])];
+    for (const c of CORE_TASKS) {
+      if (!state.tasksEnabled.includes(c)) state.tasksEnabled.push(c);
+    }
+  }
+  STANDARD_TASKS.forEach(t => {
+    const isCore = CORE_TASKS.has(t);
+    const checked = state.tasksEnabled.includes(t) || isCore;
+    const div = document.createElement("label");
+    div.className = "task-check" + (isCore ? " disabled" : "");
+    div.innerHTML = `
+      <input type="checkbox" ${checked ? "checked" : ""} ${isCore ? "disabled" : ""}
+             onchange="toggleStandardTask('${t}', this.checked)">
+      <span>${t}${isCore ? " <small style='color:var(--muted)'>(core, required)</small>" : ""}</span>`;
+    grid.appendChild(div);
+  });
+}
+function toggleStandardTask(t, on) {
+  if (CORE_TASKS.has(t)) return;
+  const set = new Set(state.tasksEnabled || []);
+  if (on) set.add(t); else set.delete(t);
+  state.tasksEnabled = [...set];
+  persistDraft();
+}
+function renderCustomTasks() {
+  const list = document.getElementById("customTasksList");
+  list.innerHTML = "";
+  state.customTasks.forEach((ct, i) => {
+    const row = document.createElement("div");
+    row.className = "custom-task-row";
+    row.innerHTML = `
+      <input type="text" placeholder="task_id (e.g. labeling)" value="${escapeHtml(ct.task_id)}" oninput="updateCustomTask(${i},'task_id',this.value)">
+      <input type="text" placeholder="Display name" value="${escapeHtml(ct.display_name)}" oninput="updateCustomTask(${i},'display_name',this.value)">
+      <select onchange="updateCustomTask(${i},'output_type',this.value)">
+        ${["orders_per_hour","units_per_hour","hours","none"].map(o => `<option value="${o}"${o===ct.output_type?" selected":""}>${o}</option>`).join("")}
+      </select>
+      <input type="text" placeholder="eligible_roles (comma)" value="${(ct.eligible_roles||[]).join(',')}" oninput="updateCustomTask(${i},'eligible_roles',this.value)">
+      <input type="number" min="0" max="10" step="0.1" placeholder="reward_weight" value="${ct.reward_weight}" oninput="updateCustomTask(${i},'reward_weight',parseFloat(this.value))">
+      <button class="remove-btn" onclick="removeCustomTask(${i})">×</button>`;
+    list.appendChild(row);
+  });
+}
+function addCustomTaskRow() {
+  state.customTasks.push({
+    task_id: "", display_name: "", output_type: "hours",
+    hustle_eligible: false, eligible_roles: ["warehouse"], reward_weight: 1.0,
+  });
+  renderCustomTasks(); persistDraft();
+}
+function removeCustomTask(i) {
+  state.customTasks.splice(i, 1);
+  renderCustomTasks(); persistDraft();
+}
+function updateCustomTask(i, key, value) {
+  if (!state.customTasks[i]) return;
+  if (key === "eligible_roles" && typeof value === "string") {
+    value = value.split(",").map(s => s.trim()).filter(Boolean);
+  }
+  state.customTasks[i][key] = value;
+  persistDraft();
+}
+
+// ─── Equipment + shift schedule step (advanced only) ───────────
+const RULE_FIELDS = [
+  // [domId, ruleKey, type]
+  ["packStations",          "pack_stations",         "int"],
+  ["cartsAvailable",        "carts_available",       "int"],
+  ["pickBufferCap",         "pick_buffer_capacity",  "int"],
+  ["dayStart",              "day_start_hour",        "float"],
+  ["eod",                   "eod_hour",              "float"],
+  ["orderCutoff",           "order_cutoff_hour",     "float"],
+  ["lunchHour",             "lunch_hour",            "float"],
+  ["lunchDuration",         "lunch_duration",        "float"],
+  ["carrierPickup",         "carrier_pickup_hour",   "float"],
+];
+function initEquipmentStep() {
+  // Restore previously-entered values on revisit
+  RULE_FIELDS.forEach(([id, key]) => {
+    const el = document.getElementById(id);
+    if (el && state.rules[key] != null) el.value = state.rules[key];
+    if (el && !el.dataset.hooked) {
+      el.addEventListener("input", () => onRuleChange(id, key));
+      el.dataset.hooked = "1";
+    }
+  });
+}
+function onRuleChange(id, key) {
+  const el = document.getElementById(id);
+  const raw = el.value;
+  if (raw === "") { delete state.rules[key]; persistDraft(); return; }
+  const spec = RULE_FIELDS.find(r => r[0] === id);
+  const n = spec[2] === "int" ? parseInt(raw, 10) : parseFloat(raw);
+  if (isFinite(n)) state.rules[key] = n;
+  persistDraft();
+}
+function onWorkSaturdayChange() {
+  const on = document.getElementById("workSaturday").checked;
+  state.rules.work_saturday = on;
+  document.getElementById("saturdayFracRow").style.display = on ? "" : "none";
+  if (on) {
+    const f = parseFloat(document.getElementById("saturdayVolumeFraction").value);
+    if (isFinite(f)) state.rules.saturday_volume_fraction = f;
+  } else {
+    delete state.rules.saturday_volume_fraction;
+  }
+  persistDraft();
 }
 
 // ─── Build the combined config ─────────────────────────────────
@@ -640,14 +1163,53 @@ function buildConfig() {
     const opt = q.options.find(o => o.id === optId);
     if (opt && opt.weight_deltas) {
       for (const [k, v] of Object.entries(opt.weight_deltas)) {
-        // For now: deltas REPLACE archetype defaults, not add.
-        // Authoring presets so this is sensible is the curator's job.
         weights[k] = v;
       }
     }
   }
+
+  // Advanced-only fields. Quick mode leaves these null/empty → server
+  // falls through to the archetype template.
+  const advanced = (state.mode === "advanced");
+  const workersPayload = (advanced && state.workers.length)
+    ? state.workers.map(w => ({
+        ...w,
+        task_eligibility: (typeof w.task_eligibility === "string"
+          && w.task_eligibility.trim() !== "all")
+            ? w.task_eligibility.split(",").map(s => s.trim()).filter(Boolean)
+            : "all",
+      }))
+    : null;
+  const tasksPayload = advanced ? {
+    enabled: state.tasksEnabled,
+    custom: state.customTasks.filter(ct => ct.task_id && ct.display_name),
+  } : null;
+  const rulesPayload = advanced && Object.keys(state.rules).length
+    ? { ...state.rules } : null;
+  // Saturday volume fraction follows the checkbox + input.
+  if (rulesPayload && rulesPayload.work_saturday) {
+    const sf = parseFloat(document.getElementById("saturdayVolumeFraction")?.value);
+    if (isFinite(sf)) rulesPayload.saturday_volume_fraction = sf;
+  }
+  // Peak staffing: derive from peak-months count + extra workers input.
+  let peakStaffing = null;
+  if (advanced) {
+    const extra = parseInt(document.getElementById("peakExtraWorkers")?.value || "0", 10);
+    const peakMonths = Object.entries(state.monthIntensity)
+      .filter(([_, v]) => v === "peak").map(([m]) => m);
+    if (extra > 0 && peakMonths.length > 0) {
+      const lo = parseFloat(document.getElementById("peakTempOphLow")?.value || "8");
+      const hi = parseFloat(document.getElementById("peakTempOphHigh")?.value || "15");
+      peakStaffing = {
+        months: peakMonths, extra_workers: extra,
+        temp_oph_range: [lo, hi],
+      };
+    }
+  }
+
   return {
     facility_name: state.facilityName,
+    mode: state.mode,
     archetype: state.selectedArchetype,
     archetype_defaults: arch ? arch.defaults : null,
     volume_profile: {
@@ -657,6 +1219,11 @@ function buildConfig() {
     },
     answers: state.answers,
     resulting_weights: weights,
+    // Advanced-mode payload (may be null)
+    workers: workersPayload,
+    tasks: tasksPayload,
+    rules_overrides: rulesPayload,
+    peak_staffing: peakStaffing,
   };
 }
 
@@ -799,11 +1366,17 @@ async function pollTrainingStatus(jobId) {
 function persistDraft() {
   localStorage.setItem("clark_wizard_draft", JSON.stringify({
     facilityName: state.facilityName,
+    mode: state.mode,
     selectedArchetype: state.selectedArchetype,
     seasonRanges: state.seasonRanges,
     monthIntensity: state.monthIntensity,
     busiestWeekday: state.busiestWeekday,
     answers: state.answers,
+    // Advanced-mode payload
+    workers: state.workers,
+    tasksEnabled: state.tasksEnabled,
+    customTasks: state.customTasks,
+    rules: state.rules,
   }));
 }
 

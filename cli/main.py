@@ -854,14 +854,12 @@ def cmd_wizard(args: argparse.Namespace):
     def _generate_yaml(cfg: dict) -> dict:
         """Materialize a full FacilityConfig YAML from the wizard's
         archetype + answers. Strategy: load the archetype's base
-        template, mutate facility.name and rewards, write to disk under
-        clark/data/configs/user/, return path + serialized content.
-
-        The base template carries everything the schema requires
-        (workers, volume, tasks, business rules) — for the prototype we
-        only override the facility name and reward weights. Later
-        wizard steps (worker roster, volume profile) will override
-        more of the template.
+        template, then in this order overlay anything the user provided:
+          - facility.name (always)
+          - rewards (always)
+          - volume.seasonal_ranges + weekly_curve (when provided)
+          - workers, tasks, business_rules, peak_staffing (advanced mode)
+        Anything the user did NOT provide stays from the template.
         """
         import yaml as _yaml
 
@@ -888,6 +886,78 @@ def cmd_wizard(args: argparse.Namespace):
         merged_rewards = dict(base.get("rewards") or {})
         merged_rewards.update(weights)
         base["rewards"] = merged_rewards
+
+        # ── ADVANCED-MODE OVERLAYS ───────────────────────────────────
+        # Wizard quick mode sends these fields as null/empty; advanced
+        # mode populates them only for what the user actually edited.
+        # Falling through to the template for unedited fields is the
+        # whole point — users don't have to touch every knob.
+
+        # Workers: replace the template roster wholesale when provided.
+        workers_in = cfg.get("workers")
+        if isinstance(workers_in, list) and workers_in:
+            new_workers = []
+            for i, w in enumerate(workers_in):
+                if not isinstance(w, dict) or not w.get("name"):
+                    continue
+                wd = {
+                    "id": i,
+                    "name": str(w["name"]).strip(),
+                    "base_oph": float(w.get("base_oph", 15)),
+                    "shift_hours": float(w.get("shift_hours", 8)),
+                    "shift_start": float(w.get("shift_start", 9)),
+                    "role": str(w.get("role", "warehouse")),
+                    "task_eligibility": w.get("task_eligibility", "all"),
+                }
+                new_workers.append(wd)
+            if new_workers:
+                base["workers"] = new_workers
+
+        # Tasks: replace enabled + custom when either is provided.
+        tasks_in = cfg.get("tasks")
+        if isinstance(tasks_in, dict):
+            t_out = dict(base.get("tasks") or {})
+            if isinstance(tasks_in.get("enabled"), list) and tasks_in["enabled"]:
+                t_out["enabled"] = list(tasks_in["enabled"])
+            if isinstance(tasks_in.get("custom"), list):
+                custom_clean = []
+                for ct in tasks_in["custom"]:
+                    if not isinstance(ct, dict) or not ct.get("task_id"):
+                        continue
+                    custom_clean.append({
+                        "id": str(ct["task_id"]).strip(),
+                        "display_name": str(ct.get("display_name", ct["task_id"])).strip(),
+                        "output_type": str(ct.get("output_type", "hours")),
+                        "hustle_eligible": bool(ct.get("hustle_eligible", False)),
+                        "eligible_roles": list(ct.get("eligible_roles") or ["warehouse"]),
+                        "reward_weight": float(ct.get("reward_weight", 1.0)),
+                    })
+                if custom_clean:
+                    t_out["custom"] = custom_clean
+            base["tasks"] = t_out
+
+        # Business rule overrides — only the keys the user actually set
+        # on the equipment + shift-schedule + Saturday step. Everything
+        # else stays from the template.
+        rules_in = cfg.get("rules_overrides")
+        if isinstance(rules_in, dict) and rules_in:
+            br = dict(base.get("business_rules") or {})
+            for k, v in rules_in.items():
+                if v is None:
+                    continue
+                br[k] = v
+            base["business_rules"] = br
+
+        # Peak-season staffing: only when the user provided extras > 0.
+        peak_in = cfg.get("peak_staffing")
+        if isinstance(peak_in, dict) and int(peak_in.get("extra_workers", 0)) > 0 \
+                and isinstance(peak_in.get("months"), list) \
+                and peak_in["months"]:
+            base["peak_staffing"] = {
+                "months": list(peak_in["months"]),
+                "extra_workers": int(peak_in["extra_workers"]),
+                "temp_oph_range": list(peak_in.get("temp_oph_range") or [8.0, 15.0]),
+            }
 
         # Volume profile translation. The wizard collects per-intensity
         # actual ranges (e.g. slow=[60,100], normal=[200,300], peak=[300,440])
