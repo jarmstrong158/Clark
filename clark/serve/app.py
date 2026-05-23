@@ -65,10 +65,22 @@ def _resolve_date(s: Optional[str]) -> date:
 
 
 def build_app(agent: Any, facilities_dir: str | Path,
-              checkpoint_label: Optional[str] = None) -> FastAPI:
-    """Construct the app. `agent` is a ready ClarkAgent (weights loaded
-    once by the caller); `facilities_dir` holds the *.yaml configs."""
+              checkpoint_label: Optional[str] = None,
+              per_facility_ckpt_dir: Optional[str | Path] = None,
+              ) -> FastAPI:
+    """Construct the app. `agent` is the foundation ClarkAgent (weights
+    loaded once by the caller); `facilities_dir` holds the *.yaml configs.
+
+    `per_facility_ckpt_dir` (default: `<facilities_dir>/../checkpoints/user`)
+    is checked on each request — if `<facility_id>.pt` exists there, that
+    fine-tuned checkpoint is lazily loaded and reused for that facility,
+    so plans for a wizard-trained facility use its trained weights instead
+    of falling back to the generic foundation. Agents are cached after
+    first load (~10s warm) so subsequent calls are free."""
     fdir = Path(facilities_dir)
+    if per_facility_ckpt_dir is None:
+        per_facility_ckpt_dir = fdir.parent / "checkpoints" / "user"
+    pf_dir = Path(per_facility_ckpt_dir)
     app = FastAPI(title="Clark local inference", version="0.1.0")
     # The agent carries mutable LSTM hidden state and is reset per
     # request inside _run_one_plan_day. FastAPI runs sync handlers in
@@ -79,6 +91,37 @@ def build_app(agent: Any, facilities_dir: str | Path,
     # is.
     import threading as _threading
     _agent_lock = _threading.Lock()
+
+    # Per-facility agent cache. Keys = facility_id; values = ClarkAgent
+    # loaded from <pf_dir>/<fid>.pt. None sentinel means "checked, no
+    # fine-tune exists — use foundation". Cache survives process lifetime.
+    _facility_agents: dict[str, Any] = {}
+    _facility_agents_lock = _threading.Lock()
+
+    def _agent_for(fid: str):
+        """Return the right agent for a facility: per-facility fine-tune
+        if one exists on disk, else the foundation agent. Loads on first
+        hit, then cached."""
+        with _facility_agents_lock:
+            if fid in _facility_agents:
+                hit = _facility_agents[fid]
+                return hit if hit is not None else agent
+            ckpt = pf_dir / f"{fid}.pt"
+            if not ckpt.exists():
+                _facility_agents[fid] = None
+                return agent
+            try:
+                from clark.agent.ppo import ClarkAgent
+                loaded = ClarkAgent.load(str(ckpt))
+                _facility_agents[fid] = loaded
+                print(f"[serve] loaded fine-tuned weights for {fid!r}: "
+                      f"{ckpt.name}", flush=True)
+                return loaded
+            except Exception as e:
+                print(f"[serve] WARN failed to load {ckpt}: {e}; "
+                      f"falling back to foundation", flush=True)
+                _facility_agents[fid] = None
+                return agent
 
     # Scan order: top-level templates first, then the user/ subdir
     # where the wizard writes user-authored facility YAMLs. iterdir
@@ -135,7 +178,9 @@ def build_app(agent: Any, facilities_dir: str | Path,
 
     def _plan_for(cfg: FacilityConfig, when: date, volume: Optional[int],
                   forced_absent: Optional[set] = None,
-                  seed: Optional[int] = None) -> list[dict]:
+                  seed: Optional[int] = None,
+                  use_agent: Any = None) -> list[dict]:
+        ag = use_agent if use_agent is not None else agent
         if volume is not None:
             vol = volume
         else:
@@ -154,7 +199,7 @@ def build_app(agent: Any, facilities_dir: str | Path,
                 _t.manual_seed(seed)
             vol = _sample_volume_for_date(cfg, when)[0]
         with _agent_lock:  # serialize mutable agent state across requests
-            rows = _run_one_plan_day(cfg, agent, when, vol,
+            rows = _run_one_plan_day(cfg, ag, when, vol,
                                      forced_absent=forced_absent,
                                      seed=seed)
         return [{"worker": w, "task": t, "hustle": h} for (w, t, h) in rows]
@@ -166,10 +211,15 @@ def build_app(agent: Any, facilities_dir: str | Path,
 
     @app.get("/health")
     def health():
+        ft = []
+        if pf_dir.is_dir():
+            ft = sorted(p.stem for p in pf_dir.iterdir() if p.suffix == ".pt")
         return {
             "status": "ok",
             "checkpoint": checkpoint_label,
             "facilities_dir": str(fdir),
+            "per_facility_ckpt_dir": str(pf_dir),
+            "fine_tuned_facilities": ft,
             "ready": True,
         }
 
@@ -249,10 +299,13 @@ def build_app(agent: Any, facilities_dir: str | Path,
     def plan(req: PlanRequest):
         cfg = _load_facility(req.facility_id)
         when = _resolve_date(req.date)
+        ag = _agent_for(req.facility_id)
         return {
             "facility_id": req.facility_id,
             "date": when.isoformat(),
-            "assignments": _plan_for(cfg, when, req.volume, seed=req.seed),
+            "assignments": _plan_for(cfg, when, req.volume,
+                                     seed=req.seed, use_agent=ag),
+            "model": ("fine-tuned" if ag is not agent else "foundation"),
         }
 
     @app.post("/what_if")
@@ -271,11 +324,12 @@ def build_app(agent: Any, facilities_dir: str | Path,
         when = _resolve_date(req.date)
         seed = _stable_seed(req.facility_id, when)
         cfg = _load_facility(req.facility_id)
-        base = _plan_for(cfg, when, None, seed=seed)
+        ag = _agent_for(req.facility_id)
+        base = _plan_for(cfg, when, None, seed=seed, use_agent=ag)
 
         modified = _plan_for(cfg, when, req.volume,
                              forced_absent=set(req.absent_workers),
-                             seed=seed)
+                             seed=seed, use_agent=ag)
 
         return {
             "facility_id": req.facility_id,
@@ -310,7 +364,9 @@ def build_app(agent: Any, facilities_dir: str | Path,
 
     def _simulate_year(cfg: FacilityConfig,
                        seed: Optional[int],
-                       max_days: Optional[int] = None) -> dict:
+                       max_days: Optional[int] = None,
+                       use_agent: Any = None) -> dict:
+        ag = use_agent if use_agent is not None else agent
         """End-to-end year simulation: run the trained policy through
         ~260 work days and return the real grade distribution. The
         honest staffing-sufficiency primitive — NOT a snapshot
@@ -336,14 +392,14 @@ def build_app(agent: Any, facilities_dir: str | Path,
         # another request resetting it mid-year. `with` ensures the
         # lock releases even if the inner loop raises.
         with _agent_lock:
-            agent.reset_hidden()
+            ag.reset_hidden()
             max_ticks = 200_000   # safety cap (~year is well under this)
             ticks = 0
             while not env.is_year_done and ticks < max_ticks:
                 sd = builder.build(env.day_env)
                 mask = get_action_mask(env.day_env)
                 hmask = get_hustle_mask(env.day_env)
-                ta, ha, *_ = agent.select_action_from_dict(
+                ta, ha, *_ = ag.select_action_from_dict(
                     sd, mask, hustle_mask=hmask)
                 actions = [(i, int(ta[i]), bool(ha[i]))
                            for i in range(len(ta))]
@@ -368,13 +424,15 @@ def build_app(agent: Any, facilities_dir: str | Path,
             raise HTTPException(422, "extra_workers must be >= 0")
         cfg = _load_facility(req.facility_id)
         cfg = _with_extras(cfg, req.extra_workers)
+        ag = _agent_for(req.facility_id)
         summary = _simulate_year(cfg, seed=req.seed,
-                                 max_days=req.n_days)
+                                 max_days=req.n_days, use_agent=ag)
         return {
             "facility_id": req.facility_id,
             "extra_workers": req.extra_workers,
             "n_workers": len(cfg.workers),
             "days_run": len(summary.get("daily_summaries", [])),
+            "model": ("fine-tuned" if ag is not agent else "foundation"),
             "summary": summary,
             "note": ("real end-to-end simulation; outcome distribution "
                      "on the days run, not a snapshot projection"),
