@@ -5,9 +5,9 @@ DB, no cloud. Weights are loaded ONCE (the caller passes a ready
 `agent`); every request is load-config -> run Clark's existing,
 already-tested inference primitive -> return JSON.
 
-`/plan` and `/what_if` call `_run_one_plan_day` from `cli.main` — the
-exact path `clark plan` uses and `tests/test_plan_path.py` pins. This
-module is a thin HTTP adapter, NOT a reimplementation of inference.
+`/plan` and `/what_if` call `run_one_plan_day` from clark.inference.plan
+— the exact path `clark plan` uses and `tests/test_plan_path.py` pins.
+This module is a thin HTTP adapter, NOT a reimplementation of inference.
 
 Scope is fenced by NOTE.md / dec-029: anything beyond localhost
 inference is a new decision, never licence to rebuild the scrapped
@@ -23,8 +23,12 @@ import yaml
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-# Thin adapter: reuse the CLI's real inference path verbatim.
-from cli.main import _run_one_plan_day, _sample_volume_for_date
+# Thin adapter: reuse the shared inference primitive verbatim. (Was
+# imported from cli.main as a private symbol — relocated to its own
+# module so the server no longer reaches across a layering boundary
+# into the CLI's internals.)
+from clark.inference.plan import (run_one_plan_day,
+                                   sample_volume_for_date)
 from clark.config.schema import FacilityConfig, WorkerConfig
 
 
@@ -197,11 +201,11 @@ def build_app(agent: Any, facilities_dir: str | Path,
                 _r.seed(seed)
                 _np.random.seed(seed)
                 _t.manual_seed(seed)
-            vol = _sample_volume_for_date(cfg, when)[0]
+            vol = sample_volume_for_date(cfg, when)[0]
         with _agent_lock:  # serialize mutable agent state across requests
-            rows = _run_one_plan_day(cfg, ag, when, vol,
-                                     forced_absent=forced_absent,
-                                     seed=seed)
+            rows = run_one_plan_day(cfg, ag, when, vol,
+                                    forced_absent=forced_absent,
+                                    seed=seed)
         return [{"worker": w, "task": t, "hustle": h} for (w, t, h) in rows]
 
     def _stable_seed(fid: str, when: date) -> int:

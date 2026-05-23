@@ -43,3 +43,6 @@ clark/data/configs/user/
 
 # Profiler measurement logs (transient run artifacts)
 proflog_*.txt
+
+# Operator scratch scripts/logs (intentionally untracked)
+tmp_*
