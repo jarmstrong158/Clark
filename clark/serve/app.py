@@ -46,6 +46,27 @@ class WhatIfRequest(BaseModel):
     absent_workers: list[str] = []      # worker names forced absent
 
 
+class CompareRequest(BaseModel):
+    """Compare opening-assignment plans for N facilities on the same
+    date. Distinct from /plan (single facility) and /simulate (one
+    facility, full year): this is the cross-facility primitive — for
+    'of my warehouses, where am I most short next Monday?'."""
+    facility_ids: list[str]
+    date: Optional[str] = None              # YYYY-MM-DD; default = today
+    seed: Optional[int] = None
+
+
+class CalendarCheckRequest(BaseModel):
+    """Sanity-check a date against a facility's schedule + config:
+    is it a workday for this facility, is the month a peak month,
+    does this date fall outside the seasonal_ranges' calendar
+    coverage, etc. The chat agent calls this BEFORE planning so it
+    can warn 'your facility doesn't operate Saturdays' instead of
+    silently returning a fabricated Saturday plan."""
+    facility_id: str
+    date: str                               # required, YYYY-MM-DD
+
+
 class SimulateRequest(BaseModel):
     """Year-long end-to-end simulation. Unlike /plan and /what_if
     (which are honest about being OPENING ASSIGNMENTS only), this
@@ -310,6 +331,126 @@ def build_app(agent: Any, facilities_dir: str | Path,
             "assignments": _plan_for(cfg, when, req.volume,
                                      seed=req.seed, use_agent=ag),
             "model": ("fine-tuned" if ag is not agent else "foundation"),
+        }
+
+    @app.post("/compare")
+    def compare(req: CompareRequest):
+        """Plan N facilities for the same date in one call so the chat
+        agent can answer 'where am I most short on Monday?' without
+        chaining N /plan calls and guessing how to rank them.
+
+        Returns a per-facility row {assignments, n_workers, n_absent,
+        n_hustling, model} plus a ranking by `n_workers - n_hustling`
+        (a rough proxy for surplus capacity; lower = tighter). Honest
+        scope: still opening-assignment, NOT a simulated end-of-day
+        outcome — same as /plan."""
+        if not req.facility_ids:
+            raise HTTPException(422, "facility_ids must be non-empty")
+        if len(req.facility_ids) > 32:
+            # Sanity cap — anything larger should use /simulate per
+            # facility, not be conflated into one synchronous request.
+            raise HTTPException(422, "facility_ids capped at 32 per call")
+        when = _resolve_date(req.date)
+        seed = req.seed if req.seed is not None \
+            else _stable_seed("|".join(sorted(req.facility_ids)), when)
+
+        rows = []
+        errors = []
+        for fid in req.facility_ids:
+            try:
+                cfg = _load_facility(fid)
+            except HTTPException as e:
+                errors.append({"facility_id": fid,
+                               "status_code": e.status_code,
+                               "detail": e.detail})
+                continue
+            ag = _agent_for(fid)
+            asg = _plan_for(cfg, when, None, seed=seed, use_agent=ag)
+            n_absent = sum(1 for a in asg if a["task"] == "absent")
+            n_hustling = sum(1 for a in asg if a["hustle"])
+            n_active = len(asg) - n_absent
+            rows.append({
+                "facility_id": fid,
+                "n_workers": len(asg),
+                "n_active": n_active,
+                "n_absent": n_absent,
+                "n_hustling": n_hustling,
+                "tightness_score": n_hustling - (n_active - n_hustling),
+                "model": ("fine-tuned" if ag is not agent else "foundation"),
+                "assignments": asg,
+            })
+        # Rank: highest tightness_score first (most workers hustling
+        # relative to non-hustling → most stretched on this date).
+        ranking = sorted(rows, key=lambda r: -r["tightness_score"])
+        return {
+            "date": when.isoformat(),
+            "facilities": rows,
+            "ranking": [{"facility_id": r["facility_id"],
+                         "tightness_score": r["tightness_score"]}
+                        for r in ranking],
+            "errors": errors,
+            "note": ("opening-assignment plans per facility; tightness "
+                     "= hustling - non-hustling-active. Higher = more "
+                     "stretched. Not an end-of-day outcome projection."),
+        }
+
+    @app.post("/calendar_check")
+    def calendar_check(req: CalendarCheckRequest):
+        """Sanity-check a date against a facility config. The agent
+        calls this BEFORE /plan so it can warn instead of silently
+        planning a fake Saturday or off-calendar date.
+
+        Returns flags + a one-sentence summary the chat can quote
+        directly. Never raises on a 'bad' date — it RETURNS the
+        problem so the agent decides what to tell the user."""
+        when = _resolve_date(req.date)
+        cfg = _load_facility(req.facility_id)
+        dow = when.weekday()  # 0=Mon..6=Sun
+        month_name = ["january","february","march","april","may","june",
+                      "july","august","september","october","november",
+                      "december"][when.month - 1]
+        rules = cfg.rules
+        # Saturday/Sunday
+        is_saturday = dow == 5
+        is_sunday = dow == 6
+        flags = []
+        if is_sunday:
+            flags.append("date is a Sunday; facility schedules only "
+                         "cover Mon-Sat")
+        elif is_saturday and not rules.work_saturday:
+            flags.append("date is a Saturday but the facility is "
+                         "configured for Mon-Fri only (work_saturday=false)")
+        # Month coverage
+        if month_name not in {k.lower() for k in cfg.volume.seasonal_ranges}:
+            flags.append(f"month {month_name!r} not in this facility's "
+                         f"seasonal_ranges — volume sampling will "
+                         f"fall back to a generic default")
+        # Peak month
+        is_peak = (cfg.peak_staffing is not None and
+                   month_name in {m.lower() for m in cfg.peak_staffing.months})
+        # Summary string
+        if flags:
+            summary = " · ".join(flags)
+        elif is_peak:
+            summary = (f"OK — {when.isoformat()} is a workday for "
+                       f"{cfg.name}; note this is a configured PEAK "
+                       f"month (+{cfg.peak_staffing.extra_workers} "
+                       f"temp workers in the model).")
+        else:
+            summary = (f"OK — {when.isoformat()} is a workday for "
+                       f"{cfg.name}; standard month.")
+        return {
+            "facility_id": req.facility_id,
+            "date": when.isoformat(),
+            "weekday": ["monday","tuesday","wednesday","thursday",
+                        "friday","saturday","sunday"][dow],
+            "month": month_name,
+            "is_workday": not (is_sunday or (is_saturday and not rules.work_saturday)),
+            "is_peak_month": is_peak,
+            "is_saturday": is_saturday,
+            "is_sunday": is_sunday,
+            "flags": flags,
+            "summary": summary,
         }
 
     @app.post("/what_if")
