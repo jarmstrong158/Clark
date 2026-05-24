@@ -12,7 +12,7 @@ Clark learns the underlying dynamics of warehouse operations (picking and packin
 
 Where its predecessor [Jack](https://github.com/jarmstrong158/Jack) was a single-facility PPO + LSTM agent operating on a fixed 7-worker, 14-action state vector, Clark is built around a transformer + LSTM hybrid that handles **variable** numbers of workers and tasks. The same model weights generalize across facilities.
 
-> **Status.** Foundation pre-training completed at 15 000 episodes (~11 h on a single RTX 5070 Ti, clean termination, value head stable). The architecture, training loop, fine-tune workflow, config schema, CLI, and setup wizard are stable. **Trained weights and managed deployments are a commercial offering.** The source is open for review under [PolyForm Noncommercial 1.0.0](LICENSE); for production or commercial use see [Use Clark](#use-clark--commercial-access). A fully-local natural-language interface, [clark-mcp](https://github.com/jarmstrong158/clark-mcp), is built on top via `clark serve` (see [below](#natural-language-interface-clark-mcp)).
+> **Status.** Foundation pre-training completed at 15 000 episodes (~11 h on a single RTX 5070 Ti, clean termination, value head stable). The architecture, training loop, fine-tune workflow, config schema, CLI, setup wizard, and operations dashboard are stable. **Trained weights and managed deployments are a commercial offering.** The source is open for review under [PolyForm Noncommercial 1.0.0](LICENSE); for production or commercial use see [Use Clark](#use-clark--commercial-access).
 
 ---
 
@@ -21,10 +21,10 @@ Where its predecessor [Jack](https://github.com/jarmstrong158/Jack) was a single
 1. [Why Clark](#why-clark)
 2. [Architecture](#architecture) (full detail: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md))
 3. [Operations dashboard](#operations-dashboard)
-4. [Natural-language interface (clark-mcp)](#natural-language-interface-clark-mcp)
-5. [Pre-train then fine-tune workflow](#pre-train-then-fine-tune-workflow)
-6. [Quickstart](#quickstart)
-7. [CLI](#cli)
+4. [Pre-train then fine-tune workflow](#pre-train-then-fine-tune-workflow)
+5. [Quickstart](#quickstart)
+6. [CLI](#cli)
+7. [MCP integration (Claude Desktop, Cursor, ...)](#mcp-integration-claude-desktop-cursor-)
 8. [Configuring a facility](#configuring-a-facility)
 9. [Live training dashboard](#live-training-dashboard) (detail: [docs/DASHBOARD.md](docs/DASHBOARD.md))
 10. [Performance and Validated on Jack](#performance-and-status)
@@ -61,7 +61,7 @@ Key hyperparameters: `d_model=512`, 4 self-attention layers, 1 cross-attention, 
 
 Launch with `clark ops` (or double-click `Run Clark Dashboard.bat`). The dashboard talks directly to `clark serve` from the browser, no LLM in the loop, no prompt parsing. Forms over the trained policy, results rendered as tables.
 
-Six tabs cover the common operator questions: Plan, Compare, Calendar check, Morning briefing, Training (live progress for any running fine-tune), and a small admin row.
+Five tabs cover the common operator questions: Plan, Compare, Calendar check, Morning briefing, and Training (live progress for any running fine-tune). A small admin row sits beside the tab bar.
 
 ### Plan a day
 
@@ -86,81 +86,6 @@ Per-worker timeline showing exactly when Clark switches each worker between task
 Top card: 20-sample Monte Carlo on the day's actual scenario (date + volume override + absences). Grade distribution stacked bar plus completion rate stats (mean, p10, p90, fraction of runs that ship 100%). One-line headline interprets the result ("Strong, A+B 85%" / "Risky, F 30%" / etc.).
 
 Bottom card: "Find recommended staffing" walks the roster up from current (+0) until A+B hits 80%. Each row in the trajectory table shows what the grade distribution looks like at that extra-worker count. The first row that hits the target is highlighted. Tells you in one number how many people you'd need to hire (or borrow) to reliably ship the scenario you're asking about.
-
----
-
-## Natural-language interface (clark-mcp)
-
-Clark outputs staffing decisions. **[clark-mcp](https://github.com/jarmstrong158/clark-mcp)**
-makes them usable in plain English, fully offline. Separate companion repo:
-
-```
-operator (plain English) -> local LLM (Hermes-3-8B, Ollama)
-                                  |  tool calls (MCP)
-                                  v
-                            clark-mcp server --HTTP--> clark serve
-                                                            |
-                                                            v  real Clark inference
-```
-
-It is the concrete consumer that `clark serve` exists for (the
-localhost inference API, [`clark/serve/app.py`](clark/serve/app.py)).
-No cloud, no API cost, no data egress.
-
-### Training a local LLM to drive Clark honestly
-
-The interesting work here is *teaching a small local model to use
-Clark truthfully*. A base Hermes-3-8B is domain fine-tuned (QLoRA)
-so it grounds every number in tool output, refuses rather than
-fabricates on tool error, and never claims to know *why* the RL
-policy chose something (Clark emits actions, not reasons). The
-pipeline is deliberately methodical, not a one-shot prompt:
-
-- **Dataset from the real system, not hand-authored.** Every training
-  example's tool payload is *captured live* from `clark serve` driving
-  real Clark inference. The model can never learn a tool contract
-  that doesn't exist. Assistant turns are derived deterministically
-  from the captured payload (accurate by construction).
-- **Quality-gated, not dumped.** A hand-curated gold set is the bar.
-  The generated set is audited against it and rebalanced so no
-  behavior dominates and every target behavior (incl. honest refusal
-  and non-introspection) is represented. A first skewed draft was
-  rejected and rebuilt rather than shipped.
-- **A held-out eval gate before any training.** A zero-leakage
-  held-out split + automatic metrics (tool selection, argument
-  accuracy, grounding fidelity, honest-failure, non-introspection)
-  produce a recorded base-model baseline. The fine-tune must *beat
-  that bar without regressing the behaviors already good*. Measured,
-  not vibes.
-- **Train == inference, provably.** One shared tool-calling protocol
-  is the single source of truth for both training data and runtime
-  client, so the bytes the model trains on are byte-identical to what
-  it sees in production.
-
-<!-- AUTO:CLARK-MCP-STATUS-BEGIN -->
-Status: clark-mcp is in active development. **Built and deployed
-locally:** the 7-tool MCP layer (incl. `clark_staffing_sweep`); a
-held-out teacher-forced eval gate (n=173, eight metrics) plus an
-autoregressive live-probe suite (`tools/live_audit.py`); QLoRA
-fine-tune (`clark-hermes3:ft`) deployed locally. Latest eval vs
-base: format_validity 0.000 -> **1.000**,
-tool_selection 0.719 -> **0.977**,
-tool_args 0.520 -> **0.760**,
-numeric_grounding 0.071 -> **1.000**;
-honest_failure / grounding / non_introspection held at ~1.000.
-Runtime ships with schema-constrained decoding on by default
-(`CLARK_CONSTRAINED=1`) so the `<tool_call>` envelope is enforced
-at decode time and `facility_id` is constrained to the live enum.
-No fabricated facility names possible. A local web UI with a
-**staffing-sufficiency dashboard** (sweep `+0...+N` extra workers and
-see grade distribution at each roster size, same `/simulate`
-primitive that powered the Jack head-to-head). **Not done:**
-no public weight release (that's the commercial product). clark-mcp
-is **not** required to train or run Clark; Clark is fully usable
-via the CLI and wizard alone. Full detail in the
-[clark-mcp](https://github.com/jarmstrong158/clark-mcp) repo's
-README and `docs/ARCHITECTURE.md`.
-<!-- AUTO:CLARK-MCP-STATUS-END -->
 
 ---
 
@@ -285,10 +210,66 @@ clark pretrain --episodes 15000    # Foundation pre-train (~11 h on RTX 5070 Ti)
 clark finetune --config my.yaml --base clark_foundation.pt --episodes 50
 clark plan --config my.yaml --model my_agent.pt --date 2026-06-01
 clark serve --model my_agent.pt --facilities-dir clark/data/configs --port 8000
+clark mcp                          # MCP stdio server (Claude Desktop, Cursor, ...)
 clark dashboard                    # Live training metrics in browser
 ```
 
-`clark serve` exposes stateless read routes (`/health`, `/facilities`, `/facility/{id}`, `/capabilities`, `/plan`, `/plan_schedule`, `/plan_outcome`, `/what_if`, `/compare`, `/calendar_check`, `/simulate`) consumed by the ops dashboard and [clark-mcp](https://github.com/jarmstrong158/clark-mcp). Layout: standard Python package; browse on GitHub.
+`clark serve` exposes stateless read routes (`/health`, `/facilities`, `/facility/{id}`, `/capabilities`, `/plan`, `/plan_schedule`, `/plan_outcome`, `/what_if`, `/compare`, `/calendar_check`, `/simulate`) consumed by the ops dashboard and by `clark mcp` (see below). Layout: standard Python package; browse on GitHub.
+
+---
+
+## MCP integration (Claude Desktop, Cursor, ...)
+
+`clark mcp` is a [Model Context Protocol](https://modelcontextprotocol.io/)
+stdio server. It lets any MCP-aware host (Claude Desktop, Cursor,
+Continue, Zed, ...) drive Clark in natural language using the host's
+own model. Clark does not ship an LLM; the host's model does the
+talking, Clark provides the staffing tools.
+
+Tools exposed: `clark_list_facilities`, `clark_facility_info`,
+`clark_capabilities`, `clark_get_plan`, `clark_what_if`,
+`clark_compare_facilities`, `clark_calendar_check`,
+`clark_plan_outcome`, `clark_find_recommended_staffing`. Every call
+delegates to a localhost `clark serve` over HTTP, so `clark serve`
+must be running with a trained checkpoint first.
+
+Install and wire up:
+
+```bash
+pip install -e ".[mcp,serve]"
+```
+
+Claude Desktop (`%APPDATA%\Claude\claude_desktop_config.json` on
+Windows, `~/Library/Application Support/Claude/claude_desktop_config.json`
+on macOS):
+
+```json
+{
+  "mcpServers": {
+    "clark": {
+      "command": "clark",
+      "args": ["mcp"],
+      "env": {"CLARK_API_URL": "http://127.0.0.1:8000"}
+    }
+  }
+}
+```
+
+Cursor (`~/.cursor/mcp.json` or workspace `.cursor/mcp.json`) and
+Continue / Zed use the same shape. Restart the host; the Clark
+tools appear alongside the host's other tools.
+
+Honest scope: this is the integration shim. The host's model decides
+when to call which tool and how to phrase the answer; the tools
+themselves only return data from `clark serve`. The MCP server
+**cannot** invent plan content, since every assignment comes from
+the live API.
+
+> **History.** The MCP server used to live in a separate `clark-mcp`
+> repo that also shipped a Hermes-3 + Ollama local-LLM client and a
+> QLoRA fine-tune pipeline. That branch was retired when the
+> operations dashboard became the primary UX; the integration shim
+> consolidated here is what survives. The old repo is archived.
 
 ---
 
@@ -322,7 +303,7 @@ Foundation pre-training **completed** at episode 15 000 (target reached, clean t
 | F-rate (last 500 days) | ~20% |
 | v_loss sliding-100 median (stability) | 0.019 (alarm > 0.5) |
 
-**Honest read of that F-rate.** ~60% of F-days at base rosters miss by <5% of orders with the policy already pushing (100% OT use, restock kept full). Narrow infeasibility on hard synthetic configs, deliberately *not* reward-hacked away. This is exactly what `clark-mcp`'s staffing-sufficiency sweep is built to *surface* truthfully (and the same data shows +2 workers turns the easy facilities' year-grade C to B).
+**Honest read of that F-rate.** ~60% of F-days at base rosters miss by <5% of orders with the policy already pushing (100% OT use, restock kept full). Narrow infeasibility on hard synthetic configs, deliberately *not* reward-hacked away. The ops dashboard's "Find recommended staffing" button surfaces this directly: walk +0, +1, +2 extra workers and watch the grade distribution shift, no reward tuning required.
 
 For reference, **Jack** (Clark's single-facility predecessor that shares the reward structure and the PPO loop) achieved the following on its target facility:
 
@@ -359,9 +340,10 @@ What this says, plainly:
 - **50 episodes of fine-tuning on Jack's config more than halves the F-rate (42.5 to 16.5%), pushes A-days from 37 to 46%, and lifts A+B past 83%.** A+B exceeds Jack's pure-A rate. Pure A is still 12 points behind Jack; closing that gap is what additional fine-tune episodes buy, with diminishing returns past ~200. The wizard defaults to the 50-episode floor for fastest path to a useful model, and exposes the count as a user-editable field for deeper runs.
 - **The headline efficiency claim holds.** Clark + 50 fine-tune episodes (~0.2 simulated years) reaches a *better* failure rate and *broader* high-grade share than Jack did with ~9 simulated years from scratch. The foundation-model thesis isn't hand-waving; these are real, measured numbers from a head-to-head on Jack's own facility.
 
-The clark-mcp companion's staffing-sufficiency dashboard renders the
-same `/simulate` data interactively for any facility + roster sweep,
-so you can do this experiment for yourself on any config.
+The ops dashboard's "Find recommended staffing" button runs the same
+roster sweep interactively against any facility + date + volume +
+absence scenario, so you can reproduce this experiment yourself on
+any config.
 
 ---
 
@@ -377,7 +359,7 @@ The **trained foundation checkpoint** (`clark_foundation.pt`) and **production d
 
 - **Trained foundation weights.** Skip the ~11 h pre-train; start fine-tuning on your facility in minutes.
 - **Per-facility fine-tune service.** Bring your roster + volume history; we deliver a fine-tuned checkpoint matched to your operation.
-- **Hosted inference / managed deployment.** `clark serve` running with the trained foundation, plus the [clark-mcp](https://github.com/jarmstrong158/clark-mcp) natural-language interface (chat + staffing-sufficiency dashboard) for your team.
+- **Hosted inference / managed deployment.** `clark serve` running with the trained foundation, plus the operations dashboard (or an MCP-host integration via `clark mcp`) for your team.
 - **Operational support and integration.** Facility config authoring (Clark's `wizard` is the on-ramp), WMS integration if needed, ongoing monitoring.
 
 For commercial access: **open a GitHub Issue** in this repo with the label `commercial-access` and a one-line description of your use case. (A direct contact channel is being set up; the Issue route is the canonical channel until then.)
@@ -404,7 +386,7 @@ Clark is a successor to Jack, not a wrapper around it. The two share design DNA 
 
 ## Changelog
 
-The architecture-and-training and infrastructure milestones (variable-shape transformer, IPPO-style per-worker ratio, symlog value targets, completion-dominant reward, foundation pre-train completion, Validated-on-Jack head-to-head, the wizard's Quick/Advanced split, clark-mcp + the auto-relaunch resilience layer, the wizard's 50-episode default, the operations dashboard, ...) live in [CHANGELOG.md](CHANGELOG.md).
+The architecture-and-training and infrastructure milestones (variable-shape transformer, IPPO-style per-worker ratio, symlog value targets, completion-dominant reward, foundation pre-train completion, Validated-on-Jack head-to-head, the wizard's Quick/Advanced split, the wizard's 50-episode default, the operations dashboard, `clark mcp` MCP-host integration, ...) live in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 

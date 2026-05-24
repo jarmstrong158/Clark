@@ -814,7 +814,49 @@ def build_parser() -> argparse.ArgumentParser:
     p_srv.add_argument("--port", type=int, default=8000,
                        help="Port (bound to 127.0.0.1 only; default 8000).")
 
+    # mcp (Model Context Protocol stdio server — lets any MCP host
+    # like Claude Desktop / Cursor / Continue / Zed drive Clark in
+    # natural language using its own model)
+    sub.add_parser("mcp",
+                   help="Run the MCP stdio server (Claude Desktop, "
+                        "Cursor, Continue, Zed, etc.). Wraps clark "
+                        "serve; CLARK_API_URL controls the target "
+                        "(default http://127.0.0.1:8000).")
+
     return parser
+
+
+# ── MCP server (stdio) ───────────────────────────────────────────────────────
+
+def cmd_mcp(args: argparse.Namespace):
+    """Run the Model Context Protocol stdio server.
+
+    Lets any MCP-aware host (Claude Desktop, Cursor, Continue, Zed,
+    ...) drive Clark in natural language using its own model. This
+    process speaks MCP on stdin/stdout; it does NOT host an LLM
+    itself. Every tool delegates to a localhost `clark serve` over
+    HTTP (CLARK_API_URL, default http://127.0.0.1:8000), so
+    `clark serve` must already be running with a trained checkpoint.
+
+    Wire it up by adding to the host's MCP config, e.g. for Claude
+    Desktop (~/Library/Application Support/Claude/claude_desktop_config.json
+    on macOS, %APPDATA%/Claude/claude_desktop_config.json on Windows):
+
+        {"mcpServers": {"clark": {
+            "command": "clark", "args": ["mcp"],
+            "env": {"CLARK_API_URL": "http://127.0.0.1:8000"}
+        }}}
+    """
+    try:
+        from clark.mcp.server import main as _mcp_main
+    except SystemExit:
+        # The server module raises SystemExit with a clean message
+        # when the `mcp` package isn't installed; re-raise.
+        raise
+    except ImportError as e:
+        _die(f"Failed to load MCP server: {e}. "
+             f"Install with: pip install -e \".[mcp]\"")
+    _mcp_main()
 
 
 # ── Serve (minimal local inference API) ───────────────────────────────────────
@@ -1499,6 +1541,7 @@ def main():
         "ops":       cmd_ops,
         "wizard":    cmd_wizard,
         "serve":     cmd_serve,
+        "mcp":       cmd_mcp,
     }
 
     fn = dispatch.get(args.command)
