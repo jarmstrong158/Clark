@@ -83,10 +83,18 @@ if errorlevel 1 (
 )
 
 echo Launching ops dashboard on http://127.0.0.1:8092 ...
-echo Browser will open automatically. Press Ctrl-C here to stop.
+echo Press Ctrl-C in this window to stop.
 echo.
 
-python -m cli.main ops --port 8092
+REM Open the browser tab explicitly via Windows `start` rather than
+REM relying on Python's webbrowser.open — that one silently no-ops
+REM when launched from a bat-spawned cmd on some Windows setups,
+REM which is why users saw the server come up but no tab open.
+REM Run the dashboard with --no-browser to avoid a double-open if
+REM webbrowser DID happen to fire.
+start "" "http://127.0.0.1:8092/"
+
+python -m cli.main ops --port 8092 --no-browser
 
 if errorlevel 1 (
     echo.
