@@ -156,8 +156,26 @@
       "help": "Only shown if your facility runs filler tasks (side projects, training, returns processing, loading prep, quality checks, receiving). Orders ALWAYS take priority — this question is just about how aggressive the pause is. The 'orders sometimes miss their ship date' option has been removed; that's not a tradeoff Clark should be making.",
       "options": [
         {
+          "id": "light",
+          "label": "Light crunch — side work runs through most pressure",
+          "subtitle": "Clark only pulls workers off filler work when the queue is severely backed up. Side work has real reward; pauses are reluctant. Good when filler tasks have independent business value (training has to happen, returns can't pile up indefinitely).",
+          "weight_deltas": {
+            "per_filler_unit": 0.25,
+            "side_project_during_crunch": -2.0
+          }
+        },
+        {
+          "id": "moderate",
+          "label": "Medium crunch — side work pauses on noticeable pressure",
+          "subtitle": "Clark starts reassigning filler workers as soon as the queue grows beyond comfortable — earlier than 'balanced', but doesn't drop everything. Modest filler reward, real pause penalty.",
+          "weight_deltas": {
+            "per_filler_unit": 0.15,
+            "side_project_during_crunch": -3.5
+          }
+        },
+        {
           "id": "balanced",
-          "label": "Pause side work when pressure builds, resume when caught up",
+          "label": "Balanced — pause side work when pressure builds, resume when caught up",
           "subtitle": "Workers shift off side work and onto order flow when the queue builds; side work resumes once the queue is manageable. This is where most operations land.",
           "weight_deltas": {
             "per_filler_unit": 0.1,
@@ -166,7 +184,7 @@
         },
         {
           "id": "strict",
-          "label": "Side work ONLY when zero orders are pending",
+          "label": "Aggressive — side work ONLY when zero orders are pending",
           "subtitle": "Any backlog at all halts non-order tasks completely. Strongest service guarantee; workers may sit idle on light days when there's nothing in the queue.",
           "weight_deltas": {
             "per_filler_unit": 0.0,
