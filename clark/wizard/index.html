@@ -843,8 +843,29 @@ function goToStep(n) {
   if (n === 2) initTasksStep();
   if (n === 3) initWorkersStep();
   if (n === 4) initEquipmentStep();
+  // Re-render the pain-points questions every time the user lands on
+  // step 6: the filler_tolerance question's visibility depends on
+  // state.tasksEnabled (set on step 2). Without a re-render, the DOM
+  // shows the stale set from page load and the Review button's
+  // _visibleQuestions() check disagrees with what's on screen — the
+  // user fills in every visible card, button stays disabled because
+  // a hidden question wasn't answered.
+  if (n === 6) initPainPointsStep();
   if (n === 6.5) { state.breaksVisited = true; initBreaksStep(); }
   persistDraft();
+}
+
+function initPainPointsStep() {
+  renderQuestions();
+  // Re-apply saved selections so cards with state.answers entries
+  // render as `.selected` after the re-render.
+  Object.entries(state.answers || {}).forEach(([qid, oid]) =>
+    selectAnswer(qid, oid, false));
+  // Make sure the button enabled/disabled state reflects current
+  // truth even if the user didn't click anything this visit.
+  const allAnswered = _visibleQuestions().every(q => state.answers[q.id]);
+  const btn = document.getElementById("step6Next");
+  if (btn) btn.disabled = !allAnswered;
 }
 
 // Restore previously-entered break values + ensure persistence.
@@ -1091,6 +1112,7 @@ function renderQuestions() {
   qs.forEach(q => {
     const block = document.createElement("div");
     block.style.marginBottom = "32px";
+    block.id = `qblock_${q.id}`;   // for scroll-to + highlight on validation
     block.innerHTML = `
       <h3 style="font-size: 16px; margin: 0 0 4px 0;">${escapeHtml(q.prompt)}</h3>
       ${q.help ? `<p style="color: var(--muted); font-size: 13px; margin: 0 0 12px 0;">${escapeHtml(q.help)}</p>` : ""}
