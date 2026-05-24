@@ -65,6 +65,27 @@
   .intro-panel .tab-list span{font-size:11px;padding:3px 10px;
     background:#1a2030;color:#9ec5fe;border-radius:10px;
     font-family:ui-monospace,monospace}
+  details.guide{background:#10141d;border:1px solid var(--border);
+    border-radius:8px;padding:0;margin-bottom:14px;font-size:13px}
+  details.guide > summary{padding:9px 14px;cursor:pointer;
+    color:var(--ink-dim);font-weight:500;list-style:none;user-select:none;
+    display:flex;align-items:center;gap:8px}
+  details.guide > summary::before{content:"▸";color:var(--accent);
+    font-size:10px;transition:transform .15s}
+  details.guide[open] > summary::before{transform:rotate(90deg)}
+  details.guide > summary:hover{color:var(--ink)}
+  details.guide .body{padding:0 18px 14px 30px;color:var(--ink-dim);
+    line-height:1.6}
+  details.guide .body h5{margin:10px 0 4px 0;font-size:12px;
+    text-transform:uppercase;letter-spacing:.04em;color:var(--muted);
+    font-weight:600}
+  details.guide .body ul{margin:4px 0 0 0;padding-left:18px}
+  details.guide .body li{margin-bottom:3px}
+  details.guide .body code{background:#1a2030;padding:1px 5px;border-radius:3px;
+    font-size:12px;color:#9ec5fe}
+  details.guide .body .kbd{background:#1a2030;color:var(--ink);
+    padding:1px 6px;border-radius:3px;font-family:ui-monospace,monospace;
+    font-size:11px;border:1px solid #2a2f3a}
   form.row{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;
     margin-bottom:16px;padding:16px;background:var(--panel);
     border:1px solid var(--border);border-radius:10px;
@@ -208,7 +229,24 @@
   </div>
 
   <h2>Opening assignment for a single day</h2>
-  <div class="blurb">Pick the facility and date. Optionally override volume. Returns each worker's task and whether they should hustle. Honest scope: opening-assignment, not an end-of-day projection.</div>
+  <div class="blurb">Pick a facility and date. Returns Clark's recommended task assignment for every worker on that shift.</div>
+  <details class="guide">
+    <summary>How to read this</summary>
+    <div class="body">
+      <h5>What you get</h5>
+      <ul>
+        <li><b>Worker</b> — name from the facility config</li>
+        <li><b>Task</b> — what Clark wants them doing at shift start (<code>pick</code>, <code>pack</code>, <code>restock</code>, <code>management</code>, <code>idle</code>, etc.). <code>absent</code> = called off / forced out</li>
+        <li><b>Hustle</b> — <code>yes</code> means hard pace; <code>no</code> means normal pace. Hustle is a real cost Clark pays only when needed</li>
+      </ul>
+      <h5>Scope (honest)</h5>
+      <ul>
+        <li>This is an <b>opening</b> assignment — what Clark would do at 9 AM. It's not a simulated end-of-day result. For projected outcomes, use <b>Sweep</b></li>
+        <li><b>Volume override</b> lets you ask "what if today's volume is 400 instead of the season-sampled value?" Leave blank for normal</li>
+        <li><b>Seed</b> makes the plan reproducible. Same seed → same plan, exactly</li>
+      </ul>
+    </div>
+  </details>
   <form class="row" id="planForm">
     <label>Facility<select id="planFac" required></select></label>
     <label>Date (YYYY-MM-DD)<input type="date" id="planDate" required></label>
@@ -222,7 +260,27 @@
 <!-- ─── WHAT-IF ─────────────────────────────────────────── -->
 <section class="tab" data-tab="whatif">
   <h2>Base vs. modified plan side-by-side</h2>
-  <div class="blurb">Same opening-assignment plan under two scenarios. Use this to ask "what if X is out?" or "what if volume doubles?". Both runs share a deterministic seed so they differ ONLY by your modification.</div>
+  <div class="blurb">Compare two plans for the same facility + date. The "modified" run absents specific workers and/or overrides volume; the "base" is what would happen with nothing changed.</div>
+  <details class="guide">
+    <summary>How to read this</summary>
+    <div class="body">
+      <h5>What you get</h5>
+      <ul>
+        <li>One row per worker; columns: <b>Base task / Base hustle</b> vs <b>Mod task / Mod hustle</b></li>
+        <li>Rows that <b>actually changed</b> are highlighted green. If nothing's highlighted, your modification had no effect on the plan (Clark re-routed around it without disruption — or your worker name didn't match)</li>
+        <li>An explicit <b>⚠ warning</b> appears at the top when base==modified — usually means a typo in the absence list or volume already at the regime boundary</li>
+      </ul>
+      <h5>How it differs from chaining two Plans</h5>
+      <ul>
+        <li>Both runs share a deterministic seed, so they differ <b>only</b> by your modification. No episode-noise pollution</li>
+        <li>Absences are <b>deterministic</b> here — not subject to the random call-off roll Plan uses</li>
+      </ul>
+      <h5>What it doesn't tell you</h5>
+      <ul>
+        <li>It's still opening-assignment, not a simulated end-of-day result. "Worker D is out, plan looks identical" doesn't mean the day will finish identically — Clark might just delay the impact</li>
+      </ul>
+    </div>
+  </details>
   <form class="row" id="whatifForm">
     <label>Facility<select id="wfFac" required></select></label>
     <label>Date<input type="date" id="wfDate" required></label>
@@ -238,7 +296,29 @@
 <!-- ─── COMPARE ─────────────────────────────────────────── -->
 <section class="tab" data-tab="compare">
   <h2>Cross-facility tightness ranking</h2>
-  <div class="blurb">Plan N facilities on the same date, rank by who's most stretched. Use for "where am I shortest on Monday?". Higher tightness = more workers hustling relative to non-hustling.</div>
+  <div class="blurb">Plan N facilities for the same date in one shot and rank them. Use to answer "of my warehouses, where am I shortest on Monday?".</div>
+  <details class="guide">
+    <summary>How to read this</summary>
+    <div class="body">
+      <h5>The tightness formula</h5>
+      <ul>
+        <li><code>tightness = hustling − (active workers NOT hustling)</code></li>
+        <li><b>Positive</b> = more workers hustling than coasting → <b>stretched</b>, short-staffed for the day's volume</li>
+        <li><b>Negative</b> = plenty of slack → <b>over-staffed</b> for the day</li>
+        <li><b>Zero</b> = balanced</li>
+      </ul>
+      <h5>The ranking</h5>
+      <ul>
+        <li>Sorted <b>highest tightness first</b>. Top row = where to send a temp worker</li>
+        <li>The <b>Model</b> column shows whether each facility used its own fine-tuned weights (<code>fine-tuned</code>) or the generic foundation (<code>foundation</code>). Fine-tuned facilities often show lower tightness because the policy learned how to ship the day with less hustle</li>
+      </ul>
+      <h5>What it doesn't tell you</h5>
+      <ul>
+        <li><b>Absent is always 0</b> here — this is a clean roster snapshot, not a what-if. For absences, use the <b>What-if</b> tab</li>
+        <li>It's opening-assignment per facility, not an end-of-day outcome. A high-tightness facility might still finish cleanly; a low-tightness one can still F if something breaks. For projected outcomes use <b>Sweep</b></li>
+      </ul>
+    </div>
+  </details>
   <form class="row" id="compareForm">
     <label style="min-width:520px">Facilities <span style="color:var(--muted);font-size:11px">(check any number)</span>
       <div class="checkboxes" id="cmpFacs"><span class="empty" style="color:var(--muted);font-size:12px">loading…</span></div>
@@ -252,7 +332,29 @@
 <!-- ─── SWEEP ──────────────────────────────────────────── -->
 <section class="tab" data-tab="sweep">
   <h2>Staffing-sufficiency sweep</h2>
-  <div class="blurb">Real end-to-end simulation at multiple roster sizes. Each bar is the daily-grade distribution over a sim year. Use to answer "would hiring 2 more workers help?". Slow — runs the trained policy for many days per roster step.</div>
+  <div class="blurb">Run the trained policy through many simulated days at different roster sizes. Returns the daily-grade distribution at each step. Use to answer "would hiring 2 more workers actually help?".</div>
+  <details class="guide">
+    <summary>How to read this</summary>
+    <div class="body">
+      <h5>The bars</h5>
+      <ul>
+        <li>One stacked bar per roster step (e.g. <code>+0</code>, <code>+1</code>, <code>+2</code> extras over the base roster)</li>
+        <li>Each bar shows the daily-grade mix: <span class="kbd" style="background:#7cb342;color:#0f1115">A</span> = ship-clean + management OK, <span class="kbd" style="background:#aed581;color:#0f1115">B</span> = ship-clean with minor demerits, <span class="kbd" style="background:#ffb74d;color:#0f1115">C</span> / <span class="kbd" style="background:#ff8a65;color:#0f1115">D</span> / <span class="kbd" style="background:#e57373;color:#0f1115">F</span> = increasingly bad days (F = orders missed)</li>
+        <li>You want the <b>green band as wide as possible</b> and the F slice as narrow as possible</li>
+      </ul>
+      <h5>How to use the result</h5>
+      <ul>
+        <li>If the bars are <b>roughly identical</b> across roster sizes, you're past the elbow — hiring more won't help (capacity is bottlenecked elsewhere)</li>
+        <li>If +1 worker dramatically increases A and shrinks F, that's your minimum viable roster</li>
+        <li>The smallest extras count where the grade mix plateaus is the cheapest "sufficient" answer</li>
+      </ul>
+      <h5>Scope</h5>
+      <ul>
+        <li>This is a <b>real end-to-end simulation</b>, not a snapshot. Each bar is N days of actual sim → real outcome distribution on the days run</li>
+        <li><b>Slow on purpose.</b> Defaults to 40 days/step × 5 steps = 200 days. Bump to 261 (full year) for tightest stats; drop to 20 for quick sanity checks</li>
+      </ul>
+    </div>
+  </details>
   <form class="row" id="sweepForm">
     <label>Facility<select id="swFac" required></select></label>
     <label>Extras steps<input type="text" id="swSteps" value="0,1,2,3,4" pattern="^\d+(,\d+)*$"></label>
@@ -265,7 +367,23 @@
 <!-- ─── CALENDAR ───────────────────────────────────────── -->
 <section class="tab" data-tab="calendar">
   <h2>Workday sanity check</h2>
-  <div class="blurb">Before planning a date, check whether it's actually a workday for that facility. Flags Saturday on Mon-Fri facilities, Sundays, off-calendar months, peak-staffing months. Use this when a date "feels wrong."</div>
+  <div class="blurb">Verify a date is actually a workday for a facility before planning it. Refuses to silently plan a fake Saturday on a Mon-Fri site.</div>
+  <details class="guide">
+    <summary>How to read this</summary>
+    <div class="body">
+      <h5>What you get</h5>
+      <ul>
+        <li><b>Workday badge</b>: green = real workday, orange = not (Sunday, or Saturday on a Mon-Fri facility)</li>
+        <li><b>Weekday + month</b> + flags like <b>peak month</b> (the facility's configured peak-staffing window)</li>
+        <li>A <b>summary sentence</b> the chat would quote verbatim to a user</li>
+      </ul>
+      <h5>When to use it</h5>
+      <ul>
+        <li>Before planning a date that "feels wrong" — Saturday for a 5-day facility, a holiday, an off-calendar month</li>
+        <li>To check whether a facility's configured peak season is in effect for a given date (extra workers will be in the model that day)</li>
+      </ul>
+    </div>
+  </details>
   <form class="row" id="calendarForm">
     <label>Facility<select id="calFac" required></select></label>
     <label>Date<input type="date" id="calDate" required></label>
@@ -277,7 +395,29 @@
 <!-- ─── TRAINING ──────────────────────────────────────── -->
 <section class="tab" data-tab="training">
   <h2>Training runs</h2>
-  <div class="blurb">Live status of every fine-tune (and the foundation) detected on disk. Auto-refreshes every 5 seconds. Each card shows progress, ETA, elapsed time, and the most recent average reward. "Alive" = trainer heartbeat seen within the last 2 minutes; older = treated as done or crashed.</div>
+  <div class="blurb">Live progress for every fine-tune detected on disk, auto-refreshing every 5 seconds. One card per run; bar shows percent complete + ETA.</div>
+  <details class="guide">
+    <summary>How to read this</summary>
+    <div class="body">
+      <h5>Status pill</h5>
+      <ul>
+        <li><b>running</b> (green border) — heartbeat seen within the last 2 minutes</li>
+        <li><b>complete</b> (blue border) — finished cleanly; total time shown</li>
+        <li><b>stopped</b> (red border) — heartbeat went stale without finishing. Either killed mid-run, crashed, or the trainer is paused</li>
+      </ul>
+      <h5>The numbers</h5>
+      <ul>
+        <li><b>ETA</b> is linear extrapolation: <code>(elapsed / current_episode) × (target − current)</code>. Reasonable for steady-rate training; can be off if the per-episode time changes (warmup, GPU contention)</li>
+        <li><b>Elapsed</b> is wall-clock since the run started, not including time the process was killed and restarted</li>
+        <li><b>Last avg reward</b> is the most recent episode's average reward — only shown if the trainer reports it (foundation has none; fine-tunes do)</li>
+      </ul>
+      <h5>Where the data comes from</h5>
+      <ul>
+        <li>Scanned from <code>clark/data/checkpoints/user/logs_*/training_metrics.json</code> + the foundation's pretrain dir</li>
+        <li>Polling pauses when you leave this tab — no background network from other tabs</li>
+      </ul>
+    </div>
+  </details>
   <form class="row" id="trainForm">
     <label>Auto-refresh
       <select id="trAuto">
@@ -295,7 +435,29 @@
 <!-- ─── BRIEFING ───────────────────────────────────────── -->
 <section class="tab" data-tab="briefing">
   <h2>Morning briefing — all facilities</h2>
-  <div class="blurb">For each configured facility on the given date: check the calendar, pull the plan, flag risk (>50% hustling, >25% absent, calendar flags). Ranked most-at-risk first. Same heuristics as <code>clark-mcp-briefing</code> CLI.</div>
+  <div class="blurb">A one-page snapshot for the day: for every facility, calendar-check the date, pull the plan, flag risk. Ranked most-at-risk first.</div>
+  <details class="guide">
+    <summary>How to read this</summary>
+    <div class="body">
+      <h5>Per-facility card</h5>
+      <ul>
+        <li><b>⚠ (orange border)</b> = at least one risk flag fired. <b>• (grey)</b> = quiet day. <b>— (dim)</b> = not a workday for this facility</li>
+        <li><b>active / hustling / absent</b> = headcount snapshot</li>
+        <li><b>peak month</b> badge appears for facilities in their configured peak-staffing window on this date</li>
+      </ul>
+      <h5>Risk heuristics</h5>
+      <ul>
+        <li><b>&gt;50% of active workers hustling</b> — schedule is tight</li>
+        <li><b>&gt;25% of roster absent</b> — short-handed</li>
+        <li>Any <b>calendar</b> flag passes through (e.g. Saturday on a Mon-Fri site)</li>
+      </ul>
+      <h5>Notes</h5>
+      <ul>
+        <li>Same heuristics as the <code>clark-mcp-briefing</code> CLI — run that from a cron job for an automated morning email</li>
+        <li>"Flagged" doesn't mean "the day will fail" — just "look at this one first"</li>
+      </ul>
+    </div>
+  </details>
   <form class="row" id="briefForm">
     <label>Date<input type="date" id="brDate" required></label>
     <button class="go" type="submit">Run briefing</button>
