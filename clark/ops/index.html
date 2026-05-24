@@ -658,41 +658,55 @@ $("#planSchedBtn").addEventListener("click", async () => {
 });
 
 function _fmtHour(h){
-  // 9.5 → "9:30"; 12.0 → "12:00"; 17.25 → "17:15"
-  const hh = Math.floor(h);
-  const mm = Math.round((h - hh) * 60);
+  // Round to total minutes first so 11.9999 → 720 → "12:00"
+  // instead of "11:60" (the floor-then-round-mm bug).
+  const totalMin = Math.round(h * 60);
+  const hh = Math.floor(totalMin / 60);
+  const mm = totalMin % 60;
   return `${hh}:${String(mm).padStart(2,"0")}`;
 }
-// Color per task so blocks visually separate (consistent across the table)
+// Distinct color per task so the legend + bars are readable.
+// Previously several tasks shared #888 which made them
+// indistinguishable in the timeline.
 const TASK_COLORS = {
-  pick: "#5fa9c6", pack: "#7cb342", management: "#c3a8ff",
-  restock: "#ffb74d", idle: "#5a6378", absent: "#3a2a2a",
-  side_project: "#888", cycle_count: "#888", receiving: "#888",
-  loading: "#888", returns_processing: "#888",
-  quality_check: "#888", training: "#888", unknown: "#444",
+  pick: "#5fa9c6",                pack: "#7cb342",
+  management: "#c3a8ff",          restock: "#ffb74d",
+  idle: "#5a6378",                absent: "#3a2a2a",
+  side_project: "#e8a0c8",        cycle_count: "#88c8c8",
+  receiving: "#d8b888",           loading: "#b8a8c8",
+  returns_processing: "#88b8e8",  quality_check: "#c8c888",
+  training: "#a888d8",            unknown: "#444",
 };
-function _taskColor(t){ return TASK_COLORS[t] || "#5a6378"; }
+function _taskColor(t){ return TASK_COLORS[t] || "#6a7480"; }
 
 function renderPlanSchedule(elId, d){
   const workers = d.workers || [];
   const start = d.shift_start, end = d.shift_end;
   const span = Math.max(end - start, 0.1);
-  // Single-row time axis labels every hour from start to end.
+  // Hour-tick markers — used INSIDE each timeline cell so they share
+  // the same width as the bars (previously the ruler was a sibling
+  // div with margin-left:90px and the table columns were auto-sized,
+  // so the labels and the bars used different x-axes and didn't line up).
   const hours = [];
   for (let h = Math.ceil(start); h <= Math.floor(end); h++) hours.push(h);
-  const axisTicks = hours.map(h => {
-    const pct = ((h - start) / span) * 100;
-    return `<div style="position:absolute;left:${pct}%;top:0;bottom:0;
-      border-left:1px dashed #2a2f3a"></div>
-      <div style="position:absolute;left:${pct}%;top:-18px;transform:translateX(-50%);
-      font-size:10px;color:var(--muted);font-family:ui-monospace,monospace">${h}:00</div>`;
-  }).join("");
+  function _axisOverlay(includeLabels){
+    return hours.map(h => {
+      const pct = ((h - start) / span) * 100;
+      const lbl = includeLabels
+        ? `<div style="position:absolute;left:${pct}%;top:50%;transform:translate(-50%,-50%);
+            font-size:10px;color:var(--muted);font-family:ui-monospace,monospace">${h}:00</div>`
+        : "";
+      return `<div style="position:absolute;left:${pct}%;top:0;bottom:0;
+        border-left:1px dashed #2a2f3a;pointer-events:none"></div>${lbl}`;
+    }).join("");
+  }
 
   const rows = workers.map(w => {
     if (!w.blocks.length) {
-      return `<tr><td>${esc(w.name)}</td><td colspan="2" style="color:var(--muted)">no activity</td></tr>`;
+      return `<tr><td>${esc(w.name)}</td>
+        <td style="padding:6px 10px;color:var(--muted)">no activity</td>
+        <td></td></tr>`;
     }
-    // Visual timeline bar (relative to shift_start..shift_end)
     const segments = w.blocks.map(b => {
       const left = ((b.start - start) / span) * 100;
       const width = ((b.end - b.start) / span) * 100;
@@ -701,25 +715,29 @@ function renderPlanSchedule(elId, d){
       return `<div title="${esc(hint)}" style="position:absolute;
         left:${left}%;width:${width}%;top:0;bottom:0;
         background:${color};border-right:1px solid rgba(0,0,0,0.3);
-        ${b.hustle?'box-shadow:inset 0 0 0 2px rgba(255,255,255,0.18);':''}"></div>`;
+        ${b.hustle?'box-shadow:inset 0 0 0 2px rgba(255,255,255,0.32);':''}"></div>`;
     }).join("");
-    // Text summary: one row per block
     const blockText = w.blocks.map(b =>
       `<div style="font-size:11px;color:var(--ink-dim);font-family:ui-monospace,monospace">${_fmtHour(b.start)}–${_fmtHour(b.end)} ${esc(b.task)}${b.hustle?' <span style="color:var(--warn)">(hustle)</span>':''}</div>`
     ).join("");
     return `<tr>
       <td>${esc(w.name)}</td>
-      <td style="padding:6px 10px"><div style="position:relative;height:24px;background:#10131a;border-radius:3px;overflow:hidden">${segments}</div></td>
+      <td style="padding:6px 10px">
+        <div style="position:relative;height:24px;background:#10131a;border-radius:3px;overflow:hidden">
+          ${segments}${_axisOverlay(false)}
+        </div>
+      </td>
       <td>${blockText}</td>
     </tr>`;
   }).join("");
 
-  // Legend of distinct tasks present in the schedule
   const tasksSeen = [...new Set(workers.flatMap(w => w.blocks.map(b => b.task)))];
   const legend = tasksSeen.map(t =>
     `<span class="badge" style="background:${_taskColor(t)};color:#0f1115">${esc(t)}</span>`
   ).join(" ");
 
+  // Axis labels go in the first thead row, in the Timeline column.
+  // That way they share the EXACT width of the timeline bars.
   $("#"+elId).innerHTML = `
     <div class="meta">
       Full-day schedule · ${esc(d.facility_id)} · ${esc(d.date)}
@@ -728,15 +746,26 @@ function renderPlanSchedule(elId, d){
       <span class="pill">${workers.length} workers</span>
       <span class="pill">${d.tick_minutes}m ticks</span>
     </div>
-    <div style="margin:8px 0 18px 0">${legend}</div>
-    <div style="position:relative;height:24px;margin:18px 0 4px 90px">${axisTicks}</div>
-    <table class="t"><thead><tr>
-      <th style="width:80px">Worker</th>
-      <th>Timeline</th>
-      <th style="width:260px">Blocks</th></tr></thead>
-      <tbody>${rows}</tbody></table>
+    <div style="margin:8px 0 14px 0">${legend}</div>
+    <table class="t" style="table-layout:fixed">
+      <colgroup>
+        <col style="width:90px">
+        <col>
+        <col style="width:260px">
+      </colgroup>
+      <thead>
+        <tr>
+          <th>Worker</th>
+          <th style="padding:6px 10px">
+            <div style="position:relative;height:18px">${_axisOverlay(true)}</div>
+          </th>
+          <th>Blocks</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
     <div style="margin-top:10px;font-size:11px;color:var(--muted)">
-      Hatched/brighter blocks = hustle. Hover any block for the time range + task.
+      Bright-edged blocks = hustle. Dashed verticals are hour markers. Hover any block for the time range + task.
     </div>`;
 }
 

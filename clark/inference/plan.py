@@ -265,17 +265,41 @@ def run_full_day_schedule(config, agent, target_date: date,
     # so env.day_env.current_hour right now points at the NEXT day's
     # start (e.g. 8.0) instead of the just-finished day's eod. Pull
     # the true eod from the config — that's what the policy was
-    # planning against.
-    shift_end = float(getattr(config.rules, "eod_hour",
-                                config.rules.day_start_hour + 8.0))
+    # planning against. BUT if the simulation ran into OT, blocks
+    # may extend past eod; use the max of (eod, last block start +
+    # one tick) so the timeline rendering covers everything.
+    eod = float(getattr(config.rules, "eod_hour",
+                          config.rules.day_start_hour + 8.0))
+    last_block_starts = [b["start"] for w in blocks_per_worker for b in w]
+    if last_block_starts:
+        shift_end = max(eod, max(last_block_starts) + STEP_DURATION)
+    else:
+        shift_end = eod
     for blocks in blocks_per_worker:
         if blocks and blocks[-1]["end"] is None:
             blocks[-1]["end"] = shift_end
+
+    # Snap every block boundary to the nearest tick — the env's
+    # current_hour accumulates floating-point drift over 60+ ticks,
+    # so a value that should be 12.0 becomes 11.999999..., which the
+    # frontend then formats as "11:60" (Math.floor=11, round(0.999*
+    # 60)=60). Snap to ticks here so all downstream rendering deals
+    # with clean numbers, AND drop any zero-duration blocks the snap
+    # might produce.
+    def _snap(h: float) -> float:
+        return round(h / STEP_DURATION) * STEP_DURATION
+
+    for blocks in blocks_per_worker:
+        for b in blocks:
+            b["start"] = _snap(b["start"])
+            b["end"] = _snap(b["end"])
 
     # Coalesce tiny single-tick blocks. RL policies often flip task
     # for one tick (10 min) and back — noise from per-tick sampling,
     # not a real reassignment a manager would act on. Absorb any
     # block shorter than MIN_BLOCK_MINUTES into the prior block.
+    # Also: drop any block where end <= start (defensive — snap can
+    # collapse a near-zero block to truly zero).
     MIN_BLOCK_MINUTES = 20  # ≥ 2 ticks at 10-min STEP_DURATION
     min_h = MIN_BLOCK_MINUTES / 60.0
     cleaned_per_worker: list[list[dict]] = []
@@ -283,6 +307,8 @@ def run_full_day_schedule(config, agent, target_date: date,
         cleaned: list[dict] = []
         for b in blocks:
             dur = b["end"] - b["start"]
+            if dur <= 0:
+                continue  # zero-duration block from snap collapse
             if cleaned and (dur < min_h or (
                     cleaned[-1]["task"] == b["task"]
                     and cleaned[-1]["hustle"] == b["hustle"])):
@@ -291,6 +317,11 @@ def run_full_day_schedule(config, agent, target_date: date,
             else:
                 cleaned.append(dict(b))
         cleaned_per_worker.append(cleaned)
+
+    # Snap shift bounds too so the frontend axis labels line up
+    # with snapped block edges.
+    shift_start = _snap(shift_start)
+    shift_end = _snap(shift_end)
 
     return {
         "shift_start": shift_start,
