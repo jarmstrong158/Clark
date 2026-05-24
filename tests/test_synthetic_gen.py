@@ -83,22 +83,56 @@ def test_volume_ranges_never_inverted(stage, trial):
 
 @pytest.mark.parametrize("stage", [1, 2, 3])
 @pytest.mark.parametrize("trial", range(40))
-def test_volume_never_exceeds_ot_rescue_ceiling(stage, trial):
-    """Fork C invariant (three-agent audit consensus): no generated
-    season's HIGH volume may exceed what the workforce can clear with
-    max-OT headroom. Pre-fix the generator emitted up to 2000 orders for
-    workforces whose empirical A-grade ceiling was ~1226, so the model
-    was graded on physically unwinnable years. The rescue ceiling is
-    n_workers * avg_oph * 9 * 0.22 * 1.25; allow a small rounding margin."""
+def test_volume_never_exceeds_stress_ceiling(stage, trial):
+    """Generalized Fork C invariant. Non-stress configs must stay within
+    the OT-rescue ceiling (n_workers × avg_oph × 9 × 0.22 × 1.25). Stress
+    configs (introduced to teach overload handling) may go up to that
+    × STRESS_MULT=1.7, but not beyond. Anything past the stress ceiling
+    is a config-generation bug: structurally unwinnable + outside what
+    the curriculum is supposed to expose."""
     cfg = generate_random_facility(stage=stage)
     avg_oph = sum(w.base_oph for w in cfg.workers) / max(1, len(cfg.workers))
     comfortable_pw = max(12.0, avg_oph * 9.0 * 0.22)
     rescue_ceiling = len(cfg.workers) * comfortable_pw * 1.25
+    stress_ceiling = rescue_ceiling * 1.7
     worst_hi = max(hi for _lo, hi in cfg.volume.seasonal_ranges.values())
-    assert worst_hi <= rescue_ceiling + 5, (
+    assert worst_hi <= stress_ceiling + 5, (
         f"stage={stage} trial={trial}: peak volume {worst_hi} exceeds the "
-        f"OT-rescue ceiling {rescue_ceiling:.0f} for {len(cfg.workers)} "
-        f"workers @ avg_oph={avg_oph:.1f} -- unwinnable config generated"
+        f"stress ceiling {stress_ceiling:.0f} for {len(cfg.workers)} "
+        f"workers @ avg_oph={avg_oph:.1f} -- bigger than the curriculum "
+        f"intends to generate, even on stress days."
+    )
+
+
+@pytest.mark.parametrize("stage,expected_min_rate,expected_max_rate", [
+    (1, 0.00, 0.00),   # stage 1: no stress, ever
+    (2, 0.08, 0.22),   # stage 2: ~15% (allow ±0.07 sampling slack)
+    (3, 0.17, 0.33),   # stage 3: ~25% (same slack)
+])
+def test_stress_tier_fires_at_expected_rate(stage, expected_min_rate,
+                                              expected_max_rate):
+    """Sample many configs and count how many breach the OT-rescue ceiling
+    (i.e. are stress configs). Confirms the new stress_prob actually fires
+    at roughly the configured rate per stage. Without this, the foundation
+    could silently regress to all-easy-config training and never see
+    overload scenarios — the exact gap that motivated this change."""
+    n_samples = 300
+    stress_hits = 0
+    for _ in range(n_samples):
+        cfg = generate_random_facility(stage=stage)
+        avg_oph = sum(w.base_oph for w in cfg.workers) / max(1, len(cfg.workers))
+        comfortable_pw = max(12.0, avg_oph * 9.0 * 0.22)
+        rescue_ceiling = len(cfg.workers) * comfortable_pw * 1.25
+        worst_hi = max(hi for _lo, hi in cfg.volume.seasonal_ranges.values())
+        if worst_hi > rescue_ceiling + 5:
+            stress_hits += 1
+    rate = stress_hits / n_samples
+    assert expected_min_rate <= rate <= expected_max_rate, (
+        f"stage={stage}: stress tier fired at {rate:.2%}, expected "
+        f"[{expected_min_rate:.0%}, {expected_max_rate:.0%}]. If 0% on "
+        f"stage 2/3, the stress_prob isn't actually being used in "
+        f"_generate_volume. If >>expected on stage 1, stress fired where "
+        f"it shouldn't."
     )
 
 

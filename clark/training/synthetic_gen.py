@@ -40,6 +40,17 @@ class CurriculumStage:
     peak_staffing_prob: float
     max_complexity_tiers: int
     saturday_prob: float
+    # Stress-tier probability. When sampled (`random.random() < stress_prob`),
+    # _generate_volume relaxes the rescue-ceiling cap by STRESS_MULT so peak
+    # summer days can exceed what OT can fully rescue. The model must learn
+    # to gracefully partial-complete (ship as many orders as possible, no
+    # filler, no defeatism) when the day is structurally overload. Stage 1
+    # stays at 0.0 (small facilities, every day winnable, learn the basics);
+    # later stages introduce stress so the policy sees real-world overload.
+    # Curriculum probe (tools/probe_curriculum_shape.py) found peak vol/cap
+    # capped at ~0.34 across ALL stages, meaning the foundation never trained
+    # on anything resembling jack_baseline at vol=450 (~1.56× rescue ceiling).
+    stress_prob: float = 0.0
     # Operational choices — intentionally NOT here.
     # Picker strategy, breaks, carrier deadline, restock availability, and
     # late order exceptions are always sampled at full probability regardless
@@ -62,6 +73,7 @@ STAGE_1 = CurriculumStage(
     peak_staffing_prob=0.0,
     max_complexity_tiers=1,
     saturday_prob=0.0,
+    stress_prob=0.0,  # stage 1: learn the basics on winnable configs only
 )
 
 STAGE_2 = CurriculumStage(
@@ -72,6 +84,7 @@ STAGE_2 = CurriculumStage(
     peak_staffing_prob=0.30,
     max_complexity_tiers=2,
     saturday_prob=0.15,
+    stress_prob=0.15,  # 15% of stage-2 configs include structurally-overload days
 )
 
 STAGE_3 = CurriculumStage(
@@ -82,6 +95,7 @@ STAGE_3 = CurriculumStage(
     peak_staffing_prob=0.50,
     max_complexity_tiers=3,
     saturday_prob=0.25,
+    stress_prob=0.25,  # 25% — more aggressive overload exposure late-curriculum
 )
 
 CURRICULUM_STAGES: dict[int, CurriculumStage] = {1: STAGE_1, 2: STAGE_2, 3: STAGE_3}
@@ -139,7 +153,7 @@ def generate_random_facility(stage: int = 3) -> FacilityConfig:
     avg_oph = sum(w.base_oph for w in workers) / max(1, len(workers))
 
     tasks = _generate_tasks(cs, n_workers)
-    volume = _generate_volume(n_workers, avg_oph)
+    volume = _generate_volume(n_workers, avg_oph, stress_prob=cs.stress_prob)
     rules = _generate_rules(cs, n_workers)
     complexity = _sample_random_complexity(cs)
 
@@ -311,7 +325,8 @@ def _generate_tasks(cs: CurriculumStage, n_workers: int) -> TasksConfig:
     return TasksConfig(enabled=enabled, custom=[])
 
 
-def _generate_volume(n_workers: int, avg_oph: float) -> VolumeConfig:
+def _generate_volume(n_workers: int, avg_oph: float,
+                       stress_prob: float = 0.0) -> VolumeConfig:
     """
     Sample base volume range and apply seasonal and weekly curves.
 
@@ -362,23 +377,46 @@ def _generate_volume(n_workers: int, avg_oph: float) -> VolumeConfig:
     facility_comfortable = n_workers * comfortable_cap_pw
     facility_rescue = n_workers * rescue_ceiling_pw
 
+    # ── Stress tier ───────────────────────────────────────────────────────
+    # With probability `stress_prob` (stage-gated), relax the rescue-ceiling
+    # cap by STRESS_MULT so peak-summer days can exceed what max-OT can
+    # fully rescue. The model must learn graceful partial-completion (ship
+    # what you can, no filler, no defeatism) on real-world overload days.
+    # Without this, the curriculum guarantees every day is winnable and
+    # the policy never encounters structural overload — which is exactly
+    # what jack_baseline at vol=450 (~1.56× rescue ceiling) presents.
+    # Stage 1 stress_prob=0 (basics-only); Stage 2=0.15; Stage 3=0.25.
+    STRESS_MULT = 1.7
+    is_stress = stress_prob > 0 and random.random() < stress_prob
+    rescue_for_cap = facility_rescue * (STRESS_MULT if is_stress else 1.0)
+
     peak_mult = random.uniform(1.5, 3.0)
     # Winter (comfortable) baseline: a fraction of comfortable capacity, so
     # normal months are routinely winnable without OT.
     fraction_hi = random.uniform(0.70, 0.95)
     fraction_lo = random.uniform(0.45, 0.65)
     # Cap winter so that winter_hi * peak_mult lands at (not above) the
-    # rescue ceiling — summer is demanding but OT-rescuable, never impossible.
-    winter_hi_cap = facility_rescue / peak_mult
-    base_hi = min(int(facility_comfortable * fraction_hi), int(winter_hi_cap))
+    # rescue ceiling (or stress ceiling) — non-stress months are demanding
+    # but OT-rescuable; stress months exceed OT rescue and force the
+    # ship-what-you-can lesson.
+    winter_hi_cap = rescue_for_cap / peak_mult
+    # When stress fires, ALSO lift the comfortable-fraction limb so the
+    # cap actually bites. Without this, low-peak-mult stress configs
+    # silently fall back to the comfortable limit and don't produce
+    # any overload — defeating the whole point of the stress tier.
+    comfortable_limit = facility_comfortable * fraction_hi
+    if is_stress:
+        comfortable_limit = comfortable_limit * STRESS_MULT
+    base_hi = min(int(comfortable_limit), int(winter_hi_cap))
     base_lo = int(facility_comfortable * fraction_lo)
     base_lo = min(base_lo, max(30, base_hi - 50))
     winter_lo = max(30, base_lo)
     winter_hi = max(winter_lo + 20, base_hi)
 
     # Seasonal scaling. Every HIGH end is hard-clamped to the rescue ceiling
-    # so no season can produce an unwinnable day.
-    rc = int(facility_rescue)
+    # (or stress ceiling, when stress fires) so the curriculum can't produce
+    # configs beyond what we intended to expose.
+    rc = int(rescue_for_cap)
     spring_lo = int(winter_lo * 1.2)
     spring_hi = min(int(winter_hi * 1.5), rc)
     summer_lo = int(winter_lo * peak_mult * 0.9)
