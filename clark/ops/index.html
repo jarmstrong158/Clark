@@ -312,34 +312,40 @@
 <!-- ─── SWEEP ──────────────────────────────────────────── -->
 <section class="tab" data-tab="sweep">
   <h2>Staffing-sufficiency sweep</h2>
-  <div class="blurb">Run the trained policy through many simulated days at different roster sizes. Returns the daily-grade distribution at each step. Use to answer "would hiring 2 more workers actually help?".</div>
+  <div class="blurb">Find the minimum roster size that reliably ships the year. Auto-mode keeps adding workers (+0, +1, +2…) until the A+B grade rate hits your target — then stops and tells you the answer.</div>
   <details class="guide">
     <summary>How to read this</summary>
     <div class="body">
-      <h5>The bars</h5>
+      <h5>What auto-find does</h5>
       <ul>
-        <li>One stacked bar per roster step (e.g. <code>+0</code>, <code>+1</code>, <code>+2</code> extras over the base roster)</li>
-        <li>Each bar shows the daily-grade mix: <span class="kbd" style="background:#7cb342;color:#0f1115">A</span> = ship-clean + management OK, <span class="kbd" style="background:#aed581;color:#0f1115">B</span> = ship-clean with minor demerits, <span class="kbd" style="background:#ffb74d;color:#0f1115">C</span> / <span class="kbd" style="background:#ff8a65;color:#0f1115">D</span> / <span class="kbd" style="background:#e57373;color:#0f1115">F</span> = increasingly bad days (F = orders missed)</li>
-        <li>You want the <b>green band as wide as possible</b> and the F slice as narrow as possible</li>
+        <li>Starts at <code>+0</code> (your current roster) and runs the trained policy through <code>days/step</code> simulated days</li>
+        <li>If the A+B rate hits your <b>target</b>, stops and reports "current roster is sufficient"</li>
+        <li>If not, adds one worker (<code>+1</code>) and reruns. Repeats up to <b>max extras</b></li>
+        <li>Headline at the top tells you the answer in one line: "Need +N more workers to reach X% A+B" / "Current roster sufficient" / "Even at +N, can't hit target — check for non-staffing bottleneck"</li>
       </ul>
-      <h5>How to use the result</h5>
+      <h5>The bars (per step)</h5>
       <ul>
-        <li>If the bars are <b>roughly identical</b> across roster sizes, you're past the elbow — hiring more won't help (capacity is bottlenecked elsewhere)</li>
-        <li>If +1 worker dramatically increases A and shrinks F, that's your minimum viable roster</li>
-        <li>The smallest extras count where the grade mix plateaus is the cheapest "sufficient" answer</li>
+        <li>Each stacked bar is one roster size. <span class="kbd" style="background:#7cb342;color:#0f1115">A</span> = ship-clean + management OK · <span class="kbd" style="background:#aed581;color:#0f1115">B</span> = ship-clean, minor demerits · <span class="kbd" style="background:#ffb74d;color:#0f1115">C</span>/<span class="kbd" style="background:#ff8a65;color:#0f1115">D</span>/<span class="kbd" style="background:#e57373;color:#0f1115">F</span> = increasingly bad · F = orders missed</li>
+        <li>Bars plateau? You're past the elbow — extra workers stop helping (something else is the bottleneck — equipment, hours, task mix)</li>
+      </ul>
+      <h5>Custom mode</h5>
+      <ul>
+        <li>Use the <b>Custom steps</b> button for a fixed list (e.g. compare just +0 / +5 / +10 without searching). Slower-but-thorough alternative when you already know the answer is high</li>
       </ul>
       <h5>Scope</h5>
       <ul>
-        <li>This is a <b>real end-to-end simulation</b>, not a snapshot. Each bar is N days of actual sim → real outcome distribution on the days run</li>
-        <li><b>Slow on purpose.</b> Defaults to 40 days/step × 5 steps = 200 days. Bump to 261 (full year) for tightest stats; drop to 20 for quick sanity checks</li>
+        <li>Each step is real end-to-end simulation (~40 days). Slow on purpose — defaults to 40 days/step (~10s/step on CPU). Bump to 100+ for tighter stats on borderline cases</li>
       </ul>
     </div>
   </details>
   <form class="row" id="sweepForm">
     <label>Facility<select id="swFac" required></select></label>
-    <label>Extras steps<input type="text" id="swSteps" value="0,1,2,3,4" pattern="^\d+(,\d+)*$"></label>
+    <label>Target A+B rate (%)<input type="number" id="swTarget" value="80" min="0" max="100" step="1"></label>
+    <label>Max extras<input type="number" id="swMax" value="10" min="0" max="30"></label>
     <label>Days / step<input type="number" id="swDays" value="40" min="5" max="261"></label>
-    <button class="go" type="submit">Run sweep</button>
+    <button class="go" type="submit">Find sufficient roster</button>
+    <button class="go" id="swCustomBtn" type="button" style="background:linear-gradient(180deg,var(--accent2) 0%,#8a6ed8 100%)" title="Run a fixed list of step counts (no auto-stop). Useful for known-answer comparisons.">Custom steps…</button>
+    <label id="swCustomLabel" style="display:none">Custom steps<input type="text" id="swSteps" value="0,1,2,3,4" pattern="^\d+(,\d+)*$"></label>
   </form>
   <div class="result" id="swOut"><div class="empty">No sweep run yet.</div></div>
 </section>
@@ -990,34 +996,127 @@ function renderCompare(elId, d){
 }
 
 // ── SWEEP ────────────────────────────────────────────────
+// Auto-find: start at +0, run simulate, check if A+B >= target.
+// If yes, stop and report "current roster sufficient". If no, +1,
+// repeat up to maxExtras. Renders partials as we go so the user
+// sees progress instead of staring at a spinner.
 $("#sweepForm").addEventListener("submit", async ev => {
   ev.preventDefault();
   const fid = $("#swFac").value;
   if (!fid) return;
-  const steps = $("#swSteps").value.split(",").map(s => parseInt(s.trim(),10)).filter(n => isFinite(n));
+  const target = parseFloat($("#swTarget").value) / 100;
+  const maxExtras = parseInt($("#swMax").value, 10);
+  const days = parseInt($("#swDays").value, 10);
+  if (!isFinite(target) || target < 0 || target > 1) {
+    showErr("swOut", "target must be 0–100");
+    return;
+  }
+  showSpinner("swOut");
+  try {
+    const results = [];
+    let hit = null;  // first extras count that met the target
+    for (let extra = 0; extra <= maxExtras; extra++) {
+      const d = await callServe("POST", "/simulate",
+        {facility_id: fid, extra_workers: extra, n_days: days});
+      const ab = _abRate(d);
+      results.push({extra, d, ab});
+      renderSweep("swOut", fid, days, results,
+                  /*partial=*/true, target, maxExtras, hit);
+      if (hit === null && ab >= target) {
+        hit = extra;
+        renderSweep("swOut", fid, days, results,
+                    /*partial=*/false, target, maxExtras, hit);
+        return;
+      }
+    }
+    // Walked off the end without hitting target
+    renderSweep("swOut", fid, days, results,
+                /*partial=*/false, target, maxExtras, null);
+  } catch (e) { showErr("swOut", e.message); }
+});
+
+// Custom-steps button: legacy fixed-list flow. Toggles a small
+// input that takes a comma-separated list and bypasses the
+// auto-search.
+$("#swCustomBtn").addEventListener("click", async () => {
+  const label = $("#swCustomLabel");
+  const input = $("#swSteps");
+  // First click reveals the input; second click (with input visible)
+  // actually runs the sweep with whatever's in the input.
+  if (label.style.display === "none") {
+    label.style.display = "";
+    input.focus();
+    return;
+  }
+  const fid = $("#swFac").value;
+  if (!fid) { alert("Pick a facility first."); return; }
+  const steps = input.value.split(",")
+    .map(s => parseInt(s.trim(), 10)).filter(n => isFinite(n));
+  if (!steps.length) { alert("Enter at least one step (e.g. 0,2,5)."); return; }
   const days = parseInt($("#swDays").value, 10);
   showSpinner("swOut");
   try {
     const results = [];
     for (const extra of steps) {
-      const d = await callServe("POST", "/simulate", {facility_id: fid, extra_workers: extra, n_days: days});
-      results.push({extra, d});
-      renderSweep("swOut", fid, days, results, /*partial=*/true);
+      const d = await callServe("POST", "/simulate",
+        {facility_id: fid, extra_workers: extra, n_days: days});
+      results.push({extra, d, ab: _abRate(d)});
+      renderSweep("swOut", fid, days, results, true, null, null, null);
     }
-    renderSweep("swOut", fid, days, results, /*partial=*/false);
+    renderSweep("swOut", fid, days, results, false, null, null, null);
   } catch (e) { showErr("swOut", e.message); }
 });
 
-function renderSweep(elId, fid, days, results, partial){
-  const partialNote = partial ? `<span class="spinner"></span> running ${results.length} / ${results.length+1}+ …` : '';
+function _abRate(simResp){
+  const g = (simResp.summary || {}).grade_distribution || {};
+  const total = ['A','B','C','D','F'].reduce((s,k)=>s+(g[k]||0),0);
+  return total ? ((g.A||0) + (g.B||0)) / total : 0;
+}
+
+function renderSweep(elId, fid, days, results, partial, target, maxExtras, hit){
+  const partialNote = partial
+    ? `<span class="spinner"></span> running step +${results.length-1}…`
+    : '';
+
+  // Headline interpretation — answers the user's actual question.
+  let headline = '', color = 'var(--accent)';
+  if (target !== null && target !== undefined) {
+    const tgtPct = (target * 100).toFixed(0);
+    if (!partial && hit === 0) {
+      headline = `✓ Current roster (+0) is sufficient — ${(results[0].ab*100).toFixed(1)}% A+B (target ${tgtPct}%).`;
+      color = 'var(--ok)';
+    } else if (!partial && hit !== null && hit > 0) {
+      const lastAB = (results[results.length-1].ab*100).toFixed(1);
+      headline = `✓ Need +${hit} more worker${hit===1?'':'s'} to reach ${tgtPct}% A+B (final ${lastAB}%).`;
+      color = 'var(--ok)';
+    } else if (!partial && hit === null) {
+      const best = Math.max(...results.map(r => r.ab));
+      const bestStep = results.find(r => r.ab === best);
+      headline = `⚠ Even at +${maxExtras} max, best is ${(best*100).toFixed(1)}% A+B at +${bestStep.extra} — staffing alone won't get you to ${tgtPct}%. Check equipment caps, task mix, or shift length for the real bottleneck.`;
+      color = 'var(--err)';
+    } else {
+      headline = `Searching for minimum roster to hit ${tgtPct}% A+B (max +${maxExtras})…`;
+      color = 'var(--muted)';
+    }
+  } else {
+    headline = partial
+      ? `Running custom steps…`
+      : `Custom sweep complete — ${results.length} step${results.length===1?'':'s'} simulated.`;
+  }
+
   $("#"+elId).innerHTML = `
     <div class="meta">${esc(fid)} · ${days} days/step ${partialNote}</div>
-    <div class="sweep-bars">${results.map(({extra, d}) => {
+    <div style="margin:8px 0 14px 0;padding:10px 14px;background:#10131a;
+      border-left:3px solid ${color};border-radius:4px;font-size:13px">
+      ${esc(headline)}
+    </div>
+    <div class="sweep-bars">${results.map(({extra, d, ab}) => {
       const summary = d.summary || {};
       const grades = summary.grade_distribution || {};
       const total = ['A','B','C','D','F'].reduce((s,g)=>s+(grades[g]||0), 0) || 1;
       const pct = g => ((grades[g]||0) / total * 100);
-      return `<div class="sweep-bar">
+      const isHit = (target !== null && target !== undefined && extra === hit);
+      return `<div class="sweep-bar" style="${isHit?'outline:2px solid var(--ok);outline-offset:3px;border-radius:4px':''}">
         <div class="lbl">+${extra} (${d.n_workers}w)</div>
         <div class="stack">
           <div class="gA" style="width:${pct('A')}%" title="A: ${grades.A||0}"></div>
@@ -1026,10 +1125,13 @@ function renderSweep(elId, fid, days, results, partial){
           <div class="gD" style="width:${pct('D')}%" title="D: ${grades.D||0}"></div>
           <div class="gF" style="width:${pct('F')}%" title="F: ${grades.F||0}"></div>
         </div>
-        <div class="legend">A ${grades.A||0} · B ${grades.B||0} · C ${grades.C||0} · D ${grades.D||0} · F ${grades.F||0}</div>
+        <div class="legend">A+B ${(ab*100).toFixed(0)}% · A ${grades.A||0} B ${grades.B||0} C ${grades.C||0} D ${grades.D||0} F ${grades.F||0}</div>
       </div>`;
     }).join("")}</div>
-    ${!partial ? '<div class="summary" style="font-size:12px">End-to-end simulation, ' + days + ' days per roster step. Outcome distribution on the days run, not a snapshot projection.</div>' : ''}`;
+    ${!partial && results.length ? '<div style="margin-top:12px;font-size:11px;color:var(--muted)">' +
+      'Each step is real end-to-end simulation, ' + days + ' days. Outcome distribution on the days run, not a snapshot. ' +
+      (target !== null && target !== undefined ? 'Green outline marks the minimum sufficient roster.' : '') +
+      '</div>' : ''}`;
 }
 
 // ── CALENDAR ─────────────────────────────────────────────
