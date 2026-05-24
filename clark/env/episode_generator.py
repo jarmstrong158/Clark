@@ -414,6 +414,72 @@ def _curved_distribution(
     return schedule
 
 
+# ─── Canonical expected-arrival curve (for demand projection) ────────────────
+#
+# Deterministic mean of the NORMAL-day arrival shape. Used by the env's
+# demand_vs_capacity observation feature: at each tick the env compares
+# orders-arrived-so-far against this expected cumulative fraction to
+# project the day's true total — without ever reading episode.total_orders.
+# (That's the "no crystal-ball" rule — observations cannot peek at the
+# generator's volume draw.) The high-volume curve is INTENTIONALLY not
+# used here: choosing it would itself require knowing is_high_volume,
+# which is set from the true draw. The trade-off: on high-vol days the
+# projection slightly OVER-estimates total in the morning (high-vol
+# front-loads more than the normal curve assumes), which surfaces
+# overload earlier — desirable for the failure mode we're targeting.
+# Midpoints of normal-day bucket bands, normalized to sum exactly to 1.0
+# (raw midpoints sum to 1.025; the real generator re-normalizes per-draw
+# at line 375-376, so the canonical curve must do the same to match).
+_RAW_MIDPOINTS = (0.45, 0.275, 0.125, 0.175)
+_BUCKET_SUM = sum(_RAW_MIDPOINTS)
+_CANONICAL_BUCKET_FRACTIONS = tuple(f / _BUCKET_SUM for f in _RAW_MIDPOINTS)
+
+def expected_fraction_arrived(
+    current_hour: float,
+    day_start: float,
+    order_cutoff: float,
+) -> float:
+    """Return the cumulative fraction of a day's orders that the canonical
+    intraday arrival curve says SHOULD have arrived by `current_hour`,
+    scaled to this facility's [day_start, cutoff-step] window.
+
+    Range: [0.0, 1.0]. Monotone non-decreasing in current_hour. Has a
+    jump-discontinuity at day_start (instant bucket dumps ~45% at t=0+ε).
+
+    Used by FacilityEnv._compute_demand_vs_capacity to project the day's
+    total order count from arrivals so far. NEVER reads
+    episode.total_orders — that would make the feature an oracle leak.
+    """
+    EPS = 1e-6
+    arrival_end = max(day_start + STEP_DURATION, order_cutoff - STEP_DURATION)
+    window = arrival_end - day_start
+    if window <= 0:
+        return 1.0 if current_hour >= day_start - EPS else 0.0
+
+    morning_end = day_start + ((MORNING_END_HOUR - DAY_START_HOUR)
+                                / (ORDER_ARRIVAL_END_HOUR - DAY_START_HOUR)) * window
+    afternoon_end = day_start + ((AFTERNOON_END_HOUR - DAY_START_HOUR)
+                                  / (ORDER_ARRIVAL_END_HOUR - DAY_START_HOUR)) * window
+
+    f_inst, f_morn, f_aft, f_late = _CANONICAL_BUCKET_FRACTIONS
+
+    if current_hour < day_start - EPS:
+        return 0.0
+    if current_hour >= arrival_end:
+        return 1.0
+    if current_hour < day_start + EPS:
+        # Right at the instant boundary: the day_start dump has arrived.
+        return f_inst
+    if current_hour < morning_end:
+        frac = (current_hour - day_start) / max(EPS, morning_end - day_start)
+        return f_inst + f_morn * frac
+    if current_hour < afternoon_end:
+        frac = (current_hour - morning_end) / max(EPS, afternoon_end - morning_end)
+        return f_inst + f_morn + f_aft * frac
+    frac = (current_hour - afternoon_end) / max(EPS, arrival_end - afternoon_end)
+    return f_inst + f_morn + f_aft + f_late * frac
+
+
 def _get_steps_in_range(start: float, end: float) -> list[float]:
     steps = []
     t = start
