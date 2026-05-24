@@ -36,7 +36,7 @@ def test_ops_html_exists_and_has_all_tabs():
     assert OPS_HTML.exists(), f"ops dashboard HTML missing at {OPS_HTML}"
     src = OPS_HTML.read_text(encoding="utf-8")
     for tab in ("plan", "whatif", "compare", "sweep",
-                "calendar", "briefing"):
+                "calendar", "briefing", "training"):
         assert f'data-tab="{tab}"' in src, f"missing tab '{tab}'"
 
 
@@ -47,7 +47,8 @@ def test_ops_html_calls_real_clark_serve_routes():
     src = OPS_HTML.read_text(encoding="utf-8")
     for route in ("/health", "/facilities", "/facility/",
                   "/plan", "/what_if", "/compare",
-                  "/simulate", "/calendar_check"):
+                  "/simulate", "/calendar_check",
+                  "/training_runs", "/launch_wizard"):
         assert route in src, f"dashboard doesn't reference {route}"
 
 
@@ -110,3 +111,17 @@ def test_ops_server_serves_html_on_index_html(ops_server):
 def test_ops_server_404s_unknown_path(ops_server):
     r = httpx.get(ops_server + "/nope", timeout=5.0)
     assert r.status_code == 404
+
+
+def test_ops_server_training_runs_returns_list(ops_server):
+    """The Training tab polls /training_runs every 5s. Endpoint must
+    always return a JSON object with a 'runs' list, even when no
+    training_metrics.json exists anywhere on disk (empty list).
+    Without this, a fresh checkout with no prior runs would see the
+    tab error out on first load instead of showing the friendly
+    'No training runs detected' empty state."""
+    r = httpx.get(ops_server + "/training_runs", timeout=5.0)
+    assert r.status_code == 200
+    body = r.json()
+    assert "runs" in body
+    assert isinstance(body["runs"], list)

@@ -123,6 +123,33 @@
   .briefing-row h4{margin:0 0 4px 0;font-size:13px;display:flex;align-items:center;gap:8px}
   .briefing-row .stats{color:var(--muted);font-size:12px;font-family:ui-monospace,monospace}
   .briefing-row .flags{margin-top:6px}
+  .train-card{background:#10131a;border:1px solid var(--border);
+    border-radius:8px;padding:14px 16px;margin-bottom:10px;
+    border-left:3px solid #2a2f3a;transition:border-color .15s}
+  .train-card.alive{border-left-color:var(--ok)}
+  .train-card.done{border-left-color:var(--accent)}
+  .train-card.dead{border-left-color:var(--err)}
+  .train-card h4{margin:0 0 6px 0;font-size:14px;display:flex;align-items:center;gap:10px}
+  .train-card .status-pill{font-size:10px;padding:2px 8px;border-radius:8px;
+    background:#1a2030;font-weight:600;text-transform:uppercase;letter-spacing:.03em}
+  .train-card .status-pill.alive{color:var(--ok);background:rgba(132,208,74,.13)}
+  .train-card .status-pill.done{color:var(--accent);background:rgba(124,196,224,.13)}
+  .train-card .status-pill.dead{color:var(--err);background:rgba(255,122,122,.13)}
+  .train-card .progress-bar{height:18px;background:#10131a;
+    border:1px solid #1f2330;border-radius:4px;overflow:hidden;position:relative;margin:8px 0}
+  .train-card .progress-fill{height:100%;background:linear-gradient(90deg,var(--accent),var(--accent2));
+    transition:width .4s ease}
+  .train-card .progress-fill.alive{background:linear-gradient(90deg,#7cb342,#84d04a)}
+  .train-card .progress-fill.dead{background:var(--err)}
+  .train-card .progress-text{position:absolute;top:0;left:0;right:0;height:100%;
+    display:flex;align-items:center;justify-content:center;
+    font-size:11px;font-weight:600;color:var(--ink);
+    text-shadow:0 0 4px rgba(0,0,0,0.6);font-variant-numeric:tabular-nums}
+  .train-card .meta-row{display:flex;flex-wrap:wrap;gap:14px;font-size:12px;
+    color:var(--muted);font-variant-numeric:tabular-nums}
+  .train-card .meta-row b{color:var(--ink-dim);font-weight:600}
+  .train-card .path{font-size:11px;color:var(--muted);font-family:ui-monospace,monospace;
+    margin-top:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .sweep-bars{display:grid;gap:14px;margin-top:10px}
   .sweep-bar{display:grid;grid-template-columns:80px 1fr 220px;
     align-items:center;gap:10px}
@@ -159,6 +186,7 @@
   <button data-tab="sweep"><span class="icon">📈</span>Sweep</button>
   <button data-tab="calendar"><span class="icon">📅</span>Calendar check</button>
   <button data-tab="briefing"><span class="icon">☀️</span>Morning briefing</button>
+  <button data-tab="training"><span class="icon">🧠</span>Training</button>
 </nav>
 
 <main>
@@ -244,6 +272,24 @@
     <button class="go" type="submit">Check date</button>
   </form>
   <div class="result" id="calOut"><div class="empty">No date checked yet.</div></div>
+</section>
+
+<!-- ─── TRAINING ──────────────────────────────────────── -->
+<section class="tab" data-tab="training">
+  <h2>Training runs</h2>
+  <div class="blurb">Live status of every fine-tune (and the foundation) detected on disk. Auto-refreshes every 5 seconds. Each card shows progress, ETA, elapsed time, and the most recent average reward. "Alive" = trainer heartbeat seen within the last 2 minutes; older = treated as done or crashed.</div>
+  <form class="row" id="trainForm">
+    <label>Auto-refresh
+      <select id="trAuto">
+        <option value="5">every 5s (default)</option>
+        <option value="10">every 10s</option>
+        <option value="30">every 30s</option>
+        <option value="0">off (manual)</option>
+      </select>
+    </label>
+    <button class="go" type="submit">Refresh now</button>
+  </form>
+  <div class="result" id="trOut"><div class="empty">Loading…</div></div>
 </section>
 
 <!-- ─── BRIEFING ───────────────────────────────────────── -->
@@ -650,6 +696,96 @@ function renderBriefingRow(fid, cal, plan, err){
     <div class="stats">active ${n_active} · hustling ${n_hustle} · absent ${n_absent} · ${esc(cal.weekday)}</div>
     ${flags.length ? '<div class="flags">'+flags.map(f=>`<div class="flag">⚠ ${esc(f)}</div>`).join('')+'</div>' : ''}
   </div>`;
+}
+
+// ── TRAINING ─────────────────────────────────────────────
+let _trainTimer = null;
+
+$("#trainForm").addEventListener("submit", ev => {
+  ev.preventDefault();
+  refreshTraining();
+  scheduleTraining();
+});
+$("#trAuto").addEventListener("change", scheduleTraining);
+
+function scheduleTraining(){
+  if (_trainTimer) { clearInterval(_trainTimer); _trainTimer = null; }
+  const interval = parseInt($("#trAuto").value, 10);
+  if (interval > 0) _trainTimer = setInterval(refreshTraining, interval * 1000);
+}
+
+// Start polling the moment the user clicks the Training tab. Don't
+// burn cycles polling when they're on a different tab.
+$$("nav.tabs button").forEach(b => {
+  b.addEventListener("click", () => {
+    if (b.dataset.tab === "training") {
+      refreshTraining();
+      scheduleTraining();
+    } else if (_trainTimer) {
+      clearInterval(_trainTimer); _trainTimer = null;
+    }
+  });
+});
+
+async function refreshTraining(){
+  try {
+    const r = await fetch("/training_runs", {cache: "no-store"});
+    const d = await r.json();
+    renderTraining(d.runs || []);
+  } catch (e) {
+    showErr("trOut", "Failed to load training runs: " + e.message);
+  }
+}
+
+function fmtDuration(s){
+  if (s == null) return "—";
+  s = Math.max(0, Math.round(s));
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${sec}s`;
+  return `${sec}s`;
+}
+
+function renderTraining(runs){
+  const out = $("#trOut");
+  if (!runs.length) {
+    out.innerHTML = `<div class="empty">No training runs detected yet. Start one from the wizard (header → New facility ↗) or via <code>clark finetune</code>. Logs appear here automatically once <code>training_metrics.json</code> exists.</div>`;
+    return;
+  }
+  out.innerHTML = runs.map(r => {
+    if (r.error) {
+      return `<div class="train-card dead"><h4>✗ ${esc(r.name)} <span class="status-pill dead">read error</span></h4>
+        <div class="meta-row">${esc(r.error.slice(0,160))}</div>
+        <div class="path">${esc(r.path)}</div></div>`;
+    }
+    const cur = r.current_episode, tgt = r.n_episodes_target;
+    const pct = (tgt && tgt > 0) ? Math.min(100, (cur / tgt) * 100) : 0;
+    const isDone = !r.alive && tgt && cur >= tgt;
+    const cls = r.alive ? "alive" : (isDone ? "done" : "dead");
+    const pillLabel = r.alive ? "running" : (isDone ? "complete" : "stopped");
+    const progText = tgt
+      ? `${cur} / ${tgt} episodes (${pct.toFixed(1)}%)`
+      : `${cur} episodes (no target set)`;
+    const eta = r.alive && r.eta_s != null
+      ? `<b>ETA:</b> ${fmtDuration(r.eta_s)}`
+      : (isDone ? `<b>total:</b> ${fmtDuration(r.elapsed_s)}` : `<b>last seen:</b> ${fmtDuration(r.last_heartbeat_age_s)} ago`);
+    const reward = r.last_reward != null
+      ? `<span><b>last avg reward:</b> ${Number(r.last_reward).toFixed(1)}</span>`
+      : "";
+    return `<div class="train-card ${cls}">
+      <h4>${esc(r.name)} <span class="status-pill ${cls}">${pillLabel}</span></h4>
+      <div class="progress-bar">
+        <div class="progress-fill ${cls}" style="width:${pct}%"></div>
+        <div class="progress-text">${esc(progText)}</div>
+      </div>
+      <div class="meta-row">
+        <span>${eta}</span>
+        <span><b>elapsed:</b> ${fmtDuration(r.elapsed_s)}</span>
+        ${reward}
+      </div>
+      <div class="path">${esc(r.path)}</div>
+    </div>`;
+  }).join("");
 }
 
 bootstrap();

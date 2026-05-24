@@ -461,6 +461,77 @@ def cmd_ops(args: argparse.Namespace):
         return False, ("Wizard launched but didn't bind on :8090 within "
                        "20s. Check the new console window for errors.")
 
+    def _list_training_runs():
+        """Scan the per-facility log dirs the trainer writes to and
+        return a summary per run for the dashboard's Training tab.
+        Source paths:
+          clark/data/checkpoints/user/logs_<facility>/training_metrics.json
+          clark/data/logs/pretrain/training_metrics.json (foundation)
+        We don't gate by 'alive' — finished runs are still useful to
+        see (final episode count, total time, etc.).
+        """
+        repo_root = Path(__file__).parent.parent
+        candidates = []
+        # Per-facility fine-tune log dirs
+        ckpt_user = repo_root / "clark" / "data" / "checkpoints" / "user"
+        if ckpt_user.is_dir():
+            for d in ckpt_user.iterdir():
+                if d.is_dir() and d.name.startswith("logs_"):
+                    mp = d / "training_metrics.json"
+                    if mp.exists():
+                        candidates.append((d.name[len("logs_"):], mp))
+        # Foundation pretrain log dir (optional)
+        pretrain_mp = repo_root / "clark" / "data" / "logs" / "pretrain" / "training_metrics.json"
+        if pretrain_mp.exists():
+            candidates.append(("foundation", pretrain_mp))
+
+        import time as _t
+        out = []
+        for name, mp in candidates:
+            try:
+                data = _json.loads(mp.read_text(encoding="utf-8"))
+            except Exception as e:
+                out.append({"name": name, "path": str(mp), "error": str(e)})
+                continue
+            status = data.get("status") or {}
+            episodes = data.get("episodes") or []
+            # "alive" is only trustworthy if the trainer's heartbeat
+            # is recent — the trainer sets alive=False on clean exit
+            # but a hard crash leaves it True. Cross-check heartbeat
+            # age: if last_heartbeat is >120s old, treat as not-alive.
+            last_hb = status.get("last_heartbeat") or 0
+            stale = (_t.time() - last_hb) > 120 if last_hb else True
+            alive = bool(status.get("alive")) and not stale
+            cur = int(status.get("current_episode", 0))
+            tgt = int(status.get("n_episodes_target", 0)) or None
+            elapsed = float(status.get("elapsed_s", 0))
+            # ETA: per-episode wall time × remaining episodes
+            eta_s = None
+            if alive and cur > 0 and tgt and elapsed > 0:
+                per_ep = elapsed / cur
+                eta_s = max(0, int(per_ep * (tgt - cur)))
+            # Recent reward (last episode's reward if present)
+            last_reward = None
+            if episodes:
+                e = episodes[-1]
+                last_reward = e.get("avg_reward") or e.get("reward")
+            out.append({
+                "name": name,
+                "path": str(mp),
+                "alive": alive,
+                "stale_heartbeat": stale,
+                "current_episode": cur,
+                "n_episodes_target": tgt,
+                "elapsed_s": elapsed,
+                "eta_s": eta_s,
+                "last_reward": last_reward,
+                "last_heartbeat_age_s": int(_t.time() - last_hb) if last_hb else None,
+                "mtime": int(mp.stat().st_mtime),
+            })
+        # Most recent first
+        out.sort(key=lambda r: r.get("mtime", 0), reverse=True)
+        return {"runs": out}
+
     class OpsHandler(http.server.BaseHTTPRequestHandler):
         def log_message(self, fmt, *a):
             pass
@@ -483,6 +554,8 @@ def cmd_ops(args: argparse.Namespace):
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
+            elif path == "/training_runs":
+                self._send_json(200, _list_training_runs())
             else:
                 self.send_response(404)
                 self.end_headers()
