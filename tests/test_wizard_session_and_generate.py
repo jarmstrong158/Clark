@@ -277,6 +277,71 @@ def test_generate_no_breaks_override_keeps_template_default(wizard,
         f"template break removed when no override was provided: {breaks}"
 
 
+def test_filler_tolerance_options_translate_into_training_rewards(wizard,
+                                                                     request):
+    """End-to-end pin: each filler_tolerance option must propagate
+    through wizard.buildConfig → /generate → YAML → FacilityConfig
+    → cfg.rewards so that the trained policy actually sees a
+    different per_filler_unit + side_project_during_crunch per
+    option. Without this, options can silently become UI cosmetics
+    if a future refactor breaks any link in the chain (rename
+    `resulting_weights`, change merge order in _generate_yaml,
+    drop a reward field from RewardWeights, etc.).
+    """
+    import json as _json
+    import yaml as _yaml
+    from clark.config.schema import FacilityConfig
+
+    base_url, _ = wizard
+    presets_path = Path(__file__).resolve().parents[1] / "clark" / "wizard" / "presets.json"
+    presets = _json.loads(presets_path.read_text(encoding="utf-8"))
+    ft_q = next(q for q in presets["questions"]
+                if q["id"] == "filler_tolerance")
+    expected = {o["id"]: o["weight_deltas"] for o in ft_q["options"]}
+    assert set(expected) == {"light", "moderate", "balanced", "strict"}, \
+        f"unexpected filler_tolerance options: {sorted(expected)}"
+
+    written_paths = []
+    for opt_id, deltas in expected.items():
+        body = {
+            "mode": "advanced",  # filler_tolerance is conditional
+            "archetype": "ecom_direct",
+            "facility_name": f"Filler {opt_id} pin",
+            # Mark filler task enabled so _generate_yaml respects
+            # the picked tolerance (mode==advanced is also required).
+            "tasks": {"enabled": ["pick", "pack", "side_project",
+                                    "restock", "management", "idle"],
+                       "custom": []},
+            # Critically: include the resulting_weights the way
+            # buildConfig would (option's weight_deltas overwritten
+            # onto archetype defaults, which we don't model here —
+            # the test just needs the per-option deltas to land in
+            # the YAML's rewards dict).
+            "resulting_weights": deltas,
+        }
+        r = httpx.post(base_url + "/generate", json=body, timeout=10.0)
+        assert r.status_code == 200, f"{opt_id}: {r.text}"
+        out = r.json()
+        written_paths.append(out["yaml_path"])
+
+        # Load YAML through the real schema so we test what the
+        # trainer would actually see.
+        cfg = FacilityConfig.from_yaml(out["yaml_path"])
+        r_dict = cfg.rewards
+        for k, expected_v in deltas.items():
+            assert r_dict[k] == expected_v, (
+                f"option={opt_id!r} field={k!r}: "
+                f"YAML/schema produced {r_dict[k]!r}, "
+                f"wizard sent {expected_v!r}. The chain "
+                f"wizard→_generate_yaml→FacilityConfig is broken.")
+    # Clean up after all four runs.
+    def _cleanup():
+        for p in written_paths:
+            try: Path(p).unlink()
+            except FileNotFoundError: pass
+    request.addfinalizer(_cleanup)
+
+
 def test_generate_unknown_archetype_returns_400(wizard):
     base_url, _ = wizard
     r = httpx.post(base_url + "/generate",
