@@ -253,8 +253,10 @@
     <label>Volume override<input type="number" id="planVol" min="1" placeholder="(season-sampled)"></label>
     <label>Seed<input type="number" id="planSeed" placeholder="(deterministic = ?)"></label>
     <button class="go" type="submit">Plan</button>
+    <button class="go" id="planSchedBtn" type="button" style="background:linear-gradient(180deg,var(--accent2) 0%,#8a6ed8 100%)" title="Run the full day's simulation and show per-worker task timeline (every 10-min tick).">Show full-day schedule</button>
   </form>
   <div class="result" id="planOut"><div class="empty">No plan run yet.</div></div>
+  <div class="result" id="planSchedOut" style="margin-top:14px;display:none"></div>
 </section>
 
 <!-- ─── WHAT-IF ─────────────────────────────────────────── -->
@@ -635,6 +637,108 @@ $("#planForm").addEventListener("submit", async ev => {
     renderPlan("planOut", d);
   } catch (e) { showErr("planOut", e.message); }
 });
+
+// Full-day schedule: separate button so the user opts in (the
+// simulation is ~1-2s slower than /plan because it ticks the full
+// shift instead of just one step).
+$("#planSchedBtn").addEventListener("click", async () => {
+  const fid = $("#planFac").value, date = $("#planDate").value;
+  if (!fid || !date) { alert("Pick a facility + date first."); return; }
+  const volRaw = $("#planVol").value, seedRaw = $("#planSeed").value;
+  const out = $("#planSchedOut");
+  out.style.display = "";
+  out.innerHTML = '<div class="empty">running full-day simulation… <span class="spinner"></span></div>';
+  try {
+    const body = {facility_id: fid, date};
+    if (volRaw) body.volume = parseInt(volRaw, 10);
+    if (seedRaw) body.seed = parseInt(seedRaw, 10);
+    const d = await callServe("POST", "/plan_schedule", body);
+    renderPlanSchedule("planSchedOut", d);
+  } catch (e) { showErr("planSchedOut", e.message); }
+});
+
+function _fmtHour(h){
+  // 9.5 → "9:30"; 12.0 → "12:00"; 17.25 → "17:15"
+  const hh = Math.floor(h);
+  const mm = Math.round((h - hh) * 60);
+  return `${hh}:${String(mm).padStart(2,"0")}`;
+}
+// Color per task so blocks visually separate (consistent across the table)
+const TASK_COLORS = {
+  pick: "#5fa9c6", pack: "#7cb342", management: "#c3a8ff",
+  restock: "#ffb74d", idle: "#5a6378", absent: "#3a2a2a",
+  side_project: "#888", cycle_count: "#888", receiving: "#888",
+  loading: "#888", returns_processing: "#888",
+  quality_check: "#888", training: "#888", unknown: "#444",
+};
+function _taskColor(t){ return TASK_COLORS[t] || "#5a6378"; }
+
+function renderPlanSchedule(elId, d){
+  const workers = d.workers || [];
+  const start = d.shift_start, end = d.shift_end;
+  const span = Math.max(end - start, 0.1);
+  // Single-row time axis labels every hour from start to end.
+  const hours = [];
+  for (let h = Math.ceil(start); h <= Math.floor(end); h++) hours.push(h);
+  const axisTicks = hours.map(h => {
+    const pct = ((h - start) / span) * 100;
+    return `<div style="position:absolute;left:${pct}%;top:0;bottom:0;
+      border-left:1px dashed #2a2f3a"></div>
+      <div style="position:absolute;left:${pct}%;top:-18px;transform:translateX(-50%);
+      font-size:10px;color:var(--muted);font-family:ui-monospace,monospace">${h}:00</div>`;
+  }).join("");
+
+  const rows = workers.map(w => {
+    if (!w.blocks.length) {
+      return `<tr><td>${esc(w.name)}</td><td colspan="2" style="color:var(--muted)">no activity</td></tr>`;
+    }
+    // Visual timeline bar (relative to shift_start..shift_end)
+    const segments = w.blocks.map(b => {
+      const left = ((b.start - start) / span) * 100;
+      const width = ((b.end - b.start) / span) * 100;
+      const color = _taskColor(b.task);
+      const hint = `${b.task}${b.hustle?" (hustle)":""}: ${_fmtHour(b.start)}–${_fmtHour(b.end)}`;
+      return `<div title="${esc(hint)}" style="position:absolute;
+        left:${left}%;width:${width}%;top:0;bottom:0;
+        background:${color};border-right:1px solid rgba(0,0,0,0.3);
+        ${b.hustle?'box-shadow:inset 0 0 0 2px rgba(255,255,255,0.18);':''}"></div>`;
+    }).join("");
+    // Text summary: one row per block
+    const blockText = w.blocks.map(b =>
+      `<div style="font-size:11px;color:var(--ink-dim);font-family:ui-monospace,monospace">${_fmtHour(b.start)}–${_fmtHour(b.end)} ${esc(b.task)}${b.hustle?' <span style="color:var(--warn)">(hustle)</span>':''}</div>`
+    ).join("");
+    return `<tr>
+      <td>${esc(w.name)}</td>
+      <td style="padding:6px 10px"><div style="position:relative;height:24px;background:#10131a;border-radius:3px;overflow:hidden">${segments}</div></td>
+      <td>${blockText}</td>
+    </tr>`;
+  }).join("");
+
+  // Legend of distinct tasks present in the schedule
+  const tasksSeen = [...new Set(workers.flatMap(w => w.blocks.map(b => b.task)))];
+  const legend = tasksSeen.map(t =>
+    `<span class="badge" style="background:${_taskColor(t)};color:#0f1115">${esc(t)}</span>`
+  ).join(" ");
+
+  $("#"+elId).innerHTML = `
+    <div class="meta">
+      Full-day schedule · ${esc(d.facility_id)} · ${esc(d.date)}
+      <span class="pill">${esc(d.model||"?")}</span>
+      <span class="pill">vol=${d.volume}</span>
+      <span class="pill">${workers.length} workers</span>
+      <span class="pill">${d.tick_minutes}m ticks</span>
+    </div>
+    <div style="margin:8px 0 18px 0">${legend}</div>
+    <div style="position:relative;height:24px;margin:18px 0 4px 90px">${axisTicks}</div>
+    <table class="t"><thead><tr>
+      <th style="width:80px">Worker</th>
+      <th>Timeline</th>
+      <th style="width:260px">Blocks</th></tr></thead>
+      <tbody>${rows}</tbody></table>
+    <div style="margin-top:10px;font-size:11px;color:var(--muted)">
+      Hatched/brighter blocks = hustle. Hover any block for the time range + task.
+    </div>`;
+}
 
 function renderPlan(elId, d){
   const rows = d.assignments || [];

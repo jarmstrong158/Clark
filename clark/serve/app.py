@@ -29,6 +29,7 @@ from pydantic import BaseModel
 # module so the server no longer reaches across a layering boundary
 # into the CLI's internals.)
 from clark.inference.plan import (run_one_plan_day,
+                                   run_full_day_schedule,
                                    sample_volume_for_date)
 from clark.config.schema import FacilityConfig, WorkerConfig
 
@@ -353,6 +354,37 @@ def build_app(agent: Any, facilities_dir: str | Path,
             "assignments": _plan_for(cfg, when, req.volume,
                                      seed=req.seed, use_agent=ag),
             "model": ("fine-tuned" if ag is not agent else "foundation"),
+        }
+
+    @app.post("/plan_schedule")
+    def plan_schedule(req: PlanRequest):
+        """Full-day schedule: run the trained policy through every
+        10-min tick and return per-worker time blocks showing every
+        task change (not just the opening assignment). Honest scope:
+        this IS a simulated day — output reflects the policy's
+        reassignments under the season-sampled (or overridden)
+        volume + a deterministic seed."""
+        cfg = _load_facility(req.facility_id)
+        when = _resolve_date(req.date)
+        ag = _agent_for(req.facility_id)
+        if req.volume is not None:
+            vol = req.volume
+        else:
+            if req.seed is not None:
+                import random as _r
+                import numpy as _np
+                import torch as _t
+                _r.seed(req.seed); _np.random.seed(req.seed)
+                _t.manual_seed(req.seed)
+            vol = sample_volume_for_date(cfg, when)[0]
+        with _agent_lock:
+            sched = run_full_day_schedule(cfg, ag, when, vol, seed=req.seed)
+        return {
+            "facility_id": req.facility_id,
+            "date": when.isoformat(),
+            "volume": vol,
+            "model": ("fine-tuned" if ag is not agent else "foundation"),
+            **sched,
         }
 
     @app.post("/compare")
