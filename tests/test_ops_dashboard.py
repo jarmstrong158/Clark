@@ -35,7 +35,7 @@ def test_ops_html_exists_and_has_all_tabs():
     refactor drops one (or renames its data-tab key), this fails."""
     assert OPS_HTML.exists(), f"ops dashboard HTML missing at {OPS_HTML}"
     src = OPS_HTML.read_text(encoding="utf-8")
-    for tab in ("plan", "whatif", "compare", "sweep",
+    for tab in ("plan", "compare", "sweep",
                 "calendar", "briefing", "training"):
         assert f'data-tab="{tab}"' in src, f"missing tab '{tab}'"
 
@@ -45,8 +45,11 @@ def test_ops_html_calls_real_clark_serve_routes():
     not stale placeholders. Pins each route by name so a route
     rename on the server side surfaces here."""
     src = OPS_HTML.read_text(encoding="utf-8")
+    # /what_if intentionally absent — the dashboard folds it into
+    # /plan with modifiers (absences / volume override) instead of
+    # exposing a separate tab.
     for route in ("/health", "/facilities", "/facility/",
-                  "/plan", "/what_if", "/compare",
+                  "/plan", "/compare",
                   "/simulate", "/calendar_check",
                   "/training_runs", "/launch_wizard"):
         assert route in src, f"dashboard doesn't reference {route}"

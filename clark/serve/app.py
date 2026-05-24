@@ -40,6 +40,7 @@ class PlanRequest(BaseModel):
     date: Optional[str] = None          # YYYY-MM-DD; default = today
     volume: Optional[int] = None        # default = season-sampled
     seed: Optional[int] = None          # set for a reproducible plan
+    absent_workers: list[str] = []      # worker names forced absent
 
 
 class WhatIfRequest(BaseModel):
@@ -60,6 +61,7 @@ class OutcomeRequest(BaseModel):
     volume: Optional[int] = None
     n_samples: int = 20
     base_seed: Optional[int] = None
+    absent_workers: list[str] = []
 
 
 class CompareRequest(BaseModel):
@@ -362,10 +364,12 @@ def build_app(agent: Any, facilities_dir: str | Path,
         cfg = _load_facility(req.facility_id)
         when = _resolve_date(req.date)
         ag = _agent_for(req.facility_id)
+        forced = set(req.absent_workers) if req.absent_workers else None
         return {
             "facility_id": req.facility_id,
             "date": when.isoformat(),
             "assignments": _plan_for(cfg, when, req.volume,
+                                     forced_absent=forced,
                                      seed=req.seed, use_agent=ag),
             "model": ("fine-tuned" if ag is not agent else "foundation"),
         }
@@ -384,10 +388,12 @@ def build_app(agent: Any, facilities_dir: str | Path,
             vol = req.volume
         else:
             vol = sample_volume_for_date(cfg, when)[0]
+        forced = set(req.absent_workers) if req.absent_workers else None
         with _agent_lock:
             out = run_day_outcome_samples(cfg, ag, when, vol,
                                             n_samples=req.n_samples,
-                                            base_seed=req.base_seed)
+                                            base_seed=req.base_seed,
+                                            forced_absent=forced)
         return {
             "facility_id": req.facility_id,
             "date": when.isoformat(),
@@ -417,8 +423,11 @@ def build_app(agent: Any, facilities_dir: str | Path,
                 _r.seed(req.seed); _np.random.seed(req.seed)
                 _t.manual_seed(req.seed)
             vol = sample_volume_for_date(cfg, when)[0]
+        forced = set(req.absent_workers) if req.absent_workers else None
         with _agent_lock:
-            sched = run_full_day_schedule(cfg, ag, when, vol, seed=req.seed)
+            sched = run_full_day_schedule(cfg, ag, when, vol,
+                                            forced_absent=forced,
+                                            seed=req.seed)
         return {
             "facility_id": req.facility_id,
             "date": when.isoformat(),
