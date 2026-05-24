@@ -864,6 +864,38 @@ def cmd_wizard(args: argparse.Namespace):
                 br[k] = v
             base["business_rules"] = br
 
+        # Break schedule overrides — both modes have the dedicated step
+        # 6.5 ("Confirm your break schedule"). Quick mode previously
+        # inherited the template's breaks silently, so users were
+        # surprised when the chat reported "morning break at 10:00,
+        # lunch at 12:00" for facilities they thought they'd never
+        # configured for breaks. Now if the user visits the breaks step
+        # we honor their values; lunch goes into business_rules,
+        # morning + afternoon become entries in the top-level `breaks`
+        # list (with 0-duration entries dropped so "no break" is a
+        # supported choice).
+        breaks_in = cfg.get("breaks_override")
+        if isinstance(breaks_in, dict):
+            br = dict(base.get("business_rules") or {})
+            if breaks_in.get("lunch_hour") is not None:
+                br["lunch_hour"] = float(breaks_in["lunch_hour"])
+            if breaks_in.get("lunch_duration") is not None:
+                br["lunch_duration"] = float(breaks_in["lunch_duration"])
+            base["business_rules"] = br
+
+            new_breaks = []
+            for prefix in ("morning", "afternoon"):
+                h = breaks_in.get(f"{prefix}_break_hour")
+                d = breaks_in.get(f"{prefix}_break_duration")
+                if h is None or d is None or float(d) <= 0:
+                    continue   # user opted out of this break
+                new_breaks.append({
+                    "hour": float(h),
+                    "duration": float(d),
+                    "staggered": False,
+                })
+            base["breaks"] = new_breaks
+
         # Peak-season staffing: only when the user provided extras > 0.
         peak_in = cfg.get("peak_staffing")
         if isinstance(peak_in, dict) and int(peak_in.get("extra_workers", 0)) > 0 \

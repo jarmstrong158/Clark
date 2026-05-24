@@ -177,6 +177,106 @@ def test_generate_quick_mode_forces_minimal_task_set(wizard, tmp_path,
                 f"disabled task(s)"
 
 
+def test_generate_breaks_override_replaces_template_breaks(wizard,
+                                                              request):
+    """Pin the breaks_override flow added with the new step 6.5.
+    Without this, Quick-mode users silently inherited the archetype
+    template's morning-break + lunch (10:00 + 12:00) and were
+    surprised when the chat showed times they never set."""
+    import yaml as _yaml
+    base_url, _ = wizard
+    body = {
+        "mode": "quick",
+        "archetype": "ecom_direct",
+        "facility_name": "Breaks Override Test",
+        "resulting_weights": {},
+        "breaks_override": {
+            "morning_break_hour": 9.5,
+            "morning_break_duration": 0.2,
+            "lunch_hour": 13.0,
+            "lunch_duration": 0.75,
+            "afternoon_break_hour": 15.5,
+            "afternoon_break_duration": 0.15,
+        },
+    }
+    r = httpx.post(base_url + "/generate", json=body, timeout=10.0)
+    assert r.status_code == 200, r.text
+    out = r.json()
+    request.addfinalizer(lambda: Path(out["yaml_path"]).unlink(missing_ok=True))
+
+    parsed = _yaml.safe_load(out["yaml_text"])
+    # lunch_hour / lunch_duration land in business_rules
+    br = parsed.get("business_rules", {})
+    assert br["lunch_hour"] == 13.0
+    assert br["lunch_duration"] == 0.75
+    # morning + afternoon become entries in the top-level breaks list
+    breaks = parsed.get("breaks", [])
+    by_hour = {b["hour"]: b for b in breaks}
+    assert 9.5 in by_hour and by_hour[9.5]["duration"] == 0.2
+    assert 15.5 in by_hour and by_hour[15.5]["duration"] == 0.15
+    # Template's default 10:00 break should be GONE (replaced).
+    assert 10.0 not in by_hour
+
+
+def test_generate_breaks_override_zero_duration_drops_that_break(wizard,
+                                                                   request):
+    """duration=0 must be honored as 'no break at all', not silently
+    coerced to a zero-length break entry."""
+    import yaml as _yaml
+    base_url, _ = wizard
+    body = {
+        "mode": "quick",
+        "archetype": "ecom_direct",
+        "facility_name": "Breaks Zero Test",
+        "resulting_weights": {},
+        "breaks_override": {
+            "morning_break_hour": 10.0,
+            "morning_break_duration": 0.25,   # keep
+            "lunch_hour": 12.0,
+            "lunch_duration": 0.0,             # SKIP lunch
+            "afternoon_break_hour": 15.0,
+            "afternoon_break_duration": 0.0,   # SKIP afternoon
+        },
+    }
+    r = httpx.post(base_url + "/generate", json=body, timeout=10.0)
+    assert r.status_code == 200, r.text
+    out = r.json()
+    request.addfinalizer(lambda: Path(out["yaml_path"]).unlink(missing_ok=True))
+
+    parsed = _yaml.safe_load(out["yaml_text"])
+    br = parsed.get("business_rules", {})
+    assert br["lunch_duration"] == 0.0
+    breaks = parsed.get("breaks", [])
+    hours = [b["hour"] for b in breaks]
+    assert 10.0 in hours
+    assert 15.0 not in hours, "afternoon break with duration=0 leaked into output"
+
+
+def test_generate_no_breaks_override_keeps_template_default(wizard,
+                                                              request):
+    """Omitting breaks_override entirely must NOT touch the template's
+    breaks (back-compat with sessions saved before step 6.5 existed)."""
+    import yaml as _yaml
+    base_url, _ = wizard
+    body = {
+        "mode": "quick",
+        "archetype": "ecom_direct",
+        "facility_name": "No Breaks Override Test",
+        "resulting_weights": {},
+        # NB: no breaks_override key at all
+    }
+    r = httpx.post(base_url + "/generate", json=body, timeout=10.0)
+    assert r.status_code == 200, r.text
+    out = r.json()
+    request.addfinalizer(lambda: Path(out["yaml_path"]).unlink(missing_ok=True))
+
+    parsed = _yaml.safe_load(out["yaml_text"])
+    # Template's default 10:00 morning break should be intact.
+    breaks = parsed.get("breaks", [])
+    assert any(abs(b["hour"] - 10.0) < 0.01 for b in breaks), \
+        f"template break removed when no override was provided: {breaks}"
+
+
 def test_generate_unknown_archetype_returns_400(wizard):
     base_url, _ = wizard
     r = httpx.post(base_url + "/generate",
