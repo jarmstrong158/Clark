@@ -1,0 +1,558 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Clark — Operations Dashboard</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #1a1d24; --panel2: #14171e;
+    --ink: #e6e8ed; --muted: #8a92a1;
+    --accent: #88c0d0; --accent-hover: #a3d0db;
+    --ok: #7cb342; --warn: #ffb74d; --err: #e57373;
+    --border: #2a2f3a;
+    --user: #1c2230;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--ink);
+    font:14px/1.45 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif}
+  body{display:flex;flex-direction:column;height:100vh;overflow:hidden}
+  header{padding:10px 18px;background:var(--panel);
+    border-bottom:1px solid var(--border);
+    display:flex;align-items:center;gap:14px}
+  header h1{margin:0;font-size:15px;font-weight:600}
+  header .sub{color:var(--muted);font-size:12px}
+  header .serve-pill{margin-left:auto;font-size:11px;
+    padding:3px 9px;border-radius:10px;background:#1a2030}
+  header .serve-pill.ok{color:var(--ok)} header .serve-pill.bad{color:var(--err)}
+  nav.tabs{display:flex;gap:0;background:var(--panel2);
+    border-bottom:1px solid var(--border);padding:0 12px}
+  nav.tabs button{background:none;border:none;color:var(--muted);
+    padding:10px 16px;font:inherit;font-weight:500;cursor:pointer;
+    border-bottom:2px solid transparent}
+  nav.tabs button.active{color:var(--ink);border-bottom-color:var(--accent)}
+  nav.tabs button:hover:not(.active){color:var(--ink);background:#1f242e}
+  main{flex:1;overflow:auto;padding:20px 24px;max-width:1100px;width:100%;
+    margin:0 auto}
+  .tab{display:none} .tab.active{display:block}
+  .tab > h2{margin:0 0 4px 0;font-size:16px}
+  .tab > .blurb{color:var(--muted);font-size:13px;margin-bottom:18px}
+  form.row{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;
+    margin-bottom:16px;padding:14px;background:var(--panel);
+    border:1px solid var(--border);border-radius:8px}
+  form.row label{display:flex;flex-direction:column;gap:4px;font-size:12px;
+    color:var(--muted)}
+  form.row input,form.row select{background:#10131a;color:var(--ink);
+    border:1px solid var(--border);border-radius:6px;
+    padding:7px 9px;font:inherit;min-width:140px}
+  form.row input:focus,form.row select:focus{outline:none;
+    border-color:var(--accent)}
+  form.row .checkboxes{display:flex;flex-wrap:wrap;gap:6px;
+    max-width:520px;max-height:120px;overflow:auto;
+    padding:6px;background:#10131a;border:1px solid var(--border);
+    border-radius:6px}
+  form.row .checkboxes label{flex-direction:row;align-items:center;gap:4px;
+    color:var(--ink);font-size:12px;cursor:pointer;
+    padding:2px 6px;background:#1a2030;border-radius:4px}
+  form.row .checkboxes input{min-width:auto}
+  button.go{background:var(--accent);color:#0f1115;border:none;
+    padding:8px 18px;border-radius:6px;font:inherit;font-weight:600;
+    cursor:pointer}
+  button.go:hover{background:var(--accent-hover)}
+  button.go:disabled{opacity:.5;cursor:wait}
+  .result{padding:14px;background:var(--panel);border:1px solid var(--border);
+    border-radius:8px;min-height:60px}
+  .result .empty{color:var(--muted);font-style:italic}
+  .result .err{color:var(--err);font-family:ui-monospace,monospace;
+    font-size:12px;white-space:pre-wrap}
+  .result .meta{color:var(--muted);font-size:12px;margin-bottom:8px}
+  .result .meta .pill{display:inline-block;padding:1px 7px;border-radius:8px;
+    background:#1a2030;margin-left:4px;color:#9ec5fe;font-family:ui-monospace,monospace}
+  table.t{border-collapse:collapse;width:100%;font-size:13px;margin-top:6px}
+  table.t th,table.t td{text-align:left;padding:6px 10px;
+    border-bottom:1px solid #1f2330}
+  table.t th{color:var(--muted);font-weight:600;font-size:11px;
+    text-transform:uppercase;letter-spacing:.03em}
+  table.t td.num,table.t th.num{text-align:right;font-variant-numeric:tabular-nums}
+  table.t tr.absent{opacity:.55;font-style:italic}
+  .badge{display:inline-block;padding:3px 9px;border-radius:10px;
+    font-size:11px;font-weight:600;margin-right:5px;background:#1a2030}
+  .badge.ok{color:var(--ok)} .badge.warn{color:var(--warn)} .badge.err{color:var(--err)}
+  .flag{display:block;padding:5px 9px;background:#3a2618;color:var(--warn);
+    border-radius:5px;margin-top:4px;font-size:12px}
+  .summary{margin-top:8px;padding:10px;background:#10131a;
+    border-radius:6px;border-left:3px solid var(--accent)}
+  .briefing-row{padding:12px;background:#10131a;border-radius:6px;
+    margin-bottom:8px;border-left:3px solid #2a2f3a}
+  .briefing-row.risk{border-left-color:var(--warn)}
+  .briefing-row.offday{border-left-color:#4a5570;opacity:.7}
+  .briefing-row h4{margin:0 0 4px 0;font-size:13px;display:flex;align-items:center;gap:8px}
+  .briefing-row .stats{color:var(--muted);font-size:12px;font-family:ui-monospace,monospace}
+  .briefing-row .flags{margin-top:6px}
+  .sweep-bars{display:grid;gap:14px;margin-top:10px}
+  .sweep-bar{display:grid;grid-template-columns:80px 1fr 220px;
+    align-items:center;gap:10px}
+  .sweep-bar .lbl{font-size:12px;color:var(--muted);text-align:right}
+  .sweep-bar .stack{display:flex;height:28px;border-radius:4px;
+    overflow:hidden;background:#10131a}
+  .sweep-bar .stack > div{height:100%}
+  .sweep-bar .legend{font-size:11px;color:var(--muted);font-family:ui-monospace,monospace}
+  .gA{background:#7cb342} .gB{background:#aed581} .gC{background:#ffb74d}
+  .gD{background:#ff8a65} .gF{background:#e57373}
+  .spinner{display:inline-block;width:14px;height:14px;
+    border:2px solid var(--muted);border-top-color:transparent;border-radius:50%;
+    animation:spin 0.8s linear infinite;vertical-align:middle;margin-left:6px}
+  @keyframes spin{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<header>
+  <h1>Clark — Operations Dashboard</h1>
+  <span class="sub">forms over <code>clark serve</code> · no language model in the loop</span>
+  <span class="serve-pill" id="servePill">checking…</span>
+</header>
+
+<nav class="tabs" id="tabnav">
+  <button data-tab="plan" class="active">Plan</button>
+  <button data-tab="whatif">What-if</button>
+  <button data-tab="compare">Compare</button>
+  <button data-tab="sweep">Sweep</button>
+  <button data-tab="calendar">Calendar check</button>
+  <button data-tab="briefing">Morning briefing</button>
+</nav>
+
+<main>
+
+<!-- ─── PLAN ────────────────────────────────────────────── -->
+<section class="tab active" data-tab="plan">
+  <h2>Opening assignment for a single day</h2>
+  <div class="blurb">Pick the facility and date. Optionally override volume. Returns each worker's task and whether they should hustle. Honest scope: opening-assignment, not an end-of-day projection.</div>
+  <form class="row" id="planForm">
+    <label>Facility<select id="planFac" required></select></label>
+    <label>Date (YYYY-MM-DD)<input type="date" id="planDate" required></label>
+    <label>Volume override<input type="number" id="planVol" min="1" placeholder="(season-sampled)"></label>
+    <label>Seed<input type="number" id="planSeed" placeholder="(deterministic = ?)"></label>
+    <button class="go" type="submit">Plan</button>
+  </form>
+  <div class="result" id="planOut"><div class="empty">No plan run yet.</div></div>
+</section>
+
+<!-- ─── WHAT-IF ─────────────────────────────────────────── -->
+<section class="tab" data-tab="whatif">
+  <h2>Base vs. modified plan side-by-side</h2>
+  <div class="blurb">Same opening-assignment plan under two scenarios. Use this to ask "what if X is out?" or "what if volume doubles?". Both runs share a deterministic seed so they differ ONLY by your modification.</div>
+  <form class="row" id="whatifForm">
+    <label>Facility<select id="wfFac" required></select></label>
+    <label>Date<input type="date" id="wfDate" required></label>
+    <label>Volume override<input type="number" id="wfVol" min="1" placeholder="(unchanged)"></label>
+    <label style="min-width:520px">Absent workers <span class="sub" style="color:var(--muted);font-size:11px">(check any number)</span>
+      <div class="checkboxes" id="wfWorkers"><span class="empty" style="color:var(--muted);font-size:12px">pick a facility first</span></div>
+    </label>
+    <button class="go" type="submit">Run what-if</button>
+  </form>
+  <div class="result" id="wfOut"><div class="empty">No what-if run yet.</div></div>
+</section>
+
+<!-- ─── COMPARE ─────────────────────────────────────────── -->
+<section class="tab" data-tab="compare">
+  <h2>Cross-facility tightness ranking</h2>
+  <div class="blurb">Plan N facilities on the same date, rank by who's most stretched. Use for "where am I shortest on Monday?". Higher tightness = more workers hustling relative to non-hustling.</div>
+  <form class="row" id="compareForm">
+    <label style="min-width:520px">Facilities <span style="color:var(--muted);font-size:11px">(check any number)</span>
+      <div class="checkboxes" id="cmpFacs"><span class="empty" style="color:var(--muted);font-size:12px">loading…</span></div>
+    </label>
+    <label>Date<input type="date" id="cmpDate" required></label>
+    <button class="go" type="submit">Compare</button>
+  </form>
+  <div class="result" id="cmpOut"><div class="empty">No comparison run yet.</div></div>
+</section>
+
+<!-- ─── SWEEP ──────────────────────────────────────────── -->
+<section class="tab" data-tab="sweep">
+  <h2>Staffing-sufficiency sweep</h2>
+  <div class="blurb">Real end-to-end simulation at multiple roster sizes. Each bar is the daily-grade distribution over a sim year. Use to answer "would hiring 2 more workers help?". Slow — runs the trained policy for many days per roster step.</div>
+  <form class="row" id="sweepForm">
+    <label>Facility<select id="swFac" required></select></label>
+    <label>Extras steps<input type="text" id="swSteps" value="0,1,2,3,4" pattern="^\d+(,\d+)*$"></label>
+    <label>Days / step<input type="number" id="swDays" value="40" min="5" max="261"></label>
+    <button class="go" type="submit">Run sweep</button>
+  </form>
+  <div class="result" id="swOut"><div class="empty">No sweep run yet.</div></div>
+</section>
+
+<!-- ─── CALENDAR ───────────────────────────────────────── -->
+<section class="tab" data-tab="calendar">
+  <h2>Workday sanity check</h2>
+  <div class="blurb">Before planning a date, check whether it's actually a workday for that facility. Flags Saturday on Mon-Fri facilities, Sundays, off-calendar months, peak-staffing months. Use this when a date "feels wrong."</div>
+  <form class="row" id="calendarForm">
+    <label>Facility<select id="calFac" required></select></label>
+    <label>Date<input type="date" id="calDate" required></label>
+    <button class="go" type="submit">Check date</button>
+  </form>
+  <div class="result" id="calOut"><div class="empty">No date checked yet.</div></div>
+</section>
+
+<!-- ─── BRIEFING ───────────────────────────────────────── -->
+<section class="tab" data-tab="briefing">
+  <h2>Morning briefing — all facilities</h2>
+  <div class="blurb">For each configured facility on the given date: check the calendar, pull the plan, flag risk (>50% hustling, >25% absent, calendar flags). Ranked most-at-risk first. Same heuristics as <code>clark-mcp-briefing</code> CLI.</div>
+  <form class="row" id="briefForm">
+    <label>Date<input type="date" id="brDate" required></label>
+    <button class="go" type="submit">Run briefing</button>
+  </form>
+  <div class="result" id="brOut"><div class="empty">No briefing run yet.</div></div>
+</section>
+
+</main>
+
+<script>
+const SERVE = "http://127.0.0.1:8000";
+const $ = q => document.querySelector(q);
+const $$ = q => Array.from(document.querySelectorAll(q));
+const esc = s => {const d = document.createElement('div'); d.textContent = s==null?'':String(s); return d.innerHTML;};
+
+// ── tab switching ─────────────────────────────────────────
+$$("nav.tabs button").forEach(b => {
+  b.addEventListener("click", () => {
+    $$("nav.tabs button").forEach(x => x.classList.toggle("active", x===b));
+    $$("main .tab").forEach(t => t.classList.toggle("active", t.dataset.tab===b.dataset.tab));
+  });
+});
+
+// ── default date = today ─────────────────────────────────
+function today(){const d = new Date(); return d.toISOString().slice(0,10);}
+["planDate","wfDate","cmpDate","swDate","calDate","brDate"].forEach(id => {
+  const el = $("#"+id); if (el) el.value = today();
+});
+
+// ── serve health pill + facility list bootstrap ──────────
+let FACILITIES = [];
+let FAC_WORKERS = {};  // {fid: [worker_name,...]}, lazy
+
+async function bootstrap(){
+  const pill = $("#servePill");
+  try {
+    const r = await fetch(SERVE + "/health", {cache:"no-store"});
+    const h = await r.json();
+    pill.className = "serve-pill ok";
+    pill.textContent = "clark serve OK · " + (h.checkpoint || "unknown ckpt");
+  } catch (e) {
+    pill.className = "serve-pill bad";
+    pill.textContent = "clark serve unreachable on :8000";
+    return;
+  }
+  try {
+    const r = await fetch(SERVE + "/facilities");
+    const d = await r.json();
+    FACILITIES = d.facilities || [];
+    populateFacilityDropdowns();
+    populateFacilityCheckboxes();
+  } catch (e) {
+    console.error("failed to load facilities", e);
+  }
+}
+
+function populateFacilityDropdowns(){
+  ["planFac","wfFac","swFac","calFac"].forEach(id => {
+    const el = $("#"+id);
+    if (!el) return;
+    el.innerHTML = '<option value="">— pick one —</option>' +
+      FACILITIES.map(f => `<option value="${esc(f)}">${esc(f)}</option>`).join("");
+  });
+}
+
+function populateFacilityCheckboxes(){
+  const el = $("#cmpFacs");
+  if (!el) return;
+  if (!FACILITIES.length) {
+    el.innerHTML = '<span class="empty" style="color:var(--muted);font-size:12px">no facilities configured</span>';
+    return;
+  }
+  el.innerHTML = FACILITIES.map(f => `
+    <label><input type="checkbox" name="cmpf" value="${esc(f)}" checked> ${esc(f)}</label>
+  `).join("");
+}
+
+async function loadWorkersFor(fid){
+  if (FAC_WORKERS[fid]) return FAC_WORKERS[fid];
+  try {
+    const r = await fetch(SERVE + "/facility/" + encodeURIComponent(fid));
+    const d = await r.json();
+    const ws = (d.config && d.config.workers) || [];
+    FAC_WORKERS[fid] = ws.map(w => w.name).filter(Boolean);
+    return FAC_WORKERS[fid];
+  } catch (e) { return []; }
+}
+
+$("#wfFac").addEventListener("change", async ev => {
+  const fid = ev.target.value;
+  const box = $("#wfWorkers");
+  if (!fid) { box.innerHTML = '<span class="empty" style="color:var(--muted);font-size:12px">pick a facility first</span>'; return; }
+  box.innerHTML = '<span class="spinner"></span>';
+  const ws = await loadWorkersFor(fid);
+  box.innerHTML = ws.length
+    ? ws.map(n => `<label><input type="checkbox" name="absent" value="${esc(n)}"> ${esc(n)}</label>`).join("")
+    : '<span class="empty" style="color:var(--muted);font-size:12px">(no workers in this facility config)</span>';
+});
+
+// ── shared: post helper with friendly errors ─────────────
+async function callServe(method, path, body){
+  const opts = {method, headers:{"Content-Type":"application/json"}};
+  if (body !== undefined) opts.body = JSON.stringify(body);
+  const r = await fetch(SERVE + path, opts);
+  const text = await r.text();
+  if (!r.ok) {
+    let detail = text;
+    try { detail = JSON.parse(text).detail || text; } catch {}
+    throw new Error(`${method} ${path} -> ${r.status}: ${detail}`);
+  }
+  return JSON.parse(text);
+}
+
+function showSpinner(elId){ $("#"+elId).innerHTML = '<div class="empty">running… <span class="spinner"></span></div>'; }
+function showErr(elId, msg){ $("#"+elId).innerHTML = `<div class="err">${esc(msg)}</div>`; }
+
+// ── PLAN ─────────────────────────────────────────────────
+$("#planForm").addEventListener("submit", async ev => {
+  ev.preventDefault();
+  const fid = $("#planFac").value;
+  const date = $("#planDate").value;
+  const volRaw = $("#planVol").value, seedRaw = $("#planSeed").value;
+  if (!fid || !date) return;
+  showSpinner("planOut");
+  try {
+    const body = {facility_id: fid, date};
+    if (volRaw) body.volume = parseInt(volRaw,10);
+    if (seedRaw) body.seed = parseInt(seedRaw,10);
+    const d = await callServe("POST", "/plan", body);
+    renderPlan("planOut", d);
+  } catch (e) { showErr("planOut", e.message); }
+});
+
+function renderPlan(elId, d){
+  const rows = d.assignments || [];
+  const n_absent = rows.filter(r => r.task==="absent").length;
+  const n_hustle = rows.filter(r => r.hustle).length;
+  $("#"+elId).innerHTML = `
+    <div class="meta">${esc(d.facility_id)} · ${esc(d.date)}
+      <span class="pill">${esc(d.model || "?")}</span>
+      <span class="pill">${rows.length} workers</span>
+      <span class="pill">${n_absent} absent</span>
+      <span class="pill">${n_hustle} hustling</span></div>
+    <table class="t"><thead><tr><th>Worker</th><th>Task</th><th>Hustle</th></tr></thead>
+    <tbody>${rows.map(r =>
+      `<tr class="${r.task==='absent'?'absent':''}"><td>${esc(r.worker)}</td><td>${esc(r.task)}</td><td>${r.hustle?'yes':'no'}</td></tr>`).join("")}
+    </tbody></table>`;
+}
+
+// ── WHAT-IF ──────────────────────────────────────────────
+$("#whatifForm").addEventListener("submit", async ev => {
+  ev.preventDefault();
+  const fid = $("#wfFac").value, date = $("#wfDate").value;
+  if (!fid || !date) return;
+  const volRaw = $("#wfVol").value;
+  const absent = $$('#wfWorkers input[name="absent"]:checked').map(el => el.value);
+  showSpinner("wfOut");
+  try {
+    const body = {facility_id: fid, date, absent_workers: absent};
+    if (volRaw) body.volume = parseInt(volRaw,10);
+    const d = await callServe("POST", "/what_if", body);
+    renderWhatif("wfOut", d, absent);
+  } catch (e) { showErr("wfOut", e.message); }
+});
+
+function renderWhatif(elId, d, absent){
+  const byw = {};
+  for (const a of (d.base || [])) byw[a.worker] = {worker:a.worker, bt:a.task, bh:a.hustle};
+  for (const a of (d.modified || [])) {
+    byw[a.worker] = byw[a.worker] || {worker:a.worker};
+    byw[a.worker].mt = a.task; byw[a.worker].mh = a.hustle;
+  }
+  const rows = Object.values(byw);
+  const changed = rows.filter(r => r.bt !== r.mt || r.bh !== r.mh).length;
+  $("#"+elId).innerHTML = `
+    <div class="meta">${esc(d.facility_id)} · ${esc(d.date)}
+      <span class="pill">${absent.length ? absent.length+' absent: '+absent.map(esc).join(', ') : 'no absences'}</span>
+      <span class="pill">${(d.modifications||{}).volume ? 'volume='+d.modifications.volume : 'baseline volume'}</span>
+      <span class="pill">${changed} rows changed</span></div>
+    ${changed===0 ? '<div class="flag">⚠ Modified scenario produced the SAME plan as base. Your absence/volume change had no effect — likely a worker-name mismatch (check casing/spaces) or volume already at the boundary.</div>' : ''}
+    <table class="t"><thead><tr>
+      <th>Worker</th><th>Base task</th><th>Base hustle</th>
+      <th>Mod task</th><th>Mod hustle</th></tr></thead>
+    <tbody>${rows.map(r => {
+      const changed = r.bt!==r.mt || r.bh!==r.mh;
+      return `<tr style="${changed?'background:#1a2a18':''}">
+        <td>${esc(r.worker)}</td>
+        <td>${esc(r.bt||'')}</td><td>${r.bh?'yes':'no'}</td>
+        <td>${esc(r.mt||'')}</td><td>${r.mh?'yes':'no'}</td></tr>`;
+    }).join("")}</tbody></table>`;
+}
+
+// ── COMPARE ──────────────────────────────────────────────
+$("#compareForm").addEventListener("submit", async ev => {
+  ev.preventDefault();
+  const facs = $$('#cmpFacs input[name="cmpf"]:checked').map(el => el.value);
+  const date = $("#cmpDate").value;
+  if (!facs.length) { showErr("cmpOut", "pick at least one facility"); return; }
+  if (!date) return;
+  showSpinner("cmpOut");
+  try {
+    const d = await callServe("POST", "/compare", {facility_ids: facs, date});
+    renderCompare("cmpOut", d);
+  } catch (e) { showErr("cmpOut", e.message); }
+});
+
+function renderCompare(elId, d){
+  const facs = d.facilities || [];
+  const ranking = d.ranking || [];
+  const rankIdx = Object.fromEntries(ranking.map((r,i) => [r.facility_id, i+1]));
+  facs.sort((a,b) => (rankIdx[a.facility_id]||999) - (rankIdx[b.facility_id]||999));
+  const errors = d.errors || [];
+  $("#"+elId).innerHTML = `
+    <div class="meta">date ${esc(d.date)}
+      <span class="pill">${facs.length} ok</span>
+      ${errors.length ? `<span class="pill" style="color:var(--err)">${errors.length} error</span>` : ''}</div>
+    <table class="t"><thead><tr>
+      <th>#</th><th>Facility</th>
+      <th class="num">Workers</th><th class="num">Active</th>
+      <th class="num">Absent</th><th class="num">Hustling</th>
+      <th class="num">Tightness</th><th>Model</th></tr></thead>
+    <tbody>${facs.map(r => `
+      <tr><td>${rankIdx[r.facility_id]||'-'}</td>
+        <td>${esc(r.facility_id)}</td>
+        <td class="num">${r.n_workers}</td>
+        <td class="num">${r.n_active}</td>
+        <td class="num">${r.n_absent}</td>
+        <td class="num">${r.n_hustling}</td>
+        <td class="num"><b>${r.tightness_score}</b></td>
+        <td>${esc(r.model||'')}</td></tr>`).join("")}</tbody></table>
+    ${errors.length ? `<div class="meta" style="margin-top:12px">Errors: ${errors.map(e => `<span class="pill" style="color:var(--err)">${esc(e.facility_id)}: ${esc(e.detail||'?')}</span>`).join('')}</div>` : ''}`;
+}
+
+// ── SWEEP ────────────────────────────────────────────────
+$("#sweepForm").addEventListener("submit", async ev => {
+  ev.preventDefault();
+  const fid = $("#swFac").value;
+  if (!fid) return;
+  const steps = $("#swSteps").value.split(",").map(s => parseInt(s.trim(),10)).filter(n => isFinite(n));
+  const days = parseInt($("#swDays").value, 10);
+  showSpinner("swOut");
+  try {
+    const results = [];
+    for (const extra of steps) {
+      const d = await callServe("POST", "/simulate", {facility_id: fid, extra_workers: extra, n_days: days});
+      results.push({extra, d});
+      renderSweep("swOut", fid, days, results, /*partial=*/true);
+    }
+    renderSweep("swOut", fid, days, results, /*partial=*/false);
+  } catch (e) { showErr("swOut", e.message); }
+});
+
+function renderSweep(elId, fid, days, results, partial){
+  const partialNote = partial ? `<span class="spinner"></span> running ${results.length} / ${results.length+1}+ …` : '';
+  $("#"+elId).innerHTML = `
+    <div class="meta">${esc(fid)} · ${days} days/step ${partialNote}</div>
+    <div class="sweep-bars">${results.map(({extra, d}) => {
+      const summary = d.summary || {};
+      const grades = summary.grade_distribution || {};
+      const total = ['A','B','C','D','F'].reduce((s,g)=>s+(grades[g]||0), 0) || 1;
+      const pct = g => ((grades[g]||0) / total * 100);
+      return `<div class="sweep-bar">
+        <div class="lbl">+${extra} (${d.n_workers}w)</div>
+        <div class="stack">
+          <div class="gA" style="width:${pct('A')}%" title="A: ${grades.A||0}"></div>
+          <div class="gB" style="width:${pct('B')}%" title="B: ${grades.B||0}"></div>
+          <div class="gC" style="width:${pct('C')}%" title="C: ${grades.C||0}"></div>
+          <div class="gD" style="width:${pct('D')}%" title="D: ${grades.D||0}"></div>
+          <div class="gF" style="width:${pct('F')}%" title="F: ${grades.F||0}"></div>
+        </div>
+        <div class="legend">A ${grades.A||0} · B ${grades.B||0} · C ${grades.C||0} · D ${grades.D||0} · F ${grades.F||0}</div>
+      </div>`;
+    }).join("")}</div>
+    ${!partial ? '<div class="summary" style="font-size:12px">End-to-end simulation, ' + days + ' days per roster step. Outcome distribution on the days run, not a snapshot projection.</div>' : ''}`;
+}
+
+// ── CALENDAR ─────────────────────────────────────────────
+$("#calendarForm").addEventListener("submit", async ev => {
+  ev.preventDefault();
+  const fid = $("#calFac").value, date = $("#calDate").value;
+  if (!fid || !date) return;
+  showSpinner("calOut");
+  try {
+    const d = await callServe("POST", "/calendar_check", {facility_id: fid, date});
+    renderCalendar("calOut", d);
+  } catch (e) { showErr("calOut", e.message); }
+});
+
+function renderCalendar(elId, d){
+  const badges = [];
+  badges.push(`<span class="badge ${d.is_workday?'ok':'warn'}">${d.is_workday?'workday':'not a workday'}</span>`);
+  badges.push(`<span class="badge">${esc(d.weekday)}</span>`);
+  badges.push(`<span class="badge">${esc(d.month)}</span>`);
+  if (d.is_peak_month) badges.push('<span class="badge warn">peak month</span>');
+  if (d.is_saturday) badges.push('<span class="badge">Saturday</span>');
+  if (d.is_sunday) badges.push('<span class="badge">Sunday</span>');
+  const flags = (d.flags || []).map(f => `<div class="flag">⚠ ${esc(f)}</div>`).join("");
+  $("#"+elId).innerHTML = `
+    <div class="meta">${esc(d.facility_id)} · ${esc(d.date)}</div>
+    <div>${badges.join("")}</div>
+    ${flags}
+    <div class="summary">${esc(d.summary || '')}</div>`;
+}
+
+// ── BRIEFING ────────────────────────────────────────────
+$("#briefForm").addEventListener("submit", async ev => {
+  ev.preventDefault();
+  const date = $("#brDate").value;
+  if (!date) return;
+  showSpinner("brOut");
+  try {
+    if (!FACILITIES.length) await bootstrap();
+    const out = $("#brOut");
+    out.innerHTML = '<div class="meta">running briefing for ' + FACILITIES.length + ' facilities…</div><div id="brList"></div>';
+    const rows = [];
+    for (const fid of FACILITIES) {
+      let cal=null, plan=null, err=null;
+      try { cal = await callServe("POST", "/calendar_check", {facility_id: fid, date}); }
+      catch (e) { err = e.message; }
+      if (cal && cal.is_workday) {
+        try { plan = await callServe("POST", "/plan", {facility_id: fid, date}); }
+        catch (e) { err = e.message; }
+      }
+      rows.push(renderBriefingRow(fid, cal, plan, err));
+      $("#brList").innerHTML = rows.join("");
+    }
+    const risky = rows.filter(r => r.includes('briefing-row risk')).length;
+    out.innerHTML = `<div class="meta">${date} · ${FACILITIES.length} facilities · ${risky} at risk</div><div>${rows.join("")}</div>`;
+  } catch (e) { showErr("brOut", e.message); }
+});
+
+function renderBriefingRow(fid, cal, plan, err){
+  if (err) return `<div class="briefing-row" style="border-left-color:var(--err)"><h4>✗ ${esc(fid)}</h4><div class="stats">${esc(err.slice(0,160))}</div></div>`;
+  if (!cal || !cal.is_workday) {
+    return `<div class="briefing-row offday"><h4>— ${esc(fid)} <span class="badge">${esc(cal?cal.weekday:'?')}</span></h4>
+      <div class="stats">${esc(cal ? (cal.summary||'not a workday') : '?')}</div></div>`;
+  }
+  const asg = (plan && plan.assignments) || [];
+  const n_total = asg.length;
+  const n_absent = asg.filter(a => a.task==='absent').length;
+  const n_active = n_total - n_absent;
+  const n_hustle = asg.filter(a => a.hustle).length;
+  const hustleRate = n_active ? n_hustle / n_active : 0;
+  const absentRate = n_total ? n_absent / n_total : 0;
+  const flags = [];
+  if (hustleRate > 0.50) flags.push(`${Math.round(hustleRate*100)}% of active workers hustling — schedule is tight`);
+  if (absentRate > 0.25) flags.push(`${Math.round(absentRate*100)}% of roster absent`);
+  (cal.flags || []).forEach(f => flags.push(`calendar: ${f}`));
+  const cls = flags.length ? 'briefing-row risk' : 'briefing-row';
+  const peak = cal.is_peak_month ? '<span class="badge warn">peak month</span>' : '';
+  return `<div class="${cls}">
+    <h4>${flags.length?'⚠':'•'} ${esc(fid)} ${peak}</h4>
+    <div class="stats">active ${n_active} · hustling ${n_hustle} · absent ${n_absent} · ${esc(cal.weekday)}</div>
+    ${flags.length ? '<div class="flags">'+flags.map(f=>`<div class="flag">⚠ ${esc(f)}</div>`).join('')+'</div>' : ''}
+  </div>`;
+}
+
+bootstrap();
+</script>
+</body>
+</html>

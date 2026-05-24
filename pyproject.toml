@@ -43,6 +43,8 @@ clark = [
     "dashboard/*.html",
     "dashboard/*.bat",
     "dashboard/*.png",
+    "ops/*.html",
+    "ops/*.bat",
 ]
 
 [build-system]

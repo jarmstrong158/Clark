@@ -387,6 +387,62 @@ def cmd_plan(args: argparse.Namespace):
             print(f"{bot_border}")
 
 
+def cmd_ops(args: argparse.Namespace):
+    """Operations dashboard — forms over clark serve. Separate from
+    cmd_dashboard (training metrics); this is the operator-facing UI
+    for plan/what-if/compare/sweep/calendar/briefing without an LLM
+    in the loop.
+
+    The page is a single static HTML file; it talks directly to clark
+    serve on :8000 from the browser (same-origin not required, both
+    are localhost). No server-side logic needed beyond serving the
+    file, so this is a 30-line stdlib HTTP server.
+    """
+    _header()
+    page = (Path(__file__).parent.parent / "clark" / "ops" / "index.html")
+    if not page.exists():
+        _die(f"Ops dashboard HTML not found at {page}")
+
+    import http.server
+    import webbrowser
+
+    class OpsHandler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, fmt, *a):
+            pass
+
+        def do_GET(self):
+            from urllib.parse import urlparse
+            path = urlparse(self.path).path
+            if path in ("/", "/index.html"):
+                body = page.read_bytes()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            else:
+                self.send_response(404)
+                self.end_headers()
+                self.wfile.write(b"Not found")
+
+    server = http.server.HTTPServer(("127.0.0.1", args.port), OpsHandler)
+    url = f"http://127.0.0.1:{args.port}/"
+    print(f"Clark operations dashboard -> {url}")
+    print("(Talks directly to clark serve on :8000. If clark serve isn't running, "
+          "the page will show 'clark serve unreachable' in the header.)")
+    if not getattr(args, "no_browser", False) and \
+            os.environ.get("CLARK_NO_BROWSER") != "1":
+        try:
+            webbrowser.open(url)
+        except Exception:
+            pass
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\nStopping ops dashboard.")
+        server.shutdown()
+
+
 def cmd_dashboard(args: argparse.Namespace):
     _header()
 
@@ -583,6 +639,16 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Directory containing episode_log.json / year_snapshot.json.")
     p_dash.add_argument("--port", type=int, default=8080,
                         help="Port to serve the dashboard on (default: 8080).")
+
+    # ops (operations dashboard — forms over clark serve, no LLM)
+    p_ops = sub.add_parser("ops", help="Launch the operations dashboard "
+                                        "(plan / what-if / compare / sweep "
+                                        "/ calendar / briefing — direct UI "
+                                        "over clark serve, no LLM in the loop).")
+    p_ops.add_argument("--port", type=int, default=8092,
+                       help="Port to serve the ops dashboard on (default: 8092).")
+    p_ops.add_argument("--no-browser", action="store_true",
+                       help="Don't auto-open a browser tab.")
 
     # wizard
     p_wiz = sub.add_parser("wizard", help="Launch the facility setup wizard (web UI).")
@@ -1267,6 +1333,7 @@ def main():
         "finetune":  cmd_finetune,
         "plan":      cmd_plan,
         "dashboard": cmd_dashboard,
+        "ops":       cmd_ops,
         "wizard":    cmd_wizard,
         "serve":     cmd_serve,
     }
