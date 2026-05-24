@@ -795,6 +795,38 @@ function renderPlanOutcome(elId, d){
   else if (ab >= 50) { headline = `Mixed — A+B ${ab.toFixed(0)}%, F ${f.toFixed(0)}%`; color = "var(--warn)"; }
   else { headline = `Weak — A+B only ${ab.toFixed(0)}%`; color = "var(--err)"; }
 
+  // ROOT-CAUSE PROMPT: a bad outcome on the GENERIC foundation
+  // almost always means the facility needs its own fine-tune. The
+  // foundation generalizes poorly to specific configs (worker
+  // counts, task mixes, reward profiles it wasn't trained on).
+  // Reward weights and config tweaks don't fix inference — only
+  // retraining does. Surface this so the user doesn't have to be
+  // an ML engineer to figure out the next move.
+  let fineTuneHint = '';
+  const isFoundation = (d.model || '').toLowerCase().includes('foundation');
+  const isBad = ab < 50 || f >= 30;
+  if (isFoundation && isBad) {
+    fineTuneHint = `
+      <div style="margin-top:12px;padding:10px 14px;background:#1a2030;
+        border-left:3px solid var(--accent2);border-radius:4px;font-size:13px">
+        <b style="color:var(--accent2)">⚙ Why this is happening:</b>
+        <span style="color:var(--ink-dim)"> ${esc(d.facility_id)} is using the
+        <code>foundation</code> model — generic weights from pre-training, not
+        tuned for this facility's specific worker count + enabled tasks.
+        The policy is likely making poor task choices (e.g. spending time on
+        <code>side_project</code> when it should be picking).</span>
+        <div style="margin-top:6px;color:var(--ink-dim)">
+          <b>The fix:</b> fine-tune this facility. test_v3 went from
+          ~0% A-grade to 94% in 5 episodes (~30 min) once it had its own
+          checkpoint. Click <b>New facility ↗</b> at the top — the wizard
+          can load this facility's config and start a training run.
+          <span style="color:var(--muted)">(Tweaking reward weights or task
+          lists on the YAML won't help — those only affect training, not the
+          already-trained policy you're running now.)</span>
+        </div>
+      </div>`;
+  }
+
   $("#"+elId).innerHTML = `
     <div class="meta">
       Day-outcome projection · ${esc(d.facility_id)} · ${esc(d.date)}
@@ -823,7 +855,8 @@ function renderPlanOutcome(elId, d){
     <div style="margin-top:14px;padding:8px 12px;background:#10131a;border-left:3px solid ${color};border-radius:4px;font-size:13px">
       <b style="color:${color}">${esc(headline)}</b>
       <span style="color:var(--muted);margin-left:8px">— based on ${d.n_samples} stochastic re-runs of this exact date + volume</span>
-    </div>`;
+    </div>
+    ${fineTuneHint}`;
 }
 
 function _fmtHour(h){
@@ -1104,12 +1137,33 @@ function renderSweep(elId, fid, days, results, partial, target, maxExtras, hit){
       : `Custom sweep complete — ${results.length} step${results.length===1?'':'s'} simulated.`;
   }
 
+  // If foundation model + every step is mostly F, the issue isn't
+  // staffing — it's that the policy doesn't fit this config. Surface
+  // the same fine-tune hint as the Outcome panel.
+  const isFoundationSweep = results.some(r =>
+    ((r.d || {}).model || '').toLowerCase().includes('foundation'));
+  const worstAB = results.length
+    ? Math.max(...results.map(r => r.ab)) : 1;
+  const fineTuneHintSweep = (!partial && isFoundationSweep && worstAB < 0.30 && results.length >= 3)
+    ? `<div style="margin-top:8px;padding:10px 14px;background:#1a2030;
+        border-left:3px solid var(--accent2);border-radius:4px;font-size:13px">
+        <b style="color:var(--accent2)">⚙ Why even +${maxExtras} can't reach the target:</b>
+        <span style="color:var(--ink-dim)"> ${esc(fid)} is using the
+        <code>foundation</code> model. Adding workers doesn't help because
+        the policy makes poor task choices (e.g. side_project during
+        crunch). A 5-episode fine-tune typically fixes this without
+        needing more bodies — click <b>New facility ↗</b> at the top
+        and load this facility into the wizard to start training.</span>
+      </div>`
+    : '';
+
   $("#"+elId).innerHTML = `
     <div class="meta">${esc(fid)} · ${days} days/step ${partialNote}</div>
     <div style="margin:8px 0 14px 0;padding:10px 14px;background:#10131a;
       border-left:3px solid ${color};border-radius:4px;font-size:13px">
       ${esc(headline)}
     </div>
+    ${fineTuneHintSweep}
     <div class="sweep-bars">${results.map(({extra, d, ab}) => {
       const summary = d.summary || {};
       const grades = summary.grade_distribution || {};
