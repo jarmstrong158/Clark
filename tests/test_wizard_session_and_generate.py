@@ -128,7 +128,8 @@ def test_session_update_preserves_created_at(wizard):
 
 # ── /generate quick-mode (the primary wizard output) ──────────────
 
-def test_generate_quick_mode_forces_minimal_task_set(wizard, tmp_path):
+def test_generate_quick_mode_forces_minimal_task_set(wizard, tmp_path,
+                                                       request):
     """The 'test_v3 8-workers / 47-of-64 worker-hours on secondary
     tasks' regression: quick-mode must hardcode the 5-task minimal set,
     NOT honor the template's full task list. Pinned per cli/main.py:811-831."""
@@ -145,6 +146,16 @@ def test_generate_quick_mode_forces_minimal_task_set(wizard, tmp_path):
     assert r.status_code == 200, r.text
     out = r.json()
     assert "yaml_path" in out and "yaml_text" in out
+
+    # The wizard writes the YAML to the REAL configs/user/ dir (path
+    # is hardcoded in cli/main.py:728, not parameterisable). Without
+    # a teardown the file accumulates every test run as
+    # quick-mode_pin_test_v2, _v3, ... and pollutes the repo. Clean up.
+    written = Path(out["yaml_path"])
+    def _cleanup():
+        try: written.unlink()
+        except FileNotFoundError: pass
+    request.addfinalizer(_cleanup)
 
     parsed = _yaml.safe_load(out["yaml_text"])
     assert parsed["facility"]["name"] == "Quick-Mode Pin Test"
