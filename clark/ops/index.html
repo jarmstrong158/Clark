@@ -274,13 +274,30 @@ $$("nav.tabs button").forEach(b => {
 });
 
 // ── header buttons ────────────────────────────────────────
-$("#newFacBtn").addEventListener("click", () => {
-  // The wizard is a sibling local server on :8090. We don't try to
-  // auto-launch it here (different repo, different process); just
-  // open the URL. If the wizard isn't running the browser shows a
-  // standard connection error — easier to recognize than a fake
-  // "we tried but failed" message.
-  window.open("http://127.0.0.1:8090/", "_blank");
+$("#newFacBtn").addEventListener("click", async () => {
+  // Ask our own server to spawn `clark wizard` if it's not already
+  // up (mirrors the chat UI's "New facility" flow). The server polls
+  // for the wizard to bind on :8090 before returning, so when we
+  // open the tab below the page reliably loads.
+  const btn = $("#newFacBtn");
+  const orig = btn.textContent;
+  btn.disabled = true; btn.textContent = "launching wizard…";
+  try {
+    const r = await fetch("/launch_wizard", {method: "POST"});
+    const d = await r.json();
+    if (d.ok) {
+      window.open(d.url || "http://127.0.0.1:8090/", "_blank");
+      btn.textContent = (d.message === "already running"
+                          ? "wizard already up" : "wizard launched");
+      setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 2500);
+    } else {
+      alert("Could not launch the wizard:\n\n" + (d.message || "unknown error"));
+      btn.textContent = orig; btn.disabled = false;
+    }
+  } catch (e) {
+    alert("Network error launching wizard: " + e.message);
+    btn.textContent = orig; btn.disabled = false;
+  }
 });
 $("#openChatBtn").addEventListener("click", () => {
   window.open("http://127.0.0.1:8765/", "_blank");

@@ -404,11 +404,74 @@ def cmd_ops(args: argparse.Namespace):
         _die(f"Ops dashboard HTML not found at {page}")
 
     import http.server
+    import json as _json
+    import socket as _socket
+    import subprocess as _subprocess
+    import time as _time
     import webbrowser
+
+    WIZARD_PORT = 8090
+
+    def _port_open(host: str, port: int, timeout: float = 0.4) -> bool:
+        s = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+        s.settimeout(timeout)
+        try:
+            s.connect((host, port))
+            return True
+        except OSError:
+            return False
+        finally:
+            s.close()
+
+    def _launch_wizard_subprocess():
+        """Spawn `clark wizard` in a new console window if it isn't
+        already serving on :8090. Returns (ok: bool, message: str).
+        Mirrors clark-mcp/clark_mcp/web/server.py:_launch_wizard so
+        the New facility button on the dashboard has the same UX as
+        the chat's wizard launch."""
+        if _port_open("127.0.0.1", WIZARD_PORT):
+            return True, "already running"
+        try:
+            if os.name == "nt":
+                # New console window so the user can see the wizard's
+                # logs and close it independently of the dashboard.
+                CREATE_NEW_CONSOLE = 0x00000010
+                _subprocess.Popen(
+                    [sys.executable, "-m", "cli.main", "wizard"],
+                    creationflags=CREATE_NEW_CONSOLE,
+                    close_fds=True,
+                    cwd=str(Path(__file__).parent.parent),
+                )
+            else:
+                _subprocess.Popen(
+                    [sys.executable, "-m", "cli.main", "wizard"],
+                    start_new_session=True,
+                    stdout=_subprocess.DEVNULL,
+                    stderr=_subprocess.DEVNULL,
+                    cwd=str(Path(__file__).parent.parent),
+                )
+        except Exception as e:
+            return False, f"couldn't spawn `clark wizard`: {type(e).__name__}: {e}"
+        # Poll for bind
+        deadline = _time.time() + 20.0
+        while _time.time() < deadline:
+            if _port_open("127.0.0.1", WIZARD_PORT):
+                return True, "launched"
+            _time.sleep(0.4)
+        return False, ("Wizard launched but didn't bind on :8090 within "
+                       "20s. Check the new console window for errors.")
 
     class OpsHandler(http.server.BaseHTTPRequestHandler):
         def log_message(self, fmt, *a):
             pass
+
+        def _send_json(self, code: int, obj):
+            body = _json.dumps(obj).encode("utf-8")
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
 
         def do_GET(self):
             from urllib.parse import urlparse
@@ -420,6 +483,19 @@ def cmd_ops(args: argparse.Namespace):
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
+            else:
+                self.send_response(404)
+                self.end_headers()
+                self.wfile.write(b"Not found")
+
+        def do_POST(self):
+            from urllib.parse import urlparse
+            path = urlparse(self.path).path
+            if path == "/launch_wizard":
+                ok, msg = _launch_wizard_subprocess()
+                self._send_json(200 if ok else 500,
+                                {"ok": ok, "message": msg,
+                                 "url": f"http://127.0.0.1:{WIZARD_PORT}/"})
             else:
                 self.send_response(404)
                 self.end_headers()
