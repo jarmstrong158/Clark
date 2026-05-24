@@ -239,9 +239,15 @@
         <li><b>Task</b> — what Clark wants them doing at shift start (<code>pick</code>, <code>pack</code>, <code>restock</code>, <code>management</code>, <code>idle</code>, etc.). <code>absent</code> = called off / forced out</li>
         <li><b>Hustle</b> — <code>yes</code> means hard pace; <code>no</code> means normal pace. Hustle is a real cost Clark pays only when needed</li>
       </ul>
+      <h5>Three buttons, three questions</h5>
+      <ul>
+        <li><b>Plan</b> (default) — the opening assignment table (one task per worker at shift start). Fast (~1s)</li>
+        <li><b>Show full-day schedule</b> — runs the day tick-by-tick and shows when each worker switches tasks. Slower (~2s)</li>
+        <li><b>Project outcome (×20)</b> — runs the day 20 times with different seeds, returns the grade distribution + completion-rate stats. Slow (~20-40s) — use when you want "will today actually ship?" not "what's the plan"</li>
+      </ul>
       <h5>Scope (honest)</h5>
       <ul>
-        <li>This is an <b>opening</b> assignment — what Clark would do at 9 AM. It's not a simulated end-of-day result. For projected outcomes, use <b>Sweep</b></li>
+        <li>The opening Plan is a snapshot, not a projection. Use <b>Project outcome</b> for "how often does this day ship" or <b>Sweep</b> for "how does my roster size change the long-run grade distribution"</li>
         <li><b>Volume override</b> lets you ask "what if today's volume is 400 instead of the season-sampled value?" Leave blank for normal</li>
         <li><b>Seed</b> makes the plan reproducible. Same seed → same plan, exactly</li>
       </ul>
@@ -254,9 +260,11 @@
     <label>Seed<input type="number" id="planSeed" placeholder="(deterministic = ?)"></label>
     <button class="go" type="submit">Plan</button>
     <button class="go" id="planSchedBtn" type="button" style="background:linear-gradient(180deg,var(--accent2) 0%,#8a6ed8 100%)" title="Run the full day's simulation and show per-worker task timeline (every 10-min tick).">Show full-day schedule</button>
+    <button class="go" id="planOutcomeBtn" type="button" style="background:linear-gradient(180deg,#84d04a 0%,#5fa838 100%)" title="Run the day N times with different seeds and aggregate the grade + completion outcome. Slower than the other two buttons (~20-40s) because it runs a full day simulation per sample.">Project outcome (×20)</button>
   </form>
   <div class="result" id="planOut"><div class="empty">No plan run yet.</div></div>
   <div class="result" id="planSchedOut" style="margin-top:14px;display:none"></div>
+  <div class="result" id="planOutcomeOut" style="margin-top:14px;display:none"></div>
 </section>
 
 <!-- ─── WHAT-IF ─────────────────────────────────────────── -->
@@ -656,6 +664,87 @@ $("#planSchedBtn").addEventListener("click", async () => {
     renderPlanSchedule("planSchedOut", d);
   } catch (e) { showErr("planSchedOut", e.message); }
 });
+
+// Project outcome: Monte Carlo on the same day, distribution of
+// grades + completion-rate stats. Slow (~20-40s for 20 samples).
+$("#planOutcomeBtn").addEventListener("click", async () => {
+  const fid = $("#planFac").value, date = $("#planDate").value;
+  if (!fid || !date) { alert("Pick a facility + date first."); return; }
+  const volRaw = $("#planVol").value;
+  const out = $("#planOutcomeOut");
+  out.style.display = "";
+  out.innerHTML = '<div class="empty">running 20 simulations of this day… <span class="spinner"></span> (~20-40s)</div>';
+  try {
+    const body = {facility_id: fid, date, n_samples: 20};
+    if (volRaw) body.volume = parseInt(volRaw, 10);
+    const d = await callServe("POST", "/plan_outcome", body);
+    renderPlanOutcome("planOutcomeOut", d);
+  } catch (e) { showErr("planOutcomeOut", e.message); }
+});
+
+function renderPlanOutcome(elId, d){
+  const order = ["A","B","C","D","F"];
+  const gp = d.grade_pct || {};
+  const gc = d.grades || {};
+  const total = d.n_samples || order.reduce((s,g)=>s+(gc[g]||0),0) || 1;
+  // Grade distribution bar (stacked horizontal)
+  const stack = order.map(g => {
+    const pct = (gp[g] || 0) * 100;
+    if (pct < 0.5) return "";  // skip near-zero slices visually
+    return `<div title="${g}: ${(gc[g]||0)} of ${total} = ${pct.toFixed(1)}%"
+      class="g${g}" style="width:${pct}%;height:100%;display:flex;
+      align-items:center;justify-content:center;font-size:11px;
+      font-weight:600;color:#0f1115">${pct>=8 ? g+" "+pct.toFixed(0)+"%" : ""}</div>`;
+  }).join("");
+  // Pull/push grade text-legend
+  const legendRows = order.map(g => {
+    const c = gc[g] || 0; const p = (gp[g] || 0) * 100;
+    return `<div style="display:flex;align-items:center;gap:6px;font-size:12px;font-family:ui-monospace,monospace">
+      <span class="g${g}" style="width:12px;height:12px;border-radius:2px"></span>
+      <span style="width:14px;color:var(--ink-dim)">${g}</span>
+      <span style="width:50px;text-align:right">${c}/${total}</span>
+      <span style="color:var(--muted);width:60px;text-align:right">${p.toFixed(1)}%</span>
+    </div>`;
+  }).join("");
+  // Headline interpretation
+  const ab = ((gp.A||0) + (gp.B||0)) * 100;
+  const f = (gp.F || 0) * 100;
+  let headline, color;
+  if (ab >= 80) { headline = `Strong — A+B ${ab.toFixed(0)}%`; color = "var(--ok)"; }
+  else if (f >= 30) { headline = `Risky — F ${f.toFixed(0)}%`; color = "var(--err)"; }
+  else if (ab >= 50) { headline = `Mixed — A+B ${ab.toFixed(0)}%, F ${f.toFixed(0)}%`; color = "var(--warn)"; }
+  else { headline = `Weak — A+B only ${ab.toFixed(0)}%`; color = "var(--err)"; }
+
+  $("#"+elId).innerHTML = `
+    <div class="meta">
+      Day-outcome projection · ${esc(d.facility_id)} · ${esc(d.date)}
+      <span class="pill">${esc(d.model||"?")}</span>
+      <span class="pill">vol=${d.volume}</span>
+      <span class="pill">${d.n_samples} samples</span>
+    </div>
+    <div style="display:flex;gap:24px;align-items:flex-start;margin-top:10px;flex-wrap:wrap">
+      <div style="flex:1;min-width:300px">
+        <div style="font-size:13px;color:var(--ink-dim);margin-bottom:6px">Grade distribution</div>
+        <div style="height:32px;display:flex;background:#10131a;border-radius:4px;overflow:hidden;border:1px solid #1f2330">${stack}</div>
+        <div style="margin-top:10px;display:grid;grid-template-columns:1fr 1fr;gap:4px">${legendRows}</div>
+      </div>
+      <div style="flex:1;min-width:240px">
+        <div style="font-size:13px;color:var(--ink-dim);margin-bottom:6px">Completion rate (orders shipped / total)</div>
+        <table class="t" style="margin-top:0">
+          <tbody>
+            <tr><td>Mean</td><td class="num"><b>${(d.completion_rate_mean*100).toFixed(1)}%</b></td></tr>
+            <tr><td>p10 (downside)</td><td class="num">${(d.completion_rate_p10*100).toFixed(1)}%</td></tr>
+            <tr><td>p90 (upside)</td><td class="num">${(d.completion_rate_p90*100).toFixed(1)}%</td></tr>
+            <tr><td>Ships 100%</td><td class="num"><b>${(d.full_completion_pct*100).toFixed(0)}%</b> of runs</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div style="margin-top:14px;padding:8px 12px;background:#10131a;border-left:3px solid ${color};border-radius:4px;font-size:13px">
+      <b style="color:${color}">${esc(headline)}</b>
+      <span style="color:var(--muted);margin-left:8px">— based on ${d.n_samples} stochastic re-runs of this exact date + volume</span>
+    </div>`;
+}
 
 function _fmtHour(h){
   // Round to total minutes first so 11.9999 → 720 → "12:00"

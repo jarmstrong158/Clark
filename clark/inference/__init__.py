@@ -10,8 +10,9 @@ inference, serve → inference, no edge between CLI and serve.
 from clark.inference.plan import (
     run_one_plan_day,
     run_full_day_schedule,
+    run_day_outcome_samples,
     sample_volume_for_date,
 )
 
 __all__ = ["run_one_plan_day", "run_full_day_schedule",
-           "sample_volume_for_date"]
+           "run_day_outcome_samples", "sample_volume_for_date"]

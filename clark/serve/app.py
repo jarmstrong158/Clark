@@ -30,6 +30,7 @@ from pydantic import BaseModel
 # into the CLI's internals.)
 from clark.inference.plan import (run_one_plan_day,
                                    run_full_day_schedule,
+                                   run_day_outcome_samples,
                                    sample_volume_for_date)
 from clark.config.schema import FacilityConfig, WorkerConfig
 
@@ -46,6 +47,19 @@ class WhatIfRequest(BaseModel):
     date: Optional[str] = None
     volume: Optional[int] = None        # override the base volume
     absent_workers: list[str] = []      # worker names forced absent
+
+
+class OutcomeRequest(BaseModel):
+    """Monte Carlo outcome estimate for a single day. The trained
+    policy gets stochastic action sampling + variable per-day
+    call-off rolls; we run N simulations of the SAME date and
+    aggregate the grade distribution + completion rate. Tells the
+    user 'given today's scenario, here's how often it ships'."""
+    facility_id: str
+    date: Optional[str] = None
+    volume: Optional[int] = None
+    n_samples: int = 20
+    base_seed: Optional[int] = None
 
 
 class CompareRequest(BaseModel):
@@ -354,6 +368,32 @@ def build_app(agent: Any, facilities_dir: str | Path,
             "assignments": _plan_for(cfg, when, req.volume,
                                      seed=req.seed, use_agent=ag),
             "model": ("fine-tuned" if ag is not agent else "foundation"),
+        }
+
+    @app.post("/plan_outcome")
+    def plan_outcome(req: OutcomeRequest):
+        """Run the day N times with different seeds, return a grade
+        distribution + completion-rate stats. Cost: ~N × one day's
+        simulation (slow — defaults to 20 samples = ~20-40s)."""
+        if req.n_samples < 1 or req.n_samples > 100:
+            raise HTTPException(422, "n_samples must be in [1, 100]")
+        cfg = _load_facility(req.facility_id)
+        when = _resolve_date(req.date)
+        ag = _agent_for(req.facility_id)
+        if req.volume is not None:
+            vol = req.volume
+        else:
+            vol = sample_volume_for_date(cfg, when)[0]
+        with _agent_lock:
+            out = run_day_outcome_samples(cfg, ag, when, vol,
+                                            n_samples=req.n_samples,
+                                            base_seed=req.base_seed)
+        return {
+            "facility_id": req.facility_id,
+            "date": when.isoformat(),
+            "volume": vol,
+            "model": ("fine-tuned" if ag is not agent else "foundation"),
+            **out,
         }
 
     @app.post("/plan_schedule")

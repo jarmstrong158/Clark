@@ -153,6 +153,130 @@ def run_one_plan_day(config, agent, target_date: date, volume: int,
     return assignments
 
 
+def run_day_outcome_samples(config, agent, target_date: date,
+                              volume: int,
+                              n_samples: int = 20,
+                              base_seed: int | None = None,
+                              forced_absent: set | None = None,
+                              ) -> dict:
+    """Run the same day's simulation N times with different seeds
+    and aggregate the outcome. Distinct from run_one_plan_day (which
+    captures only the opening) and run_full_day_schedule (which
+    captures one day's tick-by-tick assignments): this returns
+    distributions over the day's *outcome*.
+
+    The agent's action sampling is stochastic; volume is fixed
+    (we pass it in), but the env's per-day RNG (which workers
+    naturally call off, etc.) varies seed-by-seed. So the spread
+    here is "given this scenario, how often does it ship".
+
+    Returns:
+        {
+          "n_samples": int,
+          "grades": {"A": int, "B": int, "C": int, "D": int, "F": int},
+          "grade_pct": {"A": float, ...},
+          "completion_rate_mean": float,   # mean orders_shipped/orders_total
+          "completion_rate_p10": float,    # 10th percentile (downside)
+          "completion_rate_p90": float,    # 90th percentile (upside)
+          "full_completion_pct": float,    # % of samples that shipped 100%
+          "samples": [{"seed": int, "grade": str, "shipped": int,
+                       "total": int, "completion": float}, ...]
+        }
+    """
+    from clark.env.year_env import YearEnv
+    from clark.agent.state import StateBuilder
+    from clark.agent.actions import get_action_mask, get_hustle_mask
+    import random as _random
+    import numpy as _np
+    import torch as _torch
+
+    if n_samples < 1:
+        raise ValueError("n_samples must be >= 1")
+    base_seed = base_seed if base_seed is not None else 12345
+
+    grades_counter = {g: 0 for g in "ABCDF"}
+    completions: list[float] = []
+    full_comps = 0
+    sample_rows: list[dict] = []
+
+    dow = target_date.weekday()
+    month = target_date.month
+    builder = StateBuilder(config)
+    fa = forced_absent or set()
+    MAX_TICKS = 200
+
+    for i in range(n_samples):
+        seed = base_seed + i
+        _random.seed(seed); _np.random.seed(seed)
+        _torch.manual_seed(seed)
+        if _torch.cuda.is_available():
+            _torch.cuda.manual_seed_all(seed)
+
+        env = YearEnv(config)
+        env.reset()
+        env.day_env.reset(force_month=month, force_dow=dow,
+                           force_volume=volume)
+        ws = env.day_env.episode.workers
+        for j, cw in enumerate(config.workers):
+            if j < len(ws):
+                ws[j].is_absent = cw.name in fa
+
+        agent.reset_hidden()
+        ticks = 0
+        day_done = False
+        while not day_done and ticks < MAX_TICKS:
+            state_dict = builder.build(env.day_env)
+            mask = get_action_mask(env.day_env)
+            hmask = get_hustle_mask(env.day_env)
+            ta, ha, *_ = agent.select_action_from_dict(
+                state_dict, mask, hustle_mask=hmask)
+            actions = [(j, int(ta[j]), bool(ha[j]))
+                       for j in range(len(ta))]
+            _, _, day_done, info = env.step(actions)
+            ticks += 1
+            if info.get("new_day") or day_done:
+                break
+
+        # YearEnv finalizes a day_summary into daily_summaries on day_done.
+        # If the env wrapper didn't append (timeout, edge), fall back to F.
+        if env.daily_summaries:
+            ft = env.daily_summaries[-1].get("footer", {})
+            grade = ft.get("grade", "F")
+            shipped = int(ft.get("orders_shipped", 0))
+            total = int(ft.get("orders_total", 0) or 1)
+            comp = shipped / total
+        else:
+            grade, shipped, total, comp = "F", 0, 0, 0.0
+
+        grades_counter[grade] = grades_counter.get(grade, 0) + 1
+        completions.append(comp)
+        if comp >= 0.999:
+            full_comps += 1
+        sample_rows.append({"seed": seed, "grade": grade,
+                            "shipped": shipped, "total": total,
+                            "completion": round(comp, 4)})
+
+    n = float(n_samples)
+    grade_pct = {g: round(c / n, 4) for g, c in grades_counter.items()}
+    sorted_c = sorted(completions)
+    def _pct(p):
+        if not sorted_c: return 0.0
+        idx = max(0, min(len(sorted_c) - 1,
+                          int(round(p / 100.0 * (len(sorted_c) - 1)))))
+        return round(sorted_c[idx], 4)
+
+    return {
+        "n_samples": n_samples,
+        "grades": grades_counter,
+        "grade_pct": grade_pct,
+        "completion_rate_mean": round(sum(completions) / n, 4),
+        "completion_rate_p10": _pct(10),
+        "completion_rate_p90": _pct(90),
+        "full_completion_pct": round(full_comps / n, 4),
+        "samples": sample_rows,
+    }
+
+
 def run_full_day_schedule(config, agent, target_date: date,
                            volume: int,
                            forced_absent: set | None = None,
