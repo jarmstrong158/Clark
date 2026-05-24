@@ -55,13 +55,20 @@ class OutcomeRequest(BaseModel):
     policy gets stochastic action sampling + variable per-day
     call-off rolls; we run N simulations of the SAME date and
     aggregate the grade distribution + completion rate. Tells the
-    user 'given today's scenario, here's how often it ships'."""
+    user 'given today's scenario, here's how often it ships'.
+
+    `extra_workers` adds N synthetic temp workers to the roster
+    before sampling — used by the dashboard's 'Find recommended
+    staffing' button to iterate +0, +1, +2, ... and ask 'given
+    today's scenario, how many extras do I need to hit target?'.
+    """
     facility_id: str
     date: Optional[str] = None
     volume: Optional[int] = None
     n_samples: int = 20
     base_seed: Optional[int] = None
     absent_workers: list[str] = []
+    extra_workers: int = 0
 
 
 class CompareRequest(BaseModel):
@@ -381,9 +388,17 @@ def build_app(agent: Any, facilities_dir: str | Path,
         simulation (slow — defaults to 20 samples = ~20-40s)."""
         if req.n_samples < 1 or req.n_samples > 100:
             raise HTTPException(422, "n_samples must be in [1, 100]")
+        if req.extra_workers < 0 or req.extra_workers > 30:
+            raise HTTPException(422, "extra_workers must be in [0, 30]")
         cfg = _load_facility(req.facility_id)
         when = _resolve_date(req.date)
         ag = _agent_for(req.facility_id)
+        # Append temp workers BEFORE volume sampling so the seasonal
+        # sample sees the augmented roster (matters when volume isn't
+        # overridden — the dashboard's 'Find recommended staffing'
+        # loop always supplies an explicit volume anyway).
+        if req.extra_workers > 0:
+            cfg = _with_extras(cfg, req.extra_workers)
         if req.volume is not None:
             vol = req.volume
         else:
@@ -398,6 +413,8 @@ def build_app(agent: Any, facilities_dir: str | Path,
             "facility_id": req.facility_id,
             "date": when.isoformat(),
             "volume": vol,
+            "extra_workers": req.extra_workers,
+            "n_workers": len(cfg.workers),
             "model": ("fine-tuned" if ag is not agent else "foundation"),
             **out,
         }
