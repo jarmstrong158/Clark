@@ -21,6 +21,7 @@ from typing import Any, Optional
 
 import yaml
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 # Thin adapter: reuse the shared inference primitive verbatim. (Was
@@ -107,6 +108,27 @@ def build_app(agent: Any, facilities_dir: str | Path,
         per_facility_ckpt_dir = fdir.parent / "checkpoints" / "user"
     pf_dir = Path(per_facility_ckpt_dir)
     app = FastAPI(title="Clark local inference", version="0.1.0")
+    # CORS: allow the sibling localhost UIs (ops dashboard on :8092,
+    # chat on :8765, wizard on :8090) to call us from the browser.
+    # Tight allowlist on purpose — NOT '*' — so a malicious page the
+    # user has open in another tab can't drive this API. The server
+    # itself binds to 127.0.0.1 (see cli/main.py:cmd_serve) so it is
+    # not reachable from off-host even with permissive CORS, but
+    # narrowing here is cheap insurance.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[
+            "http://127.0.0.1:8092",  # ops dashboard
+            "http://127.0.0.1:8765",  # clark-mcp chat
+            "http://127.0.0.1:8090",  # wizard
+            "http://localhost:8092",
+            "http://localhost:8765",
+            "http://localhost:8090",
+        ],
+        allow_methods=["GET", "POST"],
+        allow_headers=["Content-Type"],
+        allow_credentials=False,
+    )
     # The agent carries mutable LSTM hidden state and is reset per
     # request inside _run_one_plan_day. FastAPI runs sync handlers in
     # a threadpool, so overlapping /plan, /what_if, or /simulate

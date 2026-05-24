@@ -9,23 +9,82 @@ REM  briefing — direct over `clark serve`, no language model in
 REM  the loop.
 REM
 REM  The black window that opens is the dashboard server. Closing
-REM  it stops the dashboard. (Your `clark serve` instance, if any,
-REM  is independent and keeps running.)
-REM
-REM  This dashboard talks to `clark serve` on :8000. If it's not
-REM  running, the header will show "clark serve unreachable" —
-REM  Run Clark Chat.bat (in the clark-mcp repo) auto-starts serve.
+REM  it stops the dashboard. If we have to auto-launch `clark
+REM  serve` it opens in its OWN window — close that to stop serve.
 REM ============================================================
-setlocal
+setlocal enabledelayedexpansion
 title Clark Operations Dashboard
 cd /d "%~dp0"
 
-REM Kill any prior ops dashboard on :8092 so a re-launch always
-REM picks up the latest HTML edits.
+REM --- Kill any prior dashboard on :8092 so re-launch picks up edits.
 for /f "tokens=5" %%a in ('netstat -ano ^| findstr /R /C:":8092 .*LISTENING"') do (
-    echo Stopping prior ops server PID %%a so the new launch picks up the latest code...
+    echo Stopping prior ops dashboard PID %%a...
     taskkill /F /PID %%a >nul 2>&1
 )
+
+REM --- Ensure clark serve is up on :8000 (every form posts to it).
+REM Same approach as Run Clark Chat.bat: probe /health; if down,
+REM launch serve in a separate window so the user sees its logs and
+REM can close it independently.
+curl -sf -o NUL --max-time 2 http://127.0.0.1:8000/health >nul 2>&1
+if errorlevel 1 (
+    set CLARK_CKPT=clark\data\checkpoints\clark_foundation.pt
+    set CLARK_CFGS=clark\data\configs
+    if exist "%CLARK_CKPT%" if exist "%CLARK_CFGS%" (
+        echo.
+        echo clark serve not running on :8000 — auto-launching.
+        echo (separate window; close that window to stop serve.)
+
+        REM Preemptive check: if port 8000 has any lingering state
+        REM (TIME_WAIT from a prior serve close), wait for it to clear.
+        netstat -ano | findstr /R /C:":8000 " >nul 2>&1
+        if not errorlevel 1 (
+            echo Port 8000 has lingering connection state — waiting 10s to release...
+            ping -n 11 127.0.0.1 >nul
+        )
+
+        start "Clark Serve (port 8000)" cmd /k "cd /d %~dp0 ^&^& python -m cli.main serve --model clark\data\checkpoints\clark_foundation.pt --facilities-dir clark\data\configs --port 8000"
+
+        echo Waiting for clark serve to become ready (up to 30s)...
+        set CLARK_READY=0
+        for /l %%i in (1,1,30) do (
+            if "!CLARK_READY!"=="0" (
+                ping -n 2 127.0.0.1 >nul
+                curl -sf -o NUL --max-time 1 http://127.0.0.1:8000/health >nul 2>&1
+                if not errorlevel 1 set CLARK_READY=1
+            )
+        )
+
+        if "!CLARK_READY!"=="0" (
+            echo.
+            echo  WARN: clark serve didn't come up in 30s. Dashboard
+            echo  will launch anyway, but every form will show errors
+            echo  until serve is reachable on :8000. Check the
+            echo  "Clark Serve" window for errors.
+            echo.
+        ) else (
+            echo clark serve is ready.
+            echo.
+        )
+    ) else (
+        echo.
+        echo ------------------------------------------------------------
+        echo  NOTE: clark serve is not running and I couldn't auto-launch
+        echo  it — expected to find:
+        echo     %CLARK_CKPT%
+        echo     %CLARK_CFGS%
+        echo  in the current directory. Start clark serve manually:
+        echo     python -m cli.main serve --model %CLARK_CKPT% --facilities-dir %CLARK_CFGS%
+        echo.
+        echo  Dashboard will load but every form will show errors.
+        echo ------------------------------------------------------------
+        echo.
+    )
+)
+
+echo Launching ops dashboard on http://127.0.0.1:8092 ...
+echo Browser will open automatically. Press Ctrl-C here to stop.
+echo.
 
 python -m cli.main ops --port 8092
 
