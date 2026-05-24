@@ -1737,8 +1737,19 @@ async function pollTrainingStatus(jobId) {
       indicator.textContent = `PID ${s.pid}: stopped. Check ${s.log_dir}/stdout.log for outcome.`;
     }
   } catch (e) {
+    // The most common cause of "Failed to fetch" here isn't a
+    // bug — it's that the user closed the wizard window after
+    // starting training, killing the wizard server (the polling
+    // endpoint). Training itself runs as a detached subprocess
+    // and is unaffected. Give the user that context so they don't
+    // assume training died.
     indicator.style.color = "var(--error)";
-    indicator.textContent = "Status poll failed: " + e;
+    indicator.innerHTML = "Status poll failed: " + escapeHtml(String(e)) +
+      '<br><span style="font-size:11px;color:var(--muted)">' +
+      '(The wizard server is unreachable. Most likely you closed ' +
+      'its terminal window — training itself runs as a detached ' +
+      'subprocess and is unaffected. Check the stdout.log path ' +
+      'shown above for live progress.)</span>';
   }
 }
 

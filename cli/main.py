@@ -1102,8 +1102,22 @@ def cmd_wizard(args: argparse.Namespace):
             "--output", str(ckpt_path),
             "--episodes", str(int(episodes)),
         ]
-        proc = _sp.Popen(cmd, cwd=str(repo_root), stdout=stdout_log,
-                         stderr=_sp.STDOUT)
+        # stdin=DEVNULL is critical on Windows: the wizard subprocess
+        # (this process) was launched from a bat → cmd → python chain
+        # whose stdin handle may not be a proper console. Without an
+        # explicit DEVNULL here, the trainer subprocess inherits that
+        # broken handle and Python's sys.stdin init fails immediately
+        # with:
+        #   Fatal Python error: init_sys_streams: can't initialize sys
+        #   standard streams
+        #   KeyboardInterrupt during <frozen codecs>:186
+        # The training subprocess then exits in <1s, writes only that
+        # 216-byte traceback to stdout.log, and never produces a
+        # checkpoint. The wizard reports "training started" because
+        # Popen succeeded, but the policy never trains.
+        proc = _sp.Popen(cmd, cwd=str(repo_root),
+                         stdin=_sp.DEVNULL,
+                         stdout=stdout_log, stderr=_sp.STDOUT)
         training_jobs[job_id] = {
             "pid": proc.pid,
             "config_path": yaml_path,
