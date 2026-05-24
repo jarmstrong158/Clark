@@ -28,6 +28,7 @@ from clark.agent.state import StateBuilder
 from clark.config.schema import FacilityConfig
 from clark.env.year_env import YearEnv
 from clark.sim_logging.episode_logger import EpisodeLogger
+from clark.sim_logging.training_metrics_logger import TrainingMetricsLogger
 
 
 def finetune(
@@ -109,6 +110,15 @@ def finetune(
 
     # Full-detail logger — includes step assignments and year snapshots for dashboard
     logger = EpisodeLogger(log_dir=log_dir, mode="finetune", facility_config=config)
+    # Lightweight progress/heartbeat logger — writes training_metrics.json
+    # in the same dir; the ops dashboard's Training tab scans for this
+    # to show live progress + ETA per run. Without it, fine-tune runs
+    # were silently invisible to the dashboard (it scanned for that
+    # file specifically; only pretrain wrote it).
+    metrics = TrainingMetricsLogger(log_dir=log_dir)
+    metrics.update_status(n_episodes_target=n_episodes,
+                          current_episode=0, alive=True)
+    metrics.write()
 
     print(f"Fine-tuning on: {config.name} ({config_path})")
     print(f"Base model:     {base_model_path}")
@@ -181,10 +191,24 @@ def finetune(
             year_summary=year_summary,
         )
 
+        # Update the dashboard heartbeat EVERY episode so the
+        # Training tab's progress bar + ETA refresh in near-real
+        # time. Cheap (single small JSON file overwrite); the
+        # dashboard polls every 5s so this gives smooth visuals.
+        # We skip record_episode here — its signature takes per-N /
+        # per-stage stats we'd have to synthesize for finetune
+        # (which doesn't have stages). The dashboard only needs
+        # current_episode + n_episodes_target + elapsed_s + alive
+        # heartbeat to render the progress bar and ETA.
+        elapsed = time.time() - start_time
+        metrics.update_status(current_episode=ep,
+                              elapsed_s=elapsed,
+                              alive=True)
+        metrics.write()
+
         if ep % log_interval == 0:
             recent = episode_rewards[-log_interval:]
             avg_reward = sum(recent) / len(recent)
-            elapsed = time.time() - start_time
             stats = logger.get_training_stats()
             print(
                 f"  Ep {ep:5d}/{n_episodes} | "
@@ -198,8 +222,14 @@ def finetune(
             agent.save(output_path, ep, config)
             print(f"  [Checkpoint saved -> {output_path}]")
 
-    # Final save
+    # Final save + mark the run complete so the dashboard switches
+    # the card from "running" to "complete" instead of flapping to
+    # "stopped" (which is the heartbeat-stale fallback).
     agent.save(output_path, n_episodes, config)
+    metrics.update_status(alive=False,
+                          current_episode=n_episodes,
+                          elapsed_s=time.time() - start_time)
+    metrics.write()
     print(f"\nFine-tuning complete. {n_episodes} episodes in {time.time() - start_time:.0f}s")
     print(f"Fine-tuned model saved to: {output_path}")
 
