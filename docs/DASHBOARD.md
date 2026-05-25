@@ -4,6 +4,10 @@ A single-file HTML dashboard ships with the repo. Double-click [`clark/dashboard
 
 The dashboard exists because long-horizon RL training is opaque from the loss curve alone. The day-grade roll, per-N tables, and reward-component breakdown are how you actually catch what's going wrong while it's going wrong.
 
+![Live training snapshot — status tiles + day-grade roll + 200-day grade distribution from a v2.8 fine-tune run in progress](img/training_dashboard.png)
+
+*Above: a live snapshot from a mid-training v2.8 fine-tune. Status tiles surface the operational headline numbers (Ship Win, Day Win, Day Cmp%, OT frequency, PPO clip health). The day-grade roll on the left tracks rolling 50-day windows of A/B/C/D/F across the last 200 days — the high-frequency signal you actually watch during training. The 200-day distribution on the right is the same data aggregated. The numbers here reflect the policy state mid-iteration; for verified post-training performance see Clark's [Performance section](../README.md#performance-and-status).*
+
 ---
 
 ## Top half — the live state
