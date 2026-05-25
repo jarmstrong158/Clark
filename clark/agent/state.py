@@ -20,7 +20,7 @@ class StateBuilder:
     Output shapes:
       worker_feats:    (N, 14)
       task_feats:      (M, 3)
-      env_feats:       (18,)
+      env_feats:       (17,)
       worker_role_ids: (N,) int64
       task_type_ids:   (M,) int64
     """
@@ -56,7 +56,7 @@ class StateBuilder:
             {
                 "worker_feats":    np.ndarray (actual_N, 14)  float32
                 "task_feats":      np.ndarray (M, 3)          float32
-                "env_feats":       np.ndarray (18,)            float32
+                "env_feats":       np.ndarray (17,)            float32
                 "worker_role_ids": np.ndarray (actual_N,)     int64
                 "task_type_ids":   np.ndarray (M,)            int64
             }
@@ -246,7 +246,7 @@ class StateBuilder:
 
     def _build_env_feats(self, env: "FacilityEnv") -> np.ndarray:
         """
-        18 global environment features (mirrors _get_state() ENV block in FacilityEnv).
+        17 global environment features (mirrors _get_state() ENV block in FacilityEnv).
 
           0   time_of_day_norm        (current_hour - DAY_START) / shift_span
           1   orders_in_queue_norm    orders_in_queue / total_orders
@@ -262,9 +262,6 @@ class StateBuilder:
          14   is_ot                   (1.0 / 0.0)
          15   carrier_urgency         1-(hours_until_pickup/shift_span) if deadline set, else 0.0
          16   order_complexity_load   weighted avg OPH multiplier for today's order mix
-         17   demand_vs_capacity      projected day-total / today's roster capacity, [0,3]
-                                       (v2.1 add: scale-aware overload signal — fixes the
-                                        "everything looks 50% full" scale-invariance gap)
         """
         ep = env.episode
         eod_hour = env._eod_hour
@@ -304,15 +301,5 @@ class StateBuilder:
 
         # Feature 16: order_complexity_load
         feats[16] = env._compute_complexity_load()
-
-        # Feature 17: demand_vs_capacity_ratio (v2.1 add).
-        # Projected day-total orders ÷ today's roster comfortable capacity.
-        # Computed from arrivals-so-far against the canonical (normal-day)
-        # expected-fraction-arrived curve, not from the true total — the
-        # policy needs a signal that transfers to production where the
-        # true total is genuinely unknown until EOD. Naturally uncertain
-        # in the morning, sharpens as more buckets land. See
-        # FacilityEnv._compute_demand_vs_capacity.
-        feats[17] = env._compute_demand_vs_capacity()
 
         return feats

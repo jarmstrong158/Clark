@@ -23,7 +23,6 @@ from clark.env.episode_generator import (
     FILLER_COMPLETION_THRESHOLD,
     MANAGER_PRE_SIM_MANAGEMENT,
     SEASONS,
-    expected_fraction_arrived,
 )
 from clark.env.worker import WorkerState
 
@@ -56,8 +55,7 @@ RESTOCK_PICK_PENALTY_MULTIPLIER = 0.05
 
 # State vector sizing
 WORKER_STATE_SCALARS = 14   # expanded from 13 (added task_oph_normalized at index 13)
-ENV_STATE_SIZE = 18          # 15 base + carrier_urgency(15) + order_complexity_load(16)
-                             # + demand_vs_capacity(17, the scale-aware overload signal)
+ENV_STATE_SIZE = 17          # expanded from 15 (added carrier_urgency, order_complexity_load)
 
 # Tasks that cannot be hustled
 HUSTLE_BLOCKED_TASKS = {"management", "idle", "cycle_count"}
@@ -209,17 +207,6 @@ class FacilityEnv:
         self.orders_in_queue = 0
         self.orders_completed = 0
         self.orders_picked_not_audited = 0
-        # arrived_so_far feeds the demand_vs_capacity observation feature.
-        # Cumulative count of orders that have entered the queue, ever,
-        # this episode. Distinct from orders_in_queue (which drops as
-        # orders get picked) and from total_orders (which is the oracle
-        # day-total; never read here outside arrival processing).
-        # Incremented inside _process_arrivals.
-        self.arrived_so_far: int = 0
-        # Today's working-roster capacity in orders/day. Used by the
-        # demand_vs_capacity ratio. Caches the result for the episode so
-        # the per-tick observation build stays O(1).
-        self._today_capacity: float = self._compute_today_capacity()
         self.restock_remaining = self.episode.restock_hours if self._restock_enabled else 0.0
         self.deliberate_progress = 0.0
         self.filler_progress = 0.0
@@ -532,23 +519,7 @@ class FacilityEnv:
         # "increasingly scaled" design we agreed on originally but never
         # actually implemented — only the extension to all filler tasks
         # landed.
-        #
-        # v2.1: ALSO scale by demand_vs_capacity overshoot. The
-        # pending-pct term fires identically on a "queue is 50% full of
-        # a rescuable 200-order day" and on a "queue is 50% full of an
-        # impossible 800-order day" — same gradient, very different
-        # truths. The dvc term lifts the penalty specifically when
-        # today's projected demand exceeds the facility's capacity,
-        # giving the policy a gradient for "this day is structurally
-        # over-loaded, filler is doubly wasteful." Dormant when
-        # dvc ≤ 1.0 (rescuable days are governed by the pending-pct
-        # term alone, unchanged from prior behavior).
-        _dvc = self._compute_demand_vs_capacity()
-        _crunch_scale = max(
-            1.0,
-            _crunch_pending_pct * 5.0,
-            (_dvc - 1.0) * 3.0,
-        )
+        _crunch_scale = max(1.0, _crunch_pending_pct * 5.0)
 
         for w in active_workers:
             task = w.current_task
@@ -812,7 +783,6 @@ class FacilityEnv:
                     if random.random() < late_exception_rate:
                         admitted = count
                         self.orders_in_queue += admitted
-                        self.arrived_so_far += admitted
                 # Anything we couldn't admit is permanently unshippable —
                 # exclude from the episode's order target so the completion
                 # gate (shipped >= total) stays mathematically reachable.
@@ -823,7 +793,6 @@ class FacilityEnv:
                 to_remove.append(key)
             elif key <= current + 0.01:
                 self.orders_in_queue += count
-                self.arrived_so_far += count
                 to_remove.append(key)
         for key in to_remove:
             del self.episode.arrival_schedule[key]
@@ -1173,61 +1142,6 @@ class FacilityEnv:
         shift_span = max(0.01, pickup - day_start)
         elapsed = self.current_hour - day_start
         return max(0.0, min(1.0, elapsed / shift_span))
-
-    # ── Demand projection (the demand_vs_capacity observation feature) ─────────
-
-    def _compute_today_capacity(self) -> float:
-        """Today's working-roster comfortable capacity in orders/day.
-
-        Mirrors synthetic_gen._generate_volume's capacity formula so the
-        ratio's denominator and the curriculum's volume sampler agree on
-        what "comfortable" means:
-            comfortable_cap_pw = max(12, avg_oph * 9.0 * 0.22)
-        Includes peak-staffing temps (they're in episode.workers by
-        reset time), excludes absent workers (today's effective roster).
-        Cached once per episode.
-        """
-        present = [w for w in self.episode.workers if not w.is_absent]
-        n = len(present)
-        if n == 0:
-            return 1.0
-        avg_oph = sum(w.base_oph for w in present) / n
-        comfortable_pw = max(12.0, avg_oph * 9.0 * 0.22)
-        return n * comfortable_pw
-
-    def _compute_demand_vs_capacity(self) -> float:
-        """Projected day-total orders ÷ today's capacity, clipped to [0, 3].
-
-        Uses ONLY observable quantities:
-        - `arrived_so_far` (cumulative orders that have entered the queue)
-        - canonical expected-fraction-arrived-by-now (a static curve, not
-          today's true total)
-        - today's roster capacity (known at reset)
-
-        Never reads `episode.total_orders` directly — that would make this
-        an oracle leak, and the whole point of this feature is to give
-        the policy a real-world-transferable demand projection.
-
-        Naturally uncertain in the morning (the instant bucket has wide
-        per-day variance: 40–55% of true total), sharpens through the
-        day. Clipped to [0, 3] so the input stays in a sane range for
-        the network — anything past 3x normal is in "this day is lost
-        anyway" territory and saturating the signal there is fine.
-        """
-        if self.episode is None:
-            return 0.0
-        if self.arrived_so_far <= 0:
-            return 0.0
-        day_start = self.facility_config.rules.day_start_hour
-        cutoff = self.facility_config.rules.order_cutoff_hour
-        expected = expected_fraction_arrived(
-            self.current_hour, day_start, cutoff
-        )
-        if expected <= 1e-4:
-            return 0.0
-        projected_total = self.arrived_so_far / expected
-        ratio = projected_total / max(1.0, self._today_capacity)
-        return max(0.0, min(3.0, ratio))
 
     # ── Info / logging ─────────────────────────────────────────────────────────
 

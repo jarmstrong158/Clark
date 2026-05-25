@@ -29,13 +29,7 @@ import torch.nn.functional as F
 from torch.distributions import Categorical
 from typing import Optional
 
-ARCH_VERSION = "clark-v2.1"
-# v2.1 bump (2026-05): added env_feat 17 = demand_vs_capacity_ratio (the
-# scale-aware overload signal that decouples "queue ratio looks busy" from
-# "today's demand actually exceeds capacity"). env_feat_dim 17 → 18; only
-# self.env_linear's input width changes, every other parameter is bit-
-# identical to v2, so old foundation weights warm-start with a zero-init
-# 18th column on env_linear.weight. See tools/transplant_obs_extension.py.
+ARCH_VERSION = "clark-v2"
 
 # ── Hyperparameter defaults ───────────────────────────────────────────────────
 # v2 bump (2026-04): d_model 256→512, n_sa_layers 2→4, lstm_hidden 256→512.
@@ -71,7 +65,7 @@ _MAX_TASKS = 20      # len(STANDARD_VOCAB)=12 + 5 custom + 3 buffer
 # Feature dimensions — must match WORKER_STATE_SCALARS and ENV_STATE_SIZE in facility_env.py
 _WORKER_FEAT_DIM = 14  # 13 base scalars + task_oph_normalized (index 13)
 _TASK_FEAT_DIM = 3     # demand_signal, availability_flag, task_type_id
-_ENV_FEAT_DIM = 18     # 17 prior + demand_vs_capacity_ratio (index 17, v2.1)
+_ENV_FEAT_DIM = 17     # 15 base + carrier_urgency (15) + order_complexity_load (16)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
