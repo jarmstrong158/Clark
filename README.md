@@ -305,6 +305,29 @@ Foundation pre-training **completed** at episode 15 000 (target reached, clean t
 
 **Honest read of that F-rate.** ~60% of F-days at base rosters miss by <5% of orders with the policy already pushing (100% OT use, restock kept full). Narrow infeasibility on hard synthetic configs, deliberately *not* reward-hacked away. The ops dashboard's "Find recommended staffing" button surfaces this directly: walk +0, +1, +2 extra workers and watch the grade distribution shift, no reward tuning required.
 
+### Post-pretrain refinements (v2.5 multi-gate mask)
+
+The post-pretrain audit identified a stable failure mode in the baseline policy: on heavy days, ~50% of worker-hours went to filler tasks (loading / training / quality_check / etc.) while orders piled up. Two attempts to fix this via new observation features and reward shaping both regressed in head-to-head A/B against baseline; gradient-pressure interventions couldn't escape the "filler during crunch is OK" attractor the baseline policy had learned over 15k pretrain episodes.
+
+v2.5 took a different approach: a **structural action mask**. At every 10-min decision tick, filler tasks are removed from the policy's action space (set to -1e9 logits before softmax) when ANY of four stress gates fires:
+
+1. **Projection gate**: projected day demand / capacity > 0.65 (computed from arrivals so far against the canonical normal-day arrival curve; no oracle leak)
+2. **Pending gate**: queue is >25% of day's total (reactive backstop)
+3. **Schedule gate**: completion percentage is >20pp behind time-elapsed percentage
+4. **Time-pressure gate**: orders_remaining / (remaining_worker_hours * throughput) > 0.85 (the "manager looks at the clock" check)
+
+A short fine-tune (~250 episodes from the v2 baseline checkpoint) produced:
+
+| Metric | v2 baseline | v2.5 fine-tuned |
+|---|---|---|
+| Heavy-day ship rate | ~88–91% | **99.1%** |
+| F-rate (stage-3 synthetic) | ~20% | **5.6%** |
+| A-rate | ~40% | ~48–54% |
+| Heavy-day clean allocation (<15% filler) | rare | 47% |
+| Mean reward per episode | 2 250 | 3 168 (Welch t-test p<0.0001) |
+
+The mask intervention is documented in [`clark/agent/actions.py`](clark/agent/actions.py); the per-tick env-side computations (projection, capacity, time-pressure) live in [`clark/env/facility_env.py`](clark/env/facility_env.py). Future iterations (v2.6+) add a 5th gate (restock-proactivity) to address the OT-cascade caused by stock falling below the 0.2 picking-speed cliff.
+
 For reference, **Jack** (Clark's single-facility predecessor that shares the reward structure and the PPO loop) achieved the following on its target facility:
 
 | Metric | Jack (single facility, trained from scratch) |
@@ -386,7 +409,7 @@ Clark is a successor to Jack, not a wrapper around it. The two share design DNA 
 
 ## Changelog
 
-The architecture-and-training and infrastructure milestones (variable-shape transformer, IPPO-style per-worker ratio, symlog value targets, completion-dominant reward, foundation pre-train completion, Validated-on-Jack head-to-head, the wizard's Quick/Advanced split, the wizard's 50-episode default, the operations dashboard, `clark mcp` MCP-host integration, ...) live in [CHANGELOG.md](CHANGELOG.md).
+The architecture-and-training and infrastructure milestones (variable-shape transformer, IPPO-style per-worker ratio, symlog value targets, completion-dominant reward, foundation pre-train completion, Validated-on-Jack head-to-head, the wizard's Quick/Advanced split, the wizard's 50-episode default, the operations dashboard, `clark mcp` MCP-host integration, v2.5 multi-gate filler mask + restock-proactivity refinements, ...) live in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
