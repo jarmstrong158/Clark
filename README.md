@@ -2,7 +2,7 @@
 
 [![License: PolyForm NC 1.0.0](https://img.shields.io/badge/License-PolyForm%20NC%201.0.0-orange.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
-[![Architecture](https://img.shields.io/badge/arch-clark--v2-blue)](docs/ARCHITECTURE.md)
+[![Architecture](https://img.shields.io/badge/arch-clark--v2.5-blue)](docs/ARCHITECTURE.md)
 
 **A foundation reinforcement learning model for warehouse workforce scheduling.**
 
@@ -49,7 +49,7 @@ Target users:
 
 ## Architecture
 
-A variable-shape transformer + LSTM hybrid (~18M params, `clark-v2`). Per step: workers and tasks are tokenized separately, workers self-attend, then cross-attend to tasks, an LSTM carries state across the simulated year, and per-worker assignment + hustle heads sample under action masks. Trained with PPO using **per-worker importance-sampling ratios** (IPPO-style, the standard fix for factored action spaces), **symlog value targets** (DreamerV3 recipe, which permanently fixed value-head saturation that EMA-normalization and PopArt couldn't), and a **completion-dominant order reward** that makes finishing the day decisively dominant over a near-miss without breaking gradient flow on incomplete days.
+A variable-shape transformer + LSTM hybrid (~18M params, `clark-v2.5`). Per step: workers and tasks are tokenized separately, workers self-attend, then cross-attend to tasks, an LSTM carries state across the simulated year, and per-worker assignment + hustle heads sample under action masks. Trained with PPO using **per-worker importance-sampling ratios** (IPPO-style, the standard fix for factored action spaces), **symlog value targets** (DreamerV3 recipe, which permanently fixed value-head saturation that EMA-normalization and PopArt couldn't), and a **completion-dominant order reward** that makes finishing the day decisively dominant over a near-miss without breaking gradient flow on incomplete days.
 
 Key hyperparameters: `d_model=512`, 4 self-attention layers, 1 cross-attention, LSTM hidden 512, TBPTT chunk 64, `γ=0.999` (~1000-step horizon, sized for the 13,050-step year), GAE `λ=0.98`, clip `ε=0.2`.
 
@@ -326,7 +326,32 @@ A short fine-tune (~250 episodes from the v2 baseline checkpoint) produced:
 | Heavy-day clean allocation (<15% filler) | rare | 47% |
 | Mean reward per episode | 2 250 | 3 168 (Welch t-test p<0.0001) |
 
-The mask intervention is documented in [`clark/agent/actions.py`](clark/agent/actions.py); the per-tick env-side computations (projection, capacity, time-pressure) live in [`clark/env/facility_env.py`](clark/env/facility_env.py). Future iterations (v2.6+) add a 5th gate (restock-proactivity) to address the OT-cascade caused by stock falling below the 0.2 picking-speed cliff.
+The mask intervention is documented in [`clark/agent/actions.py`](clark/agent/actions.py); the per-tick env-side computations (projection, capacity, time-pressure) live in [`clark/env/facility_env.py`](clark/env/facility_env.py).
+
+### v2.6: restock-proactivity gate (5th mask)
+
+The v2.5 audit found that the OT cascade on the hardest days originated from stock falling below the 0.2 picking-speed cliff in mid-day — a feedback loop the 4-gate mask couldn't reach. v2.6 adds a 5th gate that suppresses filler whenever `restock_level < 0.35`, a proactive band that triggers before the cliff fires rather than after. The change layers on top of v2.5 without breaking its existing four gates.
+
+### v2.7: per-OT-hour penalty (−1.5 → −5.0)
+
+A B-day vs A-day audit found that *any* OT use disqualified the day from A regardless of completion — the grading rubric is OT-binary. At the old per-OT-hour cost of −1.5, OT was effectively invisible to PPO next to the +3 per shipped order signal, so the policy learned to ship via OT rather than ship without it. Bumping the per-OT-hour reward to −5.0 surfaces the OT cost at the same scale as the shipped reward, which is what closing the B → A gap actually requires.
+
+### v2.8: management-backlog observation (`env_feats[17]`)
+
+A v2.7 C-day audit found that ~80% of C downgrades had no single-day measurable demerit — the demerit was the multi-day *management backlog* accumulator firing in week 2-3 of the simulated month. The policy literally could not see the failure mode it was triggering. v2.8 extends `env_feats` from 17 to 18 dims by adding `mgmt_backlog_norm` (the accumulator, normalized by the weekly threshold and clipped to [0, 1]). The new column is zero-initialized on transplant ([`tools/transplant_obs_extension.py`](tools/transplant_obs_extension.py)) so the v2.7 policy starts bit-identical on day one and learns to use the signal under fine-tuning. This is also the iteration that bumped `arch_version` from `clark-v2` to `clark-v2.5`.
+
+### Serve-time inference: temperature matters
+
+A late diagnostic surfaced a non-obvious property of the trained policy. 30 stage-3 episodes per temperature on v2.8:
+
+| Inference temperature | ship_win | A-rate |
+|---|---|---|
+| 0.0001 (argmax) | **13%** | 10% |
+| 0.5 | 87% | 87% |
+| **1.0** | **93%** | **93%** |
+| 1.5 | 93% | 93% |
+
+Argmax inference catastrophically underperforms. The PPO entropy bonus trains the policy in a *distribution-mixing* regime: per-tick action values are predicated on the distribution being sampled, not on always picking the single highest-logit action. Collapsing to argmax forces commitment to one task per worker (mean 2.98 distinct tasks/day vs 4.05 at tau=1.0) and that committed task is wrong on ~87% of heavy days. **Serve-time recipe: tau ≈ 1.0**, not argmax — matching how PPO actually saw the policy during training. The same diagnostic reframes an earlier "task churn looks high (~9 tasks per worker per day)" alarm from training-time logs as a sampling artifact of training-temperature stochasticity, not a learned erratic policy.
 
 For reference, **Jack** (Clark's single-facility predecessor that shares the reward structure and the PPO loop) achieved the following on its target facility:
 
@@ -409,7 +434,7 @@ Clark is a successor to Jack, not a wrapper around it. The two share design DNA 
 
 ## Changelog
 
-The architecture-and-training and infrastructure milestones (variable-shape transformer, IPPO-style per-worker ratio, symlog value targets, completion-dominant reward, foundation pre-train completion, Validated-on-Jack head-to-head, the wizard's Quick/Advanced split, the wizard's 50-episode default, the operations dashboard, `clark mcp` MCP-host integration, v2.5 multi-gate filler mask + restock-proactivity refinements, ...) live in [CHANGELOG.md](CHANGELOG.md).
+The architecture-and-training and infrastructure milestones (variable-shape transformer, IPPO-style per-worker ratio, symlog value targets, completion-dominant reward, foundation pre-train completion, Validated-on-Jack head-to-head, the wizard's Quick/Advanced split, the wizard's 50-episode default, the operations dashboard, `clark mcp` MCP-host integration, v2.5 multi-gate filler mask, v2.6 restock-proactivity 5th gate, v2.7 per-OT-hour reward bump, v2.8 management-backlog observation + `arch_version` bump to `clark-v2.5`, serve-temperature finding (argmax catastrophically underperforms; deploy at tau ≈ 1.0), ...) live in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
