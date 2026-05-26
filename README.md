@@ -340,6 +340,29 @@ A B-day vs A-day audit found that *any* OT use disqualified the day from A regar
 
 A v2.7 C-day audit found that ~80% of C downgrades had no single-day measurable demerit — the demerit was the multi-day *management backlog* accumulator firing in week 2-3 of the simulated month. The policy literally could not see the failure mode it was triggering. v2.8 extends `env_feats` from 17 to 18 dims by adding `mgmt_backlog_norm` (the accumulator, normalized by the weekly threshold and clipped to [0, 1]). The new column is zero-initialized on transplant ([`tools/transplant_obs_extension.py`](tools/transplant_obs_extension.py)) so the v2.7 policy starts bit-identical on day one and learns to use the signal under fine-tuning. This is also the iteration that bumped `arch_version` from `clark-v2` to `clark-v2.5`.
 
+### v2.10: per-management-hour reward (0.5 → 1.0)
+
+v2.8 made the management backlog *observable*; v2.10 reinforces the corresponding action signal by bumping the per-management-hour reward from 0.5 to 1.0 — a gentle 2× rather than the 3× v2.9 attempt, which destabilized PPO (v_loss spiked to 6.85 and the windowed task-mix went erratic). v2.10 warm-starts from the stable v2.8 checkpoint at ep 15800 and runs +500 episodes to ep 16300 (~3.5 h on RTX 5070 Ti, completed cleanly: `status.alive=False`).
+
+Over the v2.10 fine-tune itself, comparing the early third of the run to the late third (286 episodes each, sampled episode-final-day grades):
+
+| Metric | early v2.10 | late v2.10 | delta |
+|---|---|---|---|
+| ship_win (fully-shipped day) | 84% | **90%** | +5.5pp |
+| F-grade rate | 12.6% | **5.9%** | -6.7pp |
+| A-grade rate | 42% | 48% | +6.1pp |
+| OT frequency | 41% | 38% | -3pp |
+
+On the heaviest stage-3 episode at run-end (N=49 workers, M=6 tasks, full simulated year scored by the in-env production grader — the same grader the training loop uses, not a probe rule):
+
+| Grade | A | B | C | D | F |
+|---|---|---|---|---|---|
+| % of year-days | **80%** | 8% | 5% | 1% | 2% |
+
+A+B = 88% on the hardest tier the curriculum samples is a real promotion over v2.8's typical 65-75% A+B on equivalent runs. The remaining ~2% F-rate is the irreducible-failure floor for stage-3 stress configs that exceed rescue capacity by design.
+
+> **Methodology note.** An earlier head-to-head probe between v2.8 and v2.10 reported "essentially tied." That probe was wrong: it ran single-day episodes (env exits after day 1, not the full year) and used a 3-grade rule (A / C / D / F, no B, no restock / mgmt / backlog demerits) that collapses exactly the bands these iterations were optimizing. The training-time grader above is the production rule (4 demerits: restock-95%, mgmt-required-hours, OT-in-non-peak, mgmt-backlog-threshold; demerit count drops the grade letter) and is the right signal for the promotion decision.
+
 ### Serve-time inference: temperature matters
 
 A late diagnostic surfaced a non-obvious property of the trained policy. 30 stage-3 episodes per temperature on v2.8:
@@ -434,7 +457,7 @@ Clark is a successor to Jack, not a wrapper around it. The two share design DNA 
 
 ## Changelog
 
-The architecture-and-training and infrastructure milestones (variable-shape transformer, IPPO-style per-worker ratio, symlog value targets, completion-dominant reward, foundation pre-train completion, Validated-on-Jack head-to-head, the wizard's Quick/Advanced split, the wizard's 50-episode default, the operations dashboard, `clark mcp` MCP-host integration, v2.5 multi-gate filler mask, v2.6 restock-proactivity 5th gate, v2.7 per-OT-hour reward bump, v2.8 management-backlog observation + `arch_version` bump to `clark-v2.5`, serve-temperature finding (argmax catastrophically underperforms; deploy at tau ≈ 1.0), ...) live in [CHANGELOG.md](CHANGELOG.md).
+The architecture-and-training and infrastructure milestones (variable-shape transformer, IPPO-style per-worker ratio, symlog value targets, completion-dominant reward, foundation pre-train completion, Validated-on-Jack head-to-head, the wizard's Quick/Advanced split, the wizard's 50-episode default, the operations dashboard, `clark mcp` MCP-host integration, v2.5 multi-gate filler mask, v2.6 restock-proactivity 5th gate, v2.7 per-OT-hour reward bump, v2.8 management-backlog observation + `arch_version` bump to `clark-v2.5`, v2.10 per-management-hour bump (A+B = 88% on N=49), serve-temperature finding (argmax catastrophically underperforms; deploy at tau ≈ 1.0), ...) live in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
