@@ -22,7 +22,7 @@ Major shipped items. For day-to-day commit history use `git log`.
 
 ## Architecture and training
 
-- **Variable-shape transformer + LSTM architecture** (`clark-v2`) — see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+- **Variable-shape transformer + LSTM architecture** (`clark-v2.5`) — see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 - **Synthetic facility generator** with 3-stage curriculum (N=5→10 / 5→25 / 5→50; carryover, peak-staffing, Saturday operations introduced progressively).
 - **Pre-train + fine-tune CLI** (`clark pretrain`, `clark finetune`).
 - **Per-worker PPO ratio + per-(worker, head) clipping** (IPPO-style) — fixes the ratio-variance-scaling-with-N pathology that saturated `clip_eps=0.2` at large N.
@@ -61,3 +61,19 @@ Major shipped items. For day-to-day commit history use `git log`.
 - **Foundation pre-training run completed** at episode 15 000 / 15 000, clean termination, value head stable.
 - **Validated on Jack's facility** — Clark foundation + 50 fine-tune episodes beats Jack's failure rate and A+B share on Jack's exact config (~0.2 sim years vs Jack's ~9.4). See README's *Results* section.
 - **Trained foundation weights** — *commercial, not publicly released by design* (see [Use Clark](README.md#use-clark--commercial-access)).
+
+## Post-pretrain refinement chain (v2.5 → v2.10)
+
+The 15k-episode pretrain finished with the policy stuck in a "filler during crunch is OK" attractor on heavy days. Five iterations on top of the foundation closed that gap and produced the current production checkpoint. Full rationale + measured deltas in the README's *Post-pretrain refinements* section.
+
+- **v2.5 — structural multi-gate filler mask.** Two prior attempts (v2.1 observation feature, v2.2 reward shaping) both regressed in A/B vs baseline. v2.5 replaces gradient pressure with a hard mask: filler tasks zeroed (`-1e9` pre-softmax) when ANY of four stress gates fires — projection (projected demand/capacity > 0.65), pending (queue > 25% of day total), schedule (completion >20pp behind time-elapsed), time-pressure (orders_remaining / remaining_worker_hours·throughput > 0.85). ~250-ep fine-tune from v2 → v2.5 lifted heavy-day ship rate from ~89% to 99.1% and cut F-rate from ~20% to 5.6%.
+- **v2.6 — restock-proactivity gate (5th mask).** OT cascades on hardest days traced to stock falling below the 0.2 picking-speed cliff in mid-day, a feedback loop the 4-gate mask couldn't reach. Added a 5th gate that suppresses filler when `restock_level < 0.35`, preempting the cliff rather than reacting to it.
+- **v2.7 — `per_ot_hour` reward `−1.5 → −5.0`.** Grading rubric is OT-binary (any OT use disqualifies A). At the old cost, OT was invisible to PPO next to the +3 per shipped order signal; the policy shipped via OT rather than without. New cost is at the same scale as the shipped reward — what closing the B → A gap actually requires.
+- **v2.8 — `mgmt_backlog_norm` observation (`env_feats[17]`).** A v2.7 C-day audit found ~80% of downgrades had no single-day measurable demerit — the demerit was the multi-day backlog accumulator firing in week 2-3. The policy literally couldn't see the failure mode it was triggering. `env_feats` extended 17 → 18 dims; `arch_version` bumped `clark-v2` → `clark-v2.5`. Old v2 checkpoints upgrade via [`tools/transplant_obs_extension.py`](tools/transplant_obs_extension.py) (zero-init col 17 keeps the policy bit-identical on day one).
+- **v2.10 — `per_management_hour` `0.5 → 1.0` (gentle 2×).** v2.8 made the management backlog *observable*; v2.10 reinforces the corresponding action signal. v2.9 attempted a 3× bump and destabilized PPO (vloss spiked to 6.85); v2.10 retries with 2× from the stable v2.8 checkpoint. +500 episodes warm-started from v2.8 ep 15800 to ep 16300 (~3.5 h on RTX 5070 Ti, clean termination).
+- **Re-validated on Jack** — v2.10 foundation **alone** matches Jack-from-scratch on A-grade (57.5% vs 58%), zero per-facility training. With 50ep fine-tune on Jack: A=62.1% / A+B=95.8% / F=4.2% — *beats* Jack-from-scratch (58% A) at ~0.2 sim years vs Jack's ~9.4. Strongest Jack-facility result Clark has produced.
+- **Serve-time temperature finding.** Argmax inference catastrophically underperforms (13% ship_win on stage-3 vs 93% at tau=1.0). PPO + entropy bonus trains a distribution-mixing regime; the right serve recipe is **tau ≈ 1.0**, matching how PPO saw the policy during training, not argmax.
+
+## Methodology lessons from the iteration chain
+
+- **Trust the in-env production grader over custom probes.** During the v2.10 evaluation I built a fresh head-to-head probe (single-day episodes, 3-grade A/C/D/F rule with no B/restock/mgmt/backlog demerits) and reported v2.8 ≈ v2.10 "essentially tied." The probe was structurally insensitive to exactly the bands these iterations were optimizing. The training-time grader had been telling a much clearer story (A+B share climbing across the run). Future evaluations route through the same production grader as training; one-off probes get audited against it before claims ship.

@@ -28,7 +28,7 @@ Clark's encoder consumes a structured state dict at every decision step. Shapes 
 ```
 worker_feats     : (N, 14)    one row per worker
 task_feats       : (M, 3)     one row per task
-env_feats        : (17,)      global facility state
+env_feats        : (18,)      global facility state
 worker_role_ids  : (N,)       int role index per worker
 task_type_ids    : (M,)       int task-type index per task
 ```
@@ -60,7 +60,7 @@ task_type_ids    : (M,)       int task-type index per task
 | 1 | Availability flag | Binary — task currently runnable |
 | 2 | Task type id (float) | Embedded separately via `task_type_ids` |
 
-### Environment features (17 dims)
+### Environment features (18 dims)
 
 | Index | Feature |
 |---|---|
@@ -78,6 +78,7 @@ task_type_ids    : (M,)       int task-type index per task
 | 14 | Workers absent today (normalized) |
 | 15 | Carrier urgency (binary) |
 | 16 | Order complexity load (normalized) |
+| 17 | Management backlog (normalized) — multi-day debt signal; accumulator / weekly threshold, clipped to [0, 1]. Added in v2.8 (`arch_version` bump `clark-v2` → `clark-v2.5`); old v2 checkpoints upgrade via `tools/transplant_obs_extension.py` (zero-init col 17 keeps the policy bit-identical on day one). |
 
 Worker IDs in the state are positional and match the `id` field order in `config.yaml`. Task IDs are positional and match the order of the resolved task list (standard tasks enabled in the config, followed by custom tasks).
 
@@ -116,7 +117,7 @@ Outputs
 | LSTM hidden size | 512 |
 | TBPTT chunk size | 64 |
 | Approx parameters | ~18M |
-| Architecture version tag | `clark-v2` |
+| Architecture version tag | `clark-v2.5` |
 
 Every checkpoint embeds an `arch_version` field. Loading a checkpoint with a mismatched arch version raises an error — old checkpoints are not silently coerced.
 
