@@ -58,7 +58,7 @@ def test_bonus_pays_when_shipping_under_control():
         "dense management bonus must pay while shipping is under control "
         "(pending <= 10% of total), not only at pending==0"
     )
-    assert env.reward_breakdown["per_management_hour"] == 0.5
+    assert env.reward_breakdown["per_management_hour"] == 1.0  # v2.10 (gentler bump than v2.9's 1.5)
 
 
 def test_bonus_blocked_during_crunch():
@@ -76,4 +76,4 @@ def test_bonus_blocked_during_crunch():
         "gated bonus must be inert during crunch (pending > 10% of "
         "total) — it must never incentivize management over shipping"
     )
-    assert env.reward_breakdown["per_management_hour"] == 0.5
+    assert env.reward_breakdown["per_management_hour"] == 1.0  # v2.10 (gentler bump than v2.9's 1.5)

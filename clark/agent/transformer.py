@@ -29,7 +29,20 @@ import torch.nn.functional as F
 from torch.distributions import Categorical
 from typing import Optional
 
-ARCH_VERSION = "clark-v2"
+ARCH_VERSION = "clark-v2.5"
+# v2.5 (2026-05): added env_feat 17 = mgmt_backlog_norm. The v2.7
+# reward-shaping iteration (per_ot_hour -1.5 -> -5.0) successfully
+# eliminated OT-driven downgrades but exposed an invisible failure
+# mode: 80% of resulting C-grade days were hit by management_backlog
+# demerit, which is a multi-day rolling state the policy literally
+# could not observe in env_feats. v2.5 adds a normalized backlog
+# observation (clipped [0,1], 1.0 = demerit threshold) so the policy
+# can reason about and prevent the multi-day mgmt failure. env_feat_dim
+# 17 -> 18; only env_linear's input width changes, every other
+# parameter is bit-identical to v2/v2.7, so trained weights warm-start
+# with a zero-init 18th column. See tools/transplant_obs_extension.py.
+# All v2.6 mask gates and v2.7 reward weights are PRESERVED — v2.5 is
+# additive to the existing structural interventions, not a replacement.
 
 # ── Hyperparameter defaults ───────────────────────────────────────────────────
 # v2 bump (2026-04): d_model 256→512, n_sa_layers 2→4, lstm_hidden 256→512.
@@ -65,7 +78,7 @@ _MAX_TASKS = 20      # len(STANDARD_VOCAB)=12 + 5 custom + 3 buffer
 # Feature dimensions — must match WORKER_STATE_SCALARS and ENV_STATE_SIZE in facility_env.py
 _WORKER_FEAT_DIM = 14  # 13 base scalars + task_oph_normalized (index 13)
 _TASK_FEAT_DIM = 3     # demand_signal, availability_flag, task_type_id
-_ENV_FEAT_DIM = 17     # 15 base + carrier_urgency (15) + order_complexity_load (16)
+_ENV_FEAT_DIM = 18     # 17 prior + mgmt_backlog_norm (index 17, v2.5)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

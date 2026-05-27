@@ -23,6 +23,7 @@ from clark.env.episode_generator import (
     FILLER_COMPLETION_THRESHOLD,
     MANAGER_PRE_SIM_MANAGEMENT,
     SEASONS,
+    expected_fraction_arrived,
 )
 from clark.env.worker import WorkerState
 
@@ -55,7 +56,11 @@ RESTOCK_PICK_PENALTY_MULTIPLIER = 0.05
 
 # State vector sizing
 WORKER_STATE_SCALARS = 14   # expanded from 13 (added task_oph_normalized at index 13)
-ENV_STATE_SIZE = 17          # expanded from 15 (added carrier_urgency, order_complexity_load)
+ENV_STATE_SIZE = 18          # 15 base + carrier_urgency(15) + order_complexity_load(16)
+                             # + management_backlog_norm(17, v2.5: multi-day mgmt debt signal
+                             # that lets the policy reason about backlog accumulation across
+                             # days. Without this, the policy could not learn to address the
+                             # 19% C-rate from invisible-mgmt-backlog demerits found in v2.7.)
 
 # Tasks that cannot be hustled
 HUSTLE_BLOCKED_TASKS = {"management", "idle", "cycle_count"}
@@ -207,6 +212,15 @@ class FacilityEnv:
         self.orders_in_queue = 0
         self.orders_completed = 0
         self.orders_picked_not_audited = 0
+        # v2.4 projection-based mask: cumulative orders that have entered
+        # the queue. Used (in actions.py) to project today's true total
+        # via canonical arrival curve, so the policy commits early on
+        # stress days instead of waiting for queue to accumulate.
+        self.arrived_so_far: int = 0
+        # Today's working-roster capacity in orders/day. Mirrors
+        # synthetic_gen's volume sampler formula so the mask and the
+        # curriculum agree on what "comfortable" means.
+        self._today_capacity: float = self._compute_today_capacity()
         self.restock_remaining = self.episode.restock_hours if self._restock_enabled else 0.0
         self.deliberate_progress = 0.0
         self.filler_progress = 0.0
@@ -630,11 +644,18 @@ class FacilityEnv:
         # the model is actually allocating worker hours and spot patterns
         # like "everyone assigned to pack but no picked orders existed
         # so they were de facto idle." Counts the worker's CURRENT task
-        # (whatever the model just assigned this tick), so includes idle
-        # time for absent / shift-exhausted workers and for any worker
-        # the model put on a no-op task.
+        # (whatever the model just assigned this tick).
+        #
+        # Absent workers are tagged "off" in the log instead of "idle",
+        # so post-hoc analyses (filler%, idle%, etc.) can distinguish
+        # "called off / didn't show up" from "policy chose to idle this
+        # worker." Both still resolve to no-op in the simulator and the
+        # action mask still forces idle as the only valid action for
+        # them — only the log key changes.
         for w in self.episode.workers:
             t = w.current_task
+            if w.is_absent and t == "idle":
+                t = "off"
             w.task_hours_today[t] = w.task_hours_today.get(t, 0.0) + duration
 
         return reward
@@ -783,6 +804,7 @@ class FacilityEnv:
                     if random.random() < late_exception_rate:
                         admitted = count
                         self.orders_in_queue += admitted
+                        self.arrived_so_far += admitted
                 # Anything we couldn't admit is permanently unshippable —
                 # exclude from the episode's order target so the completion
                 # gate (shipped >= total) stays mathematically reachable.
@@ -793,6 +815,7 @@ class FacilityEnv:
                 to_remove.append(key)
             elif key <= current + 0.01:
                 self.orders_in_queue += count
+                self.arrived_so_far += count
                 to_remove.append(key)
         for key in to_remove:
             del self.episode.arrival_schedule[key]
@@ -1142,6 +1165,87 @@ class FacilityEnv:
         shift_span = max(0.01, pickup - day_start)
         elapsed = self.current_hour - day_start
         return max(0.0, min(1.0, elapsed / shift_span))
+
+    # ── v2.4 projection (used by action mask for early stress detection) ───────
+
+    def _compute_today_capacity(self) -> float:
+        """Today's working-roster comfortable capacity in orders/day.
+        Mirrors synthetic_gen's formula: present_workers * max(12, avg_oph * 9 * 0.22).
+        Cached once per episode in self._today_capacity."""
+        present = [w for w in self.episode.workers if not w.is_absent]
+        n = len(present)
+        if n == 0:
+            return 1.0
+        avg_oph = sum(w.base_oph for w in present) / n
+        comfortable_pw = max(12.0, avg_oph * 9.0 * 0.22)
+        return n * comfortable_pw
+
+    def _compute_time_pressure(self) -> float:
+        """orders_remaining / remaining_worker_capacity. Rises as the day
+        progresses (less capacity left) even when the queue is constant.
+
+        v2.5 added this to the action mask alongside projection-based
+        gating. It catches the "manager looks at the clock at 3pm and
+        realizes there's not enough time even though morning looked
+        fine" failure mode — the projection might say a day is at
+        dvc=0.6 (rescuable in aggregate) but by mid-afternoon if the
+        policy has been doing filler, the math of "remaining orders ÷
+        (remaining hours × throughput)" might already be > 1.0.
+
+        capacity formula = sum over active workers of
+            (hours_remaining_in_shift × base_oph × 0.22)
+        which mirrors today_capacity's per-worker baseline but uses the
+        live remaining hours instead of a full shift. 0.22 is the same
+        observed-throughput factor as today_capacity (see
+        synthetic_gen._generate_volume).
+
+        Returns 0.0 when no orders remaining or no capacity remaining
+        (boundary cases). Clipped to [0, 3]."""
+        if self.episode is None:
+            return 0.0
+        orders_remaining = self.orders_in_queue + self.orders_picked_not_audited
+        if orders_remaining <= 0:
+            return 0.0
+        capacity_remaining = 0.0
+        for w in self.episode.workers:
+            if w.is_absent:
+                continue
+            hours_left = max(0.0, w.hours_remaining)
+            if hours_left <= 0:
+                continue
+            per_hour = max(2.0, w.base_oph * 0.22)
+            capacity_remaining += hours_left * per_hour
+        if capacity_remaining <= 0.0:
+            # EOD / all workers exhausted — any unshipped orders are
+            # already lost. Returning 3.0 signals "max pressure" so the
+            # mask still fires on the few remaining ticks, encouraging
+            # the policy to ship whatever's pickable.
+            return 3.0
+        return max(0.0, min(3.0, orders_remaining / capacity_remaining))
+
+    def _compute_projected_demand_ratio(self) -> float:
+        """Projected day-total / today_capacity, computed from observable
+        arrivals using the canonical normal-day arrival curve. No oracle
+        leak — never reads episode.total_orders.
+
+        This is the SIGNAL that drives v2.4's action mask: the policy
+        commits early on stress days based on this projection, instead
+        of waiting for queue to reactively accumulate. Sharp from tick 1
+        because the canonical arrival curve has an instant bucket
+        landing ~45% of the day's orders at day_start, so the projection
+        is well-calibrated immediately.
+
+        Returns 0.0 if arrived_so_far is zero. Clipped to [0, 3]."""
+        if self.episode is None or self.arrived_so_far <= 0:
+            return 0.0
+        day_start = self.facility_config.rules.day_start_hour
+        cutoff = self.facility_config.rules.order_cutoff_hour
+        expected = expected_fraction_arrived(self.current_hour, day_start, cutoff)
+        if expected <= 1e-4:
+            return 0.0
+        projected_total = self.arrived_so_far / expected
+        ratio = projected_total / max(1.0, self._today_capacity)
+        return max(0.0, min(3.0, ratio))
 
     # ── Info / logging ─────────────────────────────────────────────────────────
 

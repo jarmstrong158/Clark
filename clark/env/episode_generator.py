@@ -414,6 +414,55 @@ def _curved_distribution(
     return schedule
 
 
+# ─── Canonical expected-arrival curve (for v2.4 projection-based mask) ──────
+#
+# Deterministic mean of the NORMAL-day arrival shape. Used by the action mask
+# (clark/agent/actions.py) to project today's total order count from arrivals
+# so far — without reading episode.total_orders. The whole point of v2.4 is
+# to act on a PROJECTION early in the day, not wait for queue to accumulate.
+_RAW_MIDPOINTS = (0.45, 0.275, 0.125, 0.175)   # midpoints of normal-day buckets
+_BUCKET_SUM = sum(_RAW_MIDPOINTS)
+_CANONICAL_BUCKET_FRACTIONS = tuple(f / _BUCKET_SUM for f in _RAW_MIDPOINTS)
+
+
+def expected_fraction_arrived(
+    current_hour: float,
+    day_start: float,
+    order_cutoff: float,
+) -> float:
+    """Cumulative fraction of a day's orders that the canonical intraday
+    arrival curve says SHOULD have arrived by `current_hour`. Range [0, 1],
+    monotone, jump-discontinuity at day_start (instant bucket ~45%)."""
+    EPS = 1e-6
+    arrival_end = max(day_start + STEP_DURATION, order_cutoff - STEP_DURATION)
+    window = arrival_end - day_start
+    if window <= 0:
+        return 1.0 if current_hour >= day_start - EPS else 0.0
+
+    canonical_window = ORDER_ARRIVAL_END_HOUR - DAY_START_HOUR
+    morning_end = day_start + ((MORNING_END_HOUR - DAY_START_HOUR)
+                                / canonical_window) * window
+    afternoon_end = day_start + ((AFTERNOON_END_HOUR - DAY_START_HOUR)
+                                  / canonical_window) * window
+
+    f_inst, f_morn, f_aft, f_late = _CANONICAL_BUCKET_FRACTIONS
+
+    if current_hour < day_start - EPS:
+        return 0.0
+    if current_hour >= arrival_end:
+        return 1.0
+    if current_hour < day_start + EPS:
+        return f_inst
+    if current_hour < morning_end:
+        frac = (current_hour - day_start) / max(EPS, morning_end - day_start)
+        return f_inst + f_morn * frac
+    if current_hour < afternoon_end:
+        frac = (current_hour - morning_end) / max(EPS, afternoon_end - morning_end)
+        return f_inst + f_morn + f_aft * frac
+    frac = (current_hour - afternoon_end) / max(EPS, arrival_end - afternoon_end)
+    return f_inst + f_morn + f_aft + f_late * frac
+
+
 def _get_steps_in_range(start: float, end: float) -> list[float]:
     steps = []
     t = start

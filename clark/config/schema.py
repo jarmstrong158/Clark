@@ -328,7 +328,20 @@ DEFAULT_REWARDS: dict[str, float] = {
     # has stronger incentive to schedule cleanly during normal hours.
     # The grade system already F's at any incomplete, so this just lifts
     # the cleanliness floor without changing OT's existence.
-    "per_ot_hour":                   -1.5,
+    #
+    # v2.7 (2026-05-25): -1.5 → -5.0. v2.6 audit on 81 perfect-ship non-A
+    # days found 49% had small OT spillovers (mean 0.6h on B-days). At
+    # -1.5 weight the per-day OT cost was -0.91 — 0.05% of a typical
+    # 1500-3000 day reward, lost in noise so the policy made no effort
+    # to avoid the spillover. At -5.0 the cost rises to -3.0/B-day (0.1-
+    # 0.2% of day reward) which is meaningful enough to push the policy
+    # to commit earlier. Probe confirmed the math stays safe — at p90
+    # OT (0.5h) even -5.0 only costs -2.5, well below per_order_incomplete
+    # at -10/order so the policy still strongly prefers shipping with
+    # small OT over leaving any orders incomplete. Expected A-rate
+    # uplift on stage-3 synthetic: 60.7% → ~73% (conversion of OT-
+    # spillover B-days back to A).
+    "per_ot_hour":                   -5.0,
     "ot_incomplete_flat":           -25.0,
     "ot_per_order_incomplete":      -10.0,
     # Restock penalties at Jack's order of magnitude. We tried HARSH values
@@ -353,7 +366,21 @@ DEFAULT_REWARDS: dict[str, float] = {
     "deliberate_completion_bonus":    8.0,
     "side_project_during_crunch":    -2.0,
     "per_productive_hour":            0.3,
-    "per_management_hour":            0.5,
+    # per_management_hour history: 0.5 (v2.0-v2.8) -> 1.5 (v2.9) -> 1.0 (v2.10).
+    # v2.8 added mgmt_backlog_norm as env_feats[17] so the policy could SEE
+    # the multi-day backlog accumulator. v2.9 tripled the per-hour mgmt
+    # reward (0.5 -> 1.5) to give the policy a discriminating gradient on
+    # the new observation. That bump destabilized PPO: 40-eps audit showed
+    # the policy churning through every task per worker per tick (e.g.,
+    # one worker doing 9 different tasks in a 6h shift), filler aggregating
+    # to 48% on D days via small slices even with the v2.6 mask catching
+    # crunch ticks. Diagnosis: 3x reward shock was too aggressive; PPO
+    # vloss spiked to 6.85 and policy didn't reach equilibrium.
+    # v2.10 reverts to a 2x bump (0.5 -> 1.0) which still gives a meaningful
+    # gradient (3h mgmt = +3.0 reward vs the original +1.5) without the
+    # shock. Restart from v2.8's stable checkpoint, not v2.9's destabilized
+    # weights.
+    "per_management_hour":            1.0,
     # Dense, GATED management incentive (triple-audit, 2026-05-18). The
     # decisive management signal used to be only the sparse EOD grade-tier
     # lump (+10 minimum-met -> +30 full = a +20 swing) on a day already

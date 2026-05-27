@@ -20,7 +20,7 @@ class StateBuilder:
     Output shapes:
       worker_feats:    (N, 14)
       task_feats:      (M, 3)
-      env_feats:       (17,)
+      env_feats:       (18,)
       worker_role_ids: (N,) int64
       task_type_ids:   (M,) int64
     """
@@ -56,7 +56,7 @@ class StateBuilder:
             {
                 "worker_feats":    np.ndarray (actual_N, 14)  float32
                 "task_feats":      np.ndarray (M, 3)          float32
-                "env_feats":       np.ndarray (17,)            float32
+                "env_feats":       np.ndarray (18,)            float32
                 "worker_role_ids": np.ndarray (actual_N,)     int64
                 "task_type_ids":   np.ndarray (M,)            int64
             }
@@ -262,6 +262,14 @@ class StateBuilder:
          14   is_ot                   (1.0 / 0.0)
          15   carrier_urgency         1-(hours_until_pickup/shift_span) if deadline set, else 0.0
          16   order_complexity_load   weighted avg OPH multiplier for today's order mix
+         17   mgmt_backlog_norm       (v2.5) min(1.0, _mgmt_backlog / backlog_week_threshold).
+                                       Multi-day accumulator: each day's shortfall vs the
+                                       required mgmt hours adds to backlog, surplus reduces
+                                       it (floor 0). At 1.0 = threshold reached = grading
+                                       demerit fires. Lets the policy reason about and
+                                       prevent the multi-day mgmt failure mode that was
+                                       invisible before v2.5 (audit found 80% of v2.7 C
+                                       days had this as the hidden demerit).
         """
         ep = env.episode
         eod_hour = env._eod_hour
@@ -301,5 +309,20 @@ class StateBuilder:
 
         # Feature 16: order_complexity_load
         feats[16] = env._compute_complexity_load()
+
+        # Feature 17 (v2.5): mgmt_backlog_norm. Multi-day rolling mgmt
+        # debt vs the weekly threshold. _mgmt_backlog is injected each
+        # day by year_env from its persistent counter. Without this
+        # feature, the policy was making locally-optimal "skip mgmt to
+        # avoid OT" decisions that accumulated invisible backlog and
+        # fired the management_backlog demerit on ~19% of v2.7 days.
+        # Normalized so 1.0 = at the demerit-triggering threshold;
+        # clipped because backlog can exceed threshold (the env scales
+        # the demerit by quadratic penalty above threshold but caps
+        # the observable to keep the input bounded for the network).
+        threshold = max(0.01,
+            self.config.rules.management_backlog_week_threshold)
+        feats[17] = max(0.0, min(1.0,
+            getattr(env, '_mgmt_backlog', 0.0) / threshold))
 
         return feats

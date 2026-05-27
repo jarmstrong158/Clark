@@ -69,6 +69,58 @@ def get_action_mask(env: "FacilityEnv") -> np.ndarray:
         and day_env.orders_picked_not_audited >= pick_buffer_cap
     )
 
+    # v2.5/v2.6: multi-gate hard-mask on filler. Real warehouse managers
+    # check the situation continuously — they BOTH project the day from
+    # the morning AND react to current state ("look at the clock at 3pm
+    # — we have 200 unshipped and 2 hours, no more side-projects").
+    # A single projection-only gate (v2.4) missed mid-range days where
+    # the projection said "fine" but the policy spent the day on filler
+    # and then ran out of time. Multi-gate fires when ANY of:
+    #
+    #   1. _projected_dvc > 0.65 -- proactive: morning curve says heavy
+    #   2. _pending_pct > 0.25   -- reactive: queue is piling up now
+    #   3. _schedule_pressure > 0.20 -- reactive: behind where we should be
+    #   4. _time_pressure > 0.85 -- reactive: not enough time left for
+    #                               remaining work (the missing manager-
+    #                               clock check)
+    #   5. _restock_pressure (v2.6) -- restock_level < 0.35: stock is
+    #      approaching the 0.20 cliff where picking speed crashes to 5%.
+    #      Mask filler PROACTIVELY so the policy is forced to allocate
+    #      restockers BEFORE collapse — preventing the cascade that
+    #      forces OT and drops the grade. v2.5 audit showed: any OT use
+    #      = automatic A-grade disqualification, and the dominant cause
+    #      of OT cascade was restock-level collapse. 0.35 gives a 0.15
+    #      buffer above the cliff so the mask fires with time for
+    #      restockers to catch up at normal speed.
+    #
+    # Pending_pct AND total_orders inside the mask are OK to read
+    # directly — the mask is env-side code, not an observation the
+    # policy can game. The "no oracle" rule applies only to obs feats.
+    _FILLER_TASKS = {"side_project", "loading", "training",
+                     "quality_check", "returns_processing", "receiving"}
+    _total_orders = max(1, day_env.episode.total_orders)
+    _orders_pending = day_env.orders_in_queue + day_env.orders_picked_not_audited
+    _projected_dvc = day_env._compute_projected_demand_ratio()
+    _pending_pct = _orders_pending / _total_orders
+    _eod_h = day_env._eod_hour
+    _day_start_h = cfg.rules.day_start_hour
+    _shift_span = max(0.01, _eod_h - _day_start_h)
+    _time_progress = max(0.0, min(1.0,
+        (day_env.current_hour - _day_start_h) / _shift_span))
+    _completion_progress = day_env.orders_completed / _total_orders
+    _schedule_pressure = max(0.0, _time_progress - _completion_progress)
+    _time_pressure = day_env._compute_time_pressure()
+    _restock_pressure = (
+        day_env._restock_enabled and day_env.restock_level < 0.35
+    )
+    _filler_in_stress = (
+        _projected_dvc > 0.65
+        or _pending_pct > 0.25
+        or _schedule_pressure > 0.20
+        or _time_pressure > 0.85
+        or _restock_pressure
+    )
+
     # Management quota check (used in the normal-case branch)
     def _management_available(worker_id: int) -> bool:
         """True if this worker may still do meaningful management work."""
@@ -192,6 +244,17 @@ def get_action_mask(env: "FacilityEnv") -> np.ndarray:
             # the per-task loop re-enables pick if no other action ended
             # up valid.)
             if t_id == "pick" and pick_buffer_full:
+                mask[w_id, j] = False
+                continue
+
+            # v2.4 hard-mask: filler tasks are structurally invalid on
+            # days projected to exceed 85% of capacity. Forces the policy
+            # toward pick / pack / restock / management instead of
+            # letting it indulge the "filler is OK" attractor learned
+            # during pretrain. Fires from tick 1 of stress days because
+            # the projection is sharp early (canonical curve has 45% of
+            # the day's orders landing at day_start instant).
+            if t_id in _FILLER_TASKS and _filler_in_stress:
                 mask[w_id, j] = False
                 continue
 
