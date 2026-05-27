@@ -8,7 +8,7 @@
 
 > **TL;DR.** Clark is a transformer + LSTM PPO agent. It pre-trains once on thousands of synthetic warehouses, then fine-tunes to any specific facility in about 30 minutes on a consumer GPU. One foundation model, many facilities. Variable workers, variable tasks, no per-site retrain from scratch. Successor to [Jack](https://github.com/jarmstrong158/Jack), the single-facility reference implementation.
 
-Clark learns the underlying dynamics of warehouse operations (picking and packing throughput, overtime decisions, restock cycles, fatigue, hustle) from thousands of synthetic facility configurations. A single pre-trained foundation can then be fine-tuned to any specific facility in as few as **50 episodes (~3.3 h on a consumer GPU)**. That's the Jack-validation floor, where F-rate is already cut by ~60% and A+B day share lifts from 57.5% to 83.5% on Jack's own setup (see [Validated on Jack's facility](#validated-on-jacks-facility) for the full head-to-head). The wizard defaults to 50. The `clark finetune` CLI defaults to 500 for users who want the deeper run.
+Clark learns the underlying dynamics of warehouse operations (picking and packing throughput, overtime decisions, restock cycles, fatigue, hustle) from thousands of synthetic facility configurations. A single pre-trained foundation can then be fine-tuned to any specific facility in as few as **50 episodes (~3.3 h on a consumer GPU)**. That's the Jack-validation floor, where F-rate drops from 15% to **4.2%** and A+B day share lifts from 85% to **95.8%** on Jack's own setup — beating Jack-from-scratch (which required ~9 simulated years of facility-specific training) on A-grade rate. See [Validated on Jack's facility](#validated-on-jacks-facility) for the full head-to-head. The wizard defaults to 50. The `clark finetune` CLI defaults to 500 for users who want the deeper run.
 
 Where its predecessor [Jack](https://github.com/jarmstrong158/Jack) was a single-facility PPO + LSTM agent operating on a fixed 7-worker, 14-action state vector, Clark is built around a transformer + LSTM hybrid that handles **variable** numbers of workers and tasks. The same model weights generalize across facilities.
 
@@ -398,18 +398,18 @@ same OPHs, shift hours, seasonal volume ranges, weekly curve, and
 management / OT / cycle-count rules). Then a full work-year
 (~261 days) was simulated via `/simulate` under three regimes:
 
-| Metric | Jack (from scratch, ~9.4 sim years) | Clark **foundation alone** | **Clark fine-tuned on Jack** |
-|---|---|---|---|
-| A-grade days | 58 % (151/261) | 36.8 % (96/261) | **46.0 % (120/261)** |
-| A + B days | (not reported) | 57.5 % (150/261) | **83.5 % (218/261)** |
-| F-grade days | ~0 % | 42.5 % (111/261) | **16.5 % (43/261)** |
-| Per-facility training | ~9.4 simulated years | **none** (uses pretrained foundation) | **50 episodes** (~0.2 sim years) |
+| Metric | Jack (from scratch, ~9.4 sim years) | Old v2 foundation alone | Old v2 + 50ep ft | **v2.10 foundation alone** | **v2.10 + 50ep ft** |
+|---|---|---|---|---|---|
+| A-grade days | 58 % (151/261) | 36.8 % (96/261) | 46.0 % (120/261) | **57.5 % (150/261)** | **62.1 % (162/261)** |
+| A + B days | (not reported) | 57.5 % (150/261) | 83.5 % (218/261) | **85.1 % (222/261)** | **95.8 % (250/261)** |
+| F-grade days | ~0 % | 42.5 % (111/261) | 16.5 % (43/261) | 15.0 % (39/261) | **4.2 % (11/261)** |
+| Per-facility training | ~9.4 simulated years | **none** | **50 episodes** (~0.2 sim years) | **none** | **50 episodes** (~0.2 sim years) |
 
 What this says, plainly:
 
-- **The foundation alone is partially competitive but clearly weaker than Jack** on Jack's specific facility. It nails A-grade ~37% of days (vs Jack's 58%) and fails outright on ~43%. That's expected: it's a generalist that's never seen Marcus / Nolan / Felix's specific OPHs and quirks.
-- **50 episodes of fine-tuning on Jack's config more than halves the F-rate (42.5 to 16.5%), pushes A-days from 37 to 46%, and lifts A+B past 83%.** A+B exceeds Jack's pure-A rate. Pure A is still 12 points behind Jack; closing that gap is what additional fine-tune episodes buy, with diminishing returns past ~200. The wizard defaults to the 50-episode floor for fastest path to a useful model, and exposes the count as a user-editable field for deeper runs.
-- **The headline efficiency claim holds.** Clark + 50 fine-tune episodes (~0.2 simulated years) reaches a *better* failure rate and *broader* high-grade share than Jack did with ~9 simulated years from scratch. The foundation-model thesis isn't hand-waving; these are real, measured numbers from a head-to-head on Jack's own facility.
+- **v2.10's foundation alone now matches Jack-from-scratch on A-grade (57.5% vs 58%), with zero training on Jack's facility.** That's the headline. The old v2 foundation was 20pp behind Jack on A-rate; the v2.5 mask + v2.6 restock gate + v2.7 OT bump + v2.8 mgmt-backlog observation + v2.10 mgmt-reward chain closed the gap entirely. The remaining difference at the foundation-alone level is F-rate (15% on v2.10 foundation vs ~0% on Jack-from-scratch), since v2.10 has still never seen Marcus / Nolan / Felix's specific OPHs and quirks.
+- **50 episodes of fine-tuning on Jack's config takes v2.10 past Jack.** A-rate climbs to 62.1% (beating Jack-from-scratch by ~4pp), F-rate drops to 4.2%, and A+B reaches 95.8% — meaning 250 of 261 work-days are A or B grades. This is the strongest Jack-facility result Clark has ever produced.
+- **The efficiency claim holds even more strongly than before.** Clark + 50 fine-tune episodes (~0.2 simulated years) now reaches a *better* A-rate AND a comparable F-rate to Jack's ~9 simulated years from scratch. The foundation-model thesis is no longer "almost competitive after fine-tune" — it's "matches at zero per-facility training, beats with 50 episodes."
 
 The ops dashboard's "Find recommended staffing" button runs the same
 roster sweep interactively against any facility + date + volume +
