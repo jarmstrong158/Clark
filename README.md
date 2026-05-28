@@ -61,6 +61,8 @@ Key hyperparameters: `d_model=512`, 4 self-attention layers, 1 cross-attention, 
 
 Launch with `clark ops` (or double-click `Run Clark Dashboard.bat`). The dashboard talks directly to `clark serve` from the browser, no LLM in the loop, no prompt parsing. Forms over the trained policy, results rendered as tables.
 
+Double-clicking `Run Clark Dashboard.bat` is self-contained: if `clark serve` isn't already up on `:8000` it auto-launches it against the current foundation checkpoint (`clark_foundation.pt`) in its own window, waits for the model to load, then opens the dashboard in your browser. The launcher always keeps its window open on exit so any startup error stays readable.
+
 Five tabs cover the common operator questions: Plan, Compare, Calendar check, Morning briefing, and Training (live progress for any running fine-tune). A small admin row sits beside the tab bar.
 
 ### Plan a day
@@ -292,6 +294,8 @@ This is the *training*-metrics dashboard (loss curves, episode log, year snapsho
 ## Performance and status
 
 Foundation pre-training **completed** at episode 15 000 (target reached, clean termination: `status.alive=False`, value head stable, no end-of-run divergence). ~11 h on a single RTX 5070 Ti. The training infrastructure was validated end-to-end (PPO updates, day-boundary cadence, multi-process env stepping, pipelined CPU/GPU overlap), and the policy importance-sampling ratio behaved correctly throughout (clip fraction in the healthy 5-20% range after the per-worker ratio refactor).
+
+> **Which checkpoint ships.** The headline table immediately below is the raw v2 baseline at ep 15 000. The deployable foundation — `clark_foundation.pt`, architecture `clark-v2.5` — carries the v2.5 → v2.10 refinements documented further down, and is what `clark serve`, the operations dashboard, and `clark mcp` load by default. For the current numbers see [v2.10](#v210-per-management-hour-reward-05--10) and [Validated on Jack's facility](#validated-on-jacks-facility).
 
 **Headline numbers at completion** (rolling window of the final 500 days across stage-3 synthetic configs up to N=40, M=7):
 
