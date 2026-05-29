@@ -262,6 +262,14 @@
     background: var(--bg);
   }
   .task-check input { margin: 0; }
+  .task-check-cell { display: flex; flex-direction: column; gap: 4px; }
+  .task-check-cell .task-check { flex: 1; }
+  .task-cap-row {
+    display: flex; align-items: center; flex-wrap: wrap; gap: 6px;
+    padding: 4px 4px 2px 6px; font-size: 11px; color: var(--muted);
+  }
+  .task-cap-row input[type="number"] { width: 60px; padding: 3px 6px; }
+  .task-cap-row select { padding: 3px 6px; font-size: 11px; }
   .custom-task-row {
     display: grid;
     grid-template-columns: 1fr 1.4fr 1fr 1fr 0.7fr auto;
@@ -716,6 +724,10 @@ const state = {
   workers: [],          // [{name, role, base_oph, shift_hours, shift_start, task_eligibility}]
   tasksEnabled: null,   // null = use archetype default; otherwise list[str]
   customTasks: [],      // [{task_id, display_name, output_type, hustle_eligible, eligible_roles, reward_weight}]
+  // Per-task daily-hours caps. task_id → {hours: number|null, penalty: "none"|"letter"|"two_letters"|"fail"}.
+  // hours = target worker-hours/day; once met, Clark stops the task that day.
+  // penalty = grade hit if the target is NOT met by end of day.
+  taskCaps: {},
   rules: {},            // any of: pack_stations, carts_available, pick_buffer_capacity,
                         //          day_start_hour, eod_hour, order_cutoff_hour,
                         //          lunch_hour, lunch_duration, carrier_pickup_hour,
@@ -796,6 +808,7 @@ async function boot() {
         if (Array.isArray(d.workers)) state.workers = d.workers;
         if (Array.isArray(d.tasksEnabled)) state.tasksEnabled = d.tasksEnabled;
         if (Array.isArray(d.customTasks)) state.customTasks = d.customTasks;
+        if (d.taskCaps && typeof d.taskCaps === "object") state.taskCaps = d.taskCaps;
         if (d.rules && typeof d.rules === "object") state.rules = d.rules;
         // Restore volume profile
         if (d.seasonRanges) {
@@ -1356,25 +1369,68 @@ function renderStandardTasks() {
   STANDARD_TASKS.filter(t => PRIMARY_TASKS_SET.has(t)).forEach(t => {
     const isCore = CORE_TASKS.has(t);
     const checked = state.tasksEnabled.includes(t) || isCore;
-    const div = document.createElement("label");
-    div.className = "task-check" + (isCore ? " disabled" : "");
-    div.innerHTML = `
-      <input type="checkbox" ${checked ? "checked" : ""} ${isCore ? "disabled" : ""}
-             onchange="toggleStandardTask('${t}', this.checked)">
-      <span>${t}${isCore ? " <small style='color:var(--muted)'>(core, required)</small>" : ""}</span>`;
-    primaryGrid.appendChild(div);
+    const cell = document.createElement("div");
+    cell.className = "task-check-cell";
+    let extra = "";
+    if (t === "management" && checked) {
+      const mh = (state.rules.management_daily_hours_required != null)
+        ? state.rules.management_daily_hours_required : "";
+      extra = `<div class="task-cap-row">
+        <span>needs</span>
+        <input type="number" min="0" step="0.5" value="${mh}" placeholder="hrs"
+               oninput="setManagementHours(this.value)">
+        <span>hrs/day · auto-off when met; unmet already demotes the grade</span>
+      </div>`;
+    }
+    cell.innerHTML = `
+      <label class="task-check${isCore ? " disabled" : ""}">
+        <input type="checkbox" ${checked ? "checked" : ""} ${isCore ? "disabled" : ""}
+               onchange="toggleStandardTask('${t}', this.checked)">
+        <span>${t}${isCore ? " <small style='color:var(--muted)'>(core, required)</small>" : ""}</span>
+      </label>${extra}`;
+    primaryGrid.appendChild(cell);
   });
   // Secondary group (collapsed by default; the "Show all" link reveals)
   SECONDARY_TASKS.forEach(t => {
     const checked = state.tasksEnabled.includes(t);
-    const div = document.createElement("label");
-    div.className = "task-check";
-    div.innerHTML = `
-      <input type="checkbox" ${checked ? "checked" : ""}
-             onchange="toggleStandardTask('${t}', this.checked)">
-      <span>${t}</span>`;
-    secondaryGrid.appendChild(div);
+    const cap = state.taskCaps[t] || { hours: null, penalty: "none" };
+    const cell = document.createElement("div");
+    cell.className = "task-check-cell";
+    const capRow = checked ? `<div class="task-cap-row">
+        <span>stop after</span>
+        <input type="number" min="0" step="0.5" value="${cap.hours != null ? cap.hours : ""}" placeholder="hrs"
+               oninput="setTaskCapHours('${t}', this.value)">
+        <span>hrs/day · if unmet:</span>
+        <select onchange="setTaskCapPenalty('${t}', this.value)">
+          ${[["none","no penalty"],["letter","− 1 grade letter"],["two_letters","− 2 grade letters"],["fail","auto-fail (F)"]]
+            .map(([v,lbl]) => `<option value="${v}"${v===cap.penalty?" selected":""}>${lbl}</option>`).join("")}
+        </select>
+      </div>` : "";
+    cell.innerHTML = `
+      <label class="task-check">
+        <input type="checkbox" ${checked ? "checked" : ""}
+               onchange="toggleStandardTask('${t}', this.checked)">
+        <span>${t}</span>
+      </label>${capRow}`;
+    secondaryGrid.appendChild(cell);
   });
+}
+function setTaskCapHours(t, val) {
+  if (!state.taskCaps[t]) state.taskCaps[t] = { hours: null, penalty: "none" };
+  const h = parseFloat(val);
+  state.taskCaps[t].hours = (val === "" || isNaN(h)) ? null : h;
+  persistDraft();
+}
+function setTaskCapPenalty(t, val) {
+  if (!state.taskCaps[t]) state.taskCaps[t] = { hours: null, penalty: "none" };
+  state.taskCaps[t].penalty = val;
+  persistDraft();
+}
+function setManagementHours(val) {
+  const h = parseFloat(val);
+  if (val === "" || isNaN(h)) delete state.rules.management_daily_hours_required;
+  else state.rules.management_daily_hours_required = h;
+  persistDraft();
 }
 function toggleStandardTask(t, on) {
   if (CORE_TASKS.has(t)) return;
@@ -1391,8 +1447,12 @@ function toggleStandardTask(t, on) {
         w.task_eligibility = w.task_eligibility.filter(x => x !== t);
       }
     });
+    // Drop any daily-hours cap for a task that's no longer enabled.
+    delete state.taskCaps[t];
   }
   persistDraft();
+  // Re-render so the per-task cap controls show/hide with the checkbox.
+  renderStandardTasks();
 }
 function renderCustomTasks() {
   const list = document.getElementById("customTasksList");
@@ -1513,6 +1573,25 @@ function buildConfig() {
     enabled: state.tasksEnabled,
     custom: state.customTasks.filter(ct => ct.task_id && ct.display_name),
   } : null;
+  // Per-task daily-hours caps + unmet penalties — only for tasks that are
+  // enabled and have a positive hours target. Management is excluded (it
+  // uses business_rules.management_daily_hours_required, surfaced via the
+  // management hours input → state.rules).
+  if (tasksPayload) {
+    const dailyHours = {}, unmetPenalty = {};
+    (state.tasksEnabled || []).forEach(t => {
+      if (t === "management") return;
+      const cap = state.taskCaps[t];
+      if (cap && cap.hours != null && cap.hours > 0) {
+        dailyHours[t] = cap.hours;
+        unmetPenalty[t] = cap.penalty || "none";
+      }
+    });
+    if (Object.keys(dailyHours).length) {
+      tasksPayload.daily_hours = dailyHours;
+      tasksPayload.unmet_penalty = unmetPenalty;
+    }
+  }
   const rulesPayload = advanced && Object.keys(state.rules).length
     ? { ...state.rules } : null;
   // Saturday volume fraction follows the checkbox + input.
@@ -1767,6 +1846,7 @@ function persistDraft() {
     workers: state.workers,
     tasksEnabled: state.tasksEnabled,
     customTasks: state.customTasks,
+    taskCaps: state.taskCaps,
     rules: state.rules,
   }));
 }

@@ -72,6 +72,20 @@ tasks:
     - management
     - idle
   custom: []
+  # Per-task daily-hours caps (optional). Once the total hours spent on a
+  # task (summed across all workers) reach the target, the task is turned
+  # off for the rest of the day so no further labor is wasted on it.
+  # Management is NOT listed here — it uses business_rules.
+  # management_daily_hours_required for its own cap.
+  daily_hours:
+    side_project: 2.0      # do up to 2 worker-hours of side_project, then stop
+  # Grade penalty if a daily_hours target was NOT met by end of day.
+  #   none        — cap only, no grade impact (default if omitted)
+  #   letter      — drop one grade letter
+  #   two_letters — drop two grade letters
+  #   fail        — force the day to F
+  unmet_penalty:
+    side_project: none     # purely a labor cap here; under-doing it doesn't hurt the grade
 
 volume:
   # Adjust these to your real order volumes.

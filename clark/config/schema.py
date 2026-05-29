@@ -114,6 +114,20 @@ class CustomTaskConfig:
 class TasksConfig:
     enabled: list[str]                      # standard task IDs to activate
     custom: list[CustomTaskConfig] = field(default_factory=list)
+    # Per-task daily-hours target. Once the total hours spent on a task
+    # (summed across all workers) reaches this value, the task is masked
+    # off for the rest of the day so no further labor is wasted on it.
+    # Keyed by task_id. A task with no entry has no cap (legacy behavior).
+    # Management is NOT driven from here — it keeps its own
+    # `management_daily_hours_required` mechanism in BusinessRules.
+    daily_hours: dict[str, float] = field(default_factory=dict)
+    # Per-task grade penalty applied at end-of-day if the task's
+    # `daily_hours` target was NOT met. Keyed by task_id. One of:
+    #   "none"        — cap only, no grade impact (default for unlisted)
+    #   "letter"      — drop one grade letter (one demerit)
+    #   "two_letters" — drop two grade letters (two demerits)
+    #   "fail"        — force the day to F
+    unmet_penalty: dict[str, str] = field(default_factory=dict)
 
     def all_task_ids(self) -> list[str]:
         """Ordered list of all active task IDs (standard + custom)."""
@@ -564,7 +578,26 @@ class FacilityConfig:
                 eligible_roles=ct.get("eligible_roles", ["warehouse"]),
                 reward_weight=float(ct.get("reward_weight", 1.0)),
             ))
-        return TasksConfig(enabled=enabled, custom=customs)
+        daily_hours = {
+            str(k): float(v)
+            for k, v in (d.get("daily_hours") or {}).items()
+        }
+        _VALID_PENALTIES = {"none", "letter", "two_letters", "fail"}
+        unmet_penalty = {}
+        for k, v in (d.get("unmet_penalty") or {}).items():
+            sev = str(v).lower()
+            if sev not in _VALID_PENALTIES:
+                raise ValueError(
+                    f"tasks.unmet_penalty['{k}'] = '{v}' is invalid; "
+                    f"must be one of {sorted(_VALID_PENALTIES)}"
+                )
+            unmet_penalty[str(k)] = sev
+        return TasksConfig(
+            enabled=enabled,
+            custom=customs,
+            daily_hours=daily_hours,
+            unmet_penalty=unmet_penalty,
+        )
 
     @staticmethod
     def _parse_volume(d: dict) -> VolumeConfig:
@@ -805,6 +838,31 @@ class FacilityConfig:
             if t_id not in known_ids:
                 errors.append(f"Unknown task_id in tasks.enabled: '{t_id}'. "
                                "Use standard vocab IDs or define it in tasks.custom.")
+
+        # Per-task daily-hours caps + unmet penalties
+        active_task_ids = set(self.task_ids)
+        total_worker_hours = sum(w.shift_hours for w in self.workers)
+        for t_id, target in self.tasks.daily_hours.items():
+            if t_id not in active_task_ids:
+                errors.append(f"tasks.daily_hours references '{t_id}', which is not an "
+                               "active task. Enable it in tasks.enabled or tasks.custom first.")
+                continue
+            if target <= 0:
+                errors.append(f"tasks.daily_hours['{t_id}'] = {target} must be > 0.")
+            if t_id in ("pick", "pack", "idle"):
+                warnings.append(f"tasks.daily_hours caps core task '{t_id}'. Capping pick/pack "
+                                 "throttles order shipping and will hurt grades — usually a mistake.")
+            if t_id == "management":
+                warnings.append("tasks.daily_hours['management'] is ignored — management uses "
+                                 "business_rules.management_daily_hours_required for its cap.")
+            if total_worker_hours > 0 and target > total_worker_hours:
+                warnings.append(f"tasks.daily_hours['{t_id}'] = {target}h exceeds total roster "
+                                 f"capacity (~{total_worker_hours:.0f} worker-hours/day); the target "
+                                 "can never be met, so an unmet penalty would fire every day.")
+        for t_id in self.tasks.unmet_penalty:
+            if t_id not in self.tasks.daily_hours:
+                warnings.append(f"tasks.unmet_penalty['{t_id}'] has no matching tasks.daily_hours "
+                                 "target, so it can never trigger. Set a daily_hours value for it.")
 
         # Task eligibility references valid task IDs
         for w in self.workers:

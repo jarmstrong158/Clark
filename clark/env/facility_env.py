@@ -1337,7 +1337,30 @@ class FacilityEnv:
 
         backlog_threshold = self.facility_config.rules.management_backlog_week_threshold
 
-        if not all_orders or not mgmt_minimum:
+        # Per-task daily-hours duty penalties: if a task carries a
+        # daily_hours target and didn't reach it today, apply the
+        # facility's chosen penalty. "letter"/"two_letters" add demerits;
+        # "fail" forces F. The auto-off mask (agent/actions.py) caps the
+        # *upside* labor once the target is met; this is the *downside*
+        # scoring for under-doing the duty. Management is excluded — it
+        # has its own mgmt_full / mgmt_minimum tiers above.
+        _tasks_cfg = self.facility_config.tasks
+        task_unmet_demerits = 0
+        task_force_fail = False
+        for _t_id, _target in _tasks_cfg.daily_hours.items():
+            _sev = _tasks_cfg.unmet_penalty.get(_t_id, "none")
+            if _sev == "none" or _t_id == "management":
+                continue
+            _done = sum(w.task_hours_today.get(_t_id, 0.0) for w in ep.workers)
+            if _done + 1e-9 < _target:
+                if _sev == "fail":
+                    task_force_fail = True
+                elif _sev == "two_letters":
+                    task_unmet_demerits += 2
+                elif _sev == "letter":
+                    task_unmet_demerits += 1
+
+        if not all_orders or not mgmt_minimum or task_force_fail:
             grade = "F"
         else:
             demerits = 0
@@ -1349,6 +1372,7 @@ class FacilityEnv:
                 demerits += 1
             if management_backlog > backlog_threshold:
                 demerits += 1
+            demerits += task_unmet_demerits
             grades = ["A", "B", "C", "D", "F"]
             grade = grades[min(demerits, 4)]
 

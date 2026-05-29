@@ -121,6 +121,26 @@ def get_action_mask(env: "FacilityEnv") -> np.ndarray:
         or _restock_pressure
     )
 
+    # Per-task daily-hours auto-off: once the total hours spent on a task
+    # (summed across all workers today) reach its configured target, the
+    # task is removed from the action space for the rest of the day so no
+    # further labor is wasted on it. Same idea as the management cap below,
+    # generalized to any task the facility put a `daily_hours` target on.
+    # Management is intentionally excluded — it has its own quota logic in
+    # `_management_available` (driven by management_daily_hours_required).
+    _capped_met: set[str] = set()
+    _task_caps = cfg.tasks.daily_hours
+    if _task_caps:
+        for _t_id, _target in _task_caps.items():
+            if _t_id == "management":
+                continue
+            _done = sum(
+                w.task_hours_today.get(_t_id, 0.0)
+                for w in day_env.episode.workers
+            )
+            if _done >= _target:
+                _capped_met.add(_t_id)
+
     # Management quota check (used in the normal-case branch)
     def _management_available(worker_id: int) -> bool:
         """True if this worker may still do meaningful management work."""
@@ -222,6 +242,11 @@ def get_action_mask(env: "FacilityEnv") -> np.ndarray:
                 mask[w_id, j] = False
                 continue
 
+            # Per-task daily-hours cap reached → task is off for the day.
+            if t_id in _capped_met:
+                mask[w_id, j] = False
+                continue
+
             if t_id == "management":
                 mask[w_id, j] = _management_available(w_id)
                 continue
@@ -261,12 +286,16 @@ def get_action_mask(env: "FacilityEnv") -> np.ndarray:
             # General task: check worker eligibility
             mask[w_id, j] = worker.eligible_for(t_id)
 
-        # Stranded-worker safety: if pick was blocked by the buffer cap
-        # AND nothing else came back valid, re-enable pick. Better the
-        # buffer overflows by a small amount than the worker gets a
-        # zero-mask softmax (which would NaN the policy distribution).
-        if pick_buffer_full and pick_idx >= 0 and not mask[w_id].any():
-            mask[w_id, pick_idx] = True
+        # Stranded-worker safety: never emit an all-False row (it would
+        # NaN the policy softmax). If pick was blocked by the buffer cap,
+        # prefer re-enabling pick (better a small buffer overflow than a
+        # stranded worker). Otherwise — e.g. a worker whose only eligible
+        # task just hit its daily-hours cap — fall back to idle.
+        if not mask[w_id].any():
+            if pick_buffer_full and pick_idx >= 0:
+                mask[w_id, pick_idx] = True
+            else:
+                mask[w_id, idle_idx] = True
 
     return mask
 

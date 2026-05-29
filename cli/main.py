@@ -1107,6 +1107,25 @@ def cmd_wizard(args: argparse.Namespace):
                         })
                     if custom_clean:
                         t_out["custom"] = custom_clean
+                # Per-task daily-hours caps + unmet penalties. Keep only
+                # entries with a positive target; carry the matching
+                # penalty (default "none").
+                dh_in = tasks_in.get("daily_hours")
+                if isinstance(dh_in, dict) and dh_in:
+                    up_in = tasks_in.get("unmet_penalty") or {}
+                    daily_hours, unmet_penalty = {}, {}
+                    for t_id, hrs in dh_in.items():
+                        try:
+                            hv = float(hrs)
+                        except (TypeError, ValueError):
+                            continue
+                        if hv <= 0:
+                            continue
+                        daily_hours[str(t_id)] = hv
+                        unmet_penalty[str(t_id)] = str(up_in.get(t_id, "none"))
+                    if daily_hours:
+                        t_out["daily_hours"] = daily_hours
+                        t_out["unmet_penalty"] = unmet_penalty
                 base["tasks"] = t_out
 
         # Business rule overrides — only the keys the user actually set
