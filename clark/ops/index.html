@@ -831,6 +831,26 @@ const TASK_COLORS = {
 };
 function _taskColor(t){ return TASK_COLORS[t] || "#6a7480"; }
 
+// Consistent task ordering for the summary (shipping work first, filler
+// later, idle/off last) so every worker's bar reads the same way.
+const TASK_ORDER = ["pick","pack","restock","management","cycle_count",
+  "receiving","loading","returns_processing","quality_check",
+  "side_project","training","idle","off","absent","unknown"];
+function _taskSortKey(t){ const i = TASK_ORDER.indexOf(t); return i < 0 ? 900 : i; }
+function _fmtDur(h){
+  if (h <= 0) return "0";
+  if (h < 1) return Math.round(h*60) + "m";
+  return (Math.round(h*10)/10) + "h";
+}
+// Toggle the detailed tick-by-tick timeline (hidden by default).
+function toggleSchedDetail(btn){
+  const box = document.getElementById(btn.getAttribute("data-target"));
+  if (!box) return;
+  const show = box.style.display === "none";
+  box.style.display = show ? "" : "none";
+  btn.textContent = show ? "Hide detailed timeline" : "Show detailed timeline";
+}
+
 function renderPlanSchedule(elId, d){
   const workers = d.workers || [];
   const start = d.shift_start, end = d.shift_end;
@@ -852,6 +872,41 @@ function renderPlanSchedule(elId, d){
         border-left:1px dashed #2a2f3a;pointer-events:none"></div>${lbl}`;
     }).join("");
   }
+
+  // ── Summary rows: per-worker task-mix (hours per task) ──────────────
+  // This is the default, readable view. The per-tick timeline overstates
+  // fidelity (the policy samples a task per 10-min tick, so it flips far
+  // more often than a manager would actually reassign anyone), so the
+  // day's task *mix* is the actionable signal.
+  const summaryRows = workers.map(w => {
+    const th = {}; let total = 0, hustleH = 0;
+    (w.blocks||[]).forEach(b => {
+      const dur = b.end - b.start;
+      if (dur > 0){ th[b.task] = (th[b.task]||0) + dur; total += dur; if (b.hustle) hustleH += dur; }
+    });
+    if (total <= 0){
+      return `<tr><td>${esc(w.name)}</td>
+        <td style="padding:6px 10px;color:var(--muted)">no activity</td><td></td></tr>`;
+    }
+    const tasks = Object.keys(th).sort((a,b)=>_taskSortKey(a)-_taskSortKey(b));
+    const bar = tasks.map(t => {
+      const pct = (th[t]/total)*100;
+      return `<div title="${esc(t)}: ${_fmtDur(th[t])} (${Math.round(pct)}%)"
+        style="width:${pct}%;background:${_taskColor(t)};min-width:1px"></div>`;
+    }).join("");
+    const totals = tasks.map(t =>
+      `<span style="white-space:nowrap"><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${_taskColor(t)};margin-right:4px"></span>${esc(t)} ${_fmtDur(th[t])}</span>`
+    ).join(' <span style="color:var(--muted)">·</span> ');
+    const hustlePct = total>0 ? Math.round((hustleH/total)*100) : 0;
+    return `<tr>
+      <td>${esc(w.name)}</td>
+      <td style="padding:6px 10px">
+        <div style="display:flex;height:20px;border-radius:3px;overflow:hidden;background:#10131a">${bar}</div>
+        ${hustlePct>0?`<div style="font-size:10px;color:var(--muted);margin-top:3px">${hustlePct}% hustle</div>`:''}
+      </td>
+      <td style="font-size:11px;line-height:1.7">${totals}</td>
+    </tr>`;
+  }).join("");
 
   const rows = workers.map(w => {
     if (!w.blocks.length) {
@@ -890,6 +945,7 @@ function renderPlanSchedule(elId, d){
 
   // Axis labels go in the first thead row, in the Timeline column.
   // That way they share the EXACT width of the timeline bars.
+  const detailId = elId + "_detail";
   $("#"+elId).innerHTML = `
     <div class="meta">
       Full-day schedule · ${esc(d.facility_id)} · ${esc(d.date)}
@@ -899,25 +955,40 @@ function renderPlanSchedule(elId, d){
       <span class="pill">${d.tick_minutes}m ticks</span>
     </div>
     <div style="margin:8px 0 14px 0">${legend}</div>
+
+    <!-- DEFAULT: per-worker task-mix summary -->
     <table class="t" style="table-layout:fixed">
       <colgroup>
-        <col style="width:90px">
-        <col>
-        <col style="width:260px">
+        <col style="width:90px"><col><col style="width:300px">
       </colgroup>
-      <thead>
-        <tr>
-          <th>Worker</th>
-          <th style="padding:6px 10px">
-            <div style="position:relative;height:18px">${_axisOverlay(true)}</div>
-          </th>
-          <th>Blocks</th>
-        </tr>
-      </thead>
-      <tbody>${rows}</tbody>
+      <thead><tr><th>Worker</th><th style="padding:6px 10px">Task mix (share of the day)</th><th>Hours by task</th></tr></thead>
+      <tbody>${summaryRows}</tbody>
     </table>
-    <div style="margin-top:10px;font-size:11px;color:var(--muted)">
-      Bright-edged blocks = hustle. Dashed verticals are hour markers. Hover any block for the time range + task.
+    <div style="margin-top:10px">
+      <button type="button" class="lnk" data-target="${detailId}" onclick="toggleSchedDetail(this)"
+        style="background:none;border:1px solid var(--border);color:var(--ink-dim);border-radius:4px;padding:4px 10px;cursor:pointer;font-size:12px">
+        Show detailed timeline</button>
+      <span style="font-size:11px;color:var(--muted);margin-left:8px">Per-10-min-tick view. Note: the policy samples per tick, so rapid switches are sampling noise, not real reassignments.</span>
+    </div>
+
+    <!-- TOGGLE: tick-by-tick timeline -->
+    <div id="${detailId}" style="display:none;margin-top:14px">
+      <table class="t" style="table-layout:fixed">
+        <colgroup>
+          <col style="width:90px"><col><col style="width:260px">
+        </colgroup>
+        <thead>
+          <tr>
+            <th>Worker</th>
+            <th style="padding:6px 10px"><div style="position:relative;height:18px">${_axisOverlay(true)}</div></th>
+            <th>Blocks</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+      <div style="margin-top:10px;font-size:11px;color:var(--muted)">
+        Bright-edged blocks = hustle. Dashed verticals are hour markers. Hover any block for the time range + task.
+      </div>
     </div>`;
 }
 
