@@ -277,6 +277,52 @@ def run_day_outcome_samples(config, agent, target_date: date,
     }
 
 
+def _coalesce_blocks(blocks: list[dict], min_h: float) -> list[dict]:
+    """Turn a per-tick task timeline into human-readable blocks WITHOUT
+    misattributing time. Two passes:
+
+      1. Merge adjacent runs of the same (task, hustle) — always correct,
+         they're literally the same contiguous work.
+      2. Smooth genuine one-tick flicker (A → b → A, where b is shorter than
+         min_h and both neighbors are the same task) by collapsing the trio
+         into one A block.
+
+    We deliberately do NOT fold an arbitrary short block into whatever block
+    precedes it. The old behavior ("dur < min_h → extend the prior block")
+    relabeled that time as the prior task, so a real task cap (e.g.
+    cycle_count masked off after its daily-hours limit) followed by the
+    policy thrashing across many one-tick tasks painted the whole stretch as
+    the pre-cap task — making a 0.5h cap render as hours. The schedule must
+    reflect what the worker actually did, even if that's a noisy run of short
+    blocks.
+    """
+    # Pass 1: drop zero-duration, merge adjacent identical (task, hustle).
+    merged: list[dict] = []
+    for b in blocks:
+        if b["end"] - b["start"] <= 0:
+            continue
+        if (merged and merged[-1]["task"] == b["task"]
+                and merged[-1]["hustle"] == b["hustle"]):
+            merged[-1]["end"] = b["end"]
+        else:
+            merged.append(dict(b))
+    # Pass 2: collapse true A-b-A flicker. Repeat until stable.
+    i = 1
+    while i < len(merged) - 1:
+        b = merged[i]
+        same_neighbors = (
+            merged[i - 1]["task"] == merged[i + 1]["task"]
+            and merged[i - 1]["hustle"] == merged[i + 1]["hustle"]
+        )
+        if (b["end"] - b["start"]) < min_h and same_neighbors:
+            merged[i - 1]["end"] = merged[i + 1]["end"]
+            del merged[i:i + 2]
+            i = max(1, i - 1)
+        else:
+            i += 1
+    return merged
+
+
 def run_full_day_schedule(config, agent, target_date: date,
                            volume: int,
                            forced_absent: set | None = None,
@@ -418,29 +464,11 @@ def run_full_day_schedule(config, agent, target_date: date,
             b["start"] = _snap(b["start"])
             b["end"] = _snap(b["end"])
 
-    # Coalesce tiny single-tick blocks. RL policies often flip task
-    # for one tick (10 min) and back — noise from per-tick sampling,
-    # not a real reassignment a manager would act on. Absorb any
-    # block shorter than MIN_BLOCK_MINUTES into the prior block.
-    # Also: drop any block where end <= start (defensive — snap can
-    # collapse a near-zero block to truly zero).
+    # Build human-readable blocks WITHOUT misattributing time.
     MIN_BLOCK_MINUTES = 20  # ≥ 2 ticks at 10-min STEP_DURATION
     min_h = MIN_BLOCK_MINUTES / 60.0
-    cleaned_per_worker: list[list[dict]] = []
-    for blocks in blocks_per_worker:
-        cleaned: list[dict] = []
-        for b in blocks:
-            dur = b["end"] - b["start"]
-            if dur <= 0:
-                continue  # zero-duration block from snap collapse
-            if cleaned and (dur < min_h or (
-                    cleaned[-1]["task"] == b["task"]
-                    and cleaned[-1]["hustle"] == b["hustle"])):
-                # Tiny OR same-as-prior — extend the previous block.
-                cleaned[-1]["end"] = b["end"]
-            else:
-                cleaned.append(dict(b))
-        cleaned_per_worker.append(cleaned)
+    cleaned_per_worker = [_coalesce_blocks(blocks, min_h)
+                          for blocks in blocks_per_worker]
 
     # Snap shift bounds too so the frontend axis labels line up
     # with snapped block edges.
