@@ -1004,6 +1004,40 @@ def cmd_wizard(args: argparse.Namespace):
     # (checkpoint + log files on disk) and can be re-attached via the
     # dashboard pointing at log_dir.
     training_jobs: dict = {}
+    # Parallel registry of the live Popen handles, keyed by job_id. Kept
+    # separate from training_jobs because a Popen isn't JSON-serializable
+    # (training_jobs gets returned in API responses). Used for a reliable,
+    # signal-free liveness check via proc.poll().
+    training_procs: dict = {}
+
+    def _job_alive(job_id: str, pid: int) -> bool:
+        """Is this training subprocess still running?
+
+        IMPORTANT: do NOT use os.kill(pid, 0) on Windows — there, signal 0
+        is CTRL_C_EVENT, so os.kill(pid, 0) *sends a Ctrl-C* to the pid's
+        process group instead of harmlessly probing liveness. That is what
+        used to kill freshly-started trainers on the very first status poll.
+        Prefer the Popen handle (proc.poll()); fall back to a signal-free
+        OS query for jobs spawned by a previous server instance.
+        """
+        proc = training_procs.get(job_id)
+        if proc is not None:
+            return proc.poll() is None
+        if os.name == "nt":
+            try:
+                import subprocess as _sp2
+                out = _sp2.run(
+                    ["tasklist", "/FI", f"PID eq {pid}", "/NH"],
+                    capture_output=True, text=True, timeout=5)
+                return str(pid) in out.stdout
+            except Exception:
+                return False
+        else:
+            try:
+                os.kill(pid, 0)
+                return True
+            except OSError:
+                return False
 
     def _safe_filename(name: str) -> str:
         """Slugify a facility name into a filesystem-safe stem."""
@@ -1338,9 +1372,30 @@ def cmd_wizard(args: argparse.Namespace):
         # 216-byte traceback to stdout.log, and never produces a
         # checkpoint. The wizard reports "training started" because
         # Popen succeeded, but the policy never trains.
+        #
+        # DETACHMENT (the reason early runs died ~0.3s after launch with
+        # "Fine-tuning interrupted"): without these flags the child shares
+        # the wizard's console + process group, so a Ctrl-C / Ctrl-Break /
+        # console-close that hits the wizard is delivered by Windows to the
+        # child too — instant KeyboardInterrupt before the model even loads.
+        # That also made the UI's "training continues even if you close this
+        # window" promise false. Detaching gives the trainer its own process
+        # group and no inherited console, so wizard signals can't reach it.
+        detach_kwargs = {}
+        if os.name == "nt":
+            # DETACHED_PROCESS (0x08): no inherited console.
+            # CREATE_NEW_PROCESS_GROUP (0x200): own group, immune to the
+            # wizard's Ctrl-C/Ctrl-Break. stdout/stderr already go to a file
+            # and stdin is DEVNULL, so the child needs no console of its own.
+            detach_kwargs["creationflags"] = 0x00000008 | 0x00000200
+        else:
+            # POSIX: detach from the controlling terminal / session so a
+            # SIGHUP/SIGINT to the wizard doesn't propagate.
+            detach_kwargs["start_new_session"] = True
         proc = _sp.Popen(cmd, cwd=str(repo_root),
                          stdin=_sp.DEVNULL,
-                         stdout=stdout_log, stderr=_sp.STDOUT)
+                         stdout=stdout_log, stderr=_sp.STDOUT,
+                         **detach_kwargs)
         training_jobs[job_id] = {
             "pid": proc.pid,
             "config_path": yaml_path,
@@ -1349,6 +1404,7 @@ def cmd_wizard(args: argparse.Namespace):
             "episodes": int(episodes),
             "started_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         }
+        training_procs[job_id] = proc
         return {"job_id": job_id, **training_jobs[job_id]}
 
     def _list_sessions() -> list[dict]:
@@ -1399,12 +1455,12 @@ def cmd_wizard(args: argparse.Namespace):
                     self._send(404, "application/json",
                                b'{"error":"unknown job id"}')
                     return
-                # Liveness check: psutil-free, just kill 0 the pid.
-                alive = True
-                try:
-                    os.kill(job["pid"], 0)
-                except (OSError, ProcessLookupError):
-                    alive = False
+                # Liveness check. MUST NOT use os.kill(pid, 0) on Windows:
+                # signal 0 is CTRL_C_EVENT there, so it would send a Ctrl-C
+                # to the trainer's process group (which previously killed
+                # freshly-started runs on the first poll). _job_alive uses
+                # the Popen handle (proc.poll()) instead.
+                alive = _job_alive(job_id, job["pid"])
                 payload = {**job, "alive": alive}
 
                 # Progress: read the trainer's training_metrics.json from the
