@@ -171,8 +171,6 @@ class YearEnv:
             for day, dow in cal.itermonthdays2(self.year, month):
                 if day == 0:
                     continue
-                if dow > 5:
-                    continue  # skip Sunday only
 
                 if dow == 5:
                     # Saturday — only include if work_saturday is enabled
@@ -181,6 +179,27 @@ class YearEnv:
                     sat_vol_lo = int(last_monday_vol_lo * rules.saturday_volume_fraction * 0.8)
                     sat_vol_hi = int(last_monday_vol_hi * rules.saturday_volume_fraction)
                     daily_volume = random.randint(sat_vol_lo, max(sat_vol_lo, sat_vol_hi))
+                    schedule.append({
+                        "year": self.year,
+                        "month": month,
+                        "month_name": month_name,
+                        "day": day,
+                        "day_of_week": dow,
+                        "season": season,
+                        "volume": daily_volume,
+                        "vol_range": vol_range,
+                    })
+                    continue
+
+                if dow == 6:
+                    # Sunday — only include if work_sunday is enabled. Scaled
+                    # from Monday volume by sunday_volume_fraction, mirroring
+                    # the Saturday treatment above.
+                    if not rules.work_sunday:
+                        continue
+                    sun_vol_lo = int(last_monday_vol_lo * rules.sunday_volume_fraction * 0.8)
+                    sun_vol_hi = int(last_monday_vol_hi * rules.sunday_volume_fraction)
+                    daily_volume = random.randint(sun_vol_lo, max(sun_vol_lo, sun_vol_hi))
                     schedule.append({
                         "year": self.year,
                         "month": month,

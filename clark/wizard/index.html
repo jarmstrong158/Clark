@@ -528,8 +528,8 @@
     <div id="weekdayPicker"></div>
 
     <div class="advanced-only" style="margin-top:28px;">
-      <h3 style="font-size: 15px; margin: 0 0 6px 0;">Saturday operations</h3>
-      <p style="color: var(--muted); font-size: 13px; margin: 0 0 8px 0;">If you ship Saturdays, what fraction of Monday's volume do you typically see?</p>
+      <h3 style="font-size: 15px; margin: 0 0 6px 0;">Weekend operations</h3>
+      <p style="color: var(--muted); font-size: 13px; margin: 0 0 8px 0;">If you ship on a weekend day, what fraction of Monday's volume do you typically see that day?</p>
       <label style="display:flex;align-items:center;gap:10px;">
         <input type="checkbox" id="workSaturday" onchange="onWorkSaturdayChange()">
         <span>Work Saturdays</span>
@@ -537,6 +537,14 @@
       <div id="saturdayFracRow" style="display:none;margin-top:8px;" class="input-row">
         <label for="saturdayVolumeFraction">Saturday volume fraction</label>
         <input type="number" id="saturdayVolumeFraction" min="0.1" max="1.0" step="0.05" value="0.4">
+      </div>
+      <label style="display:flex;align-items:center;gap:10px;margin-top:12px;">
+        <input type="checkbox" id="workSunday" onchange="onWorkSundayChange()">
+        <span>Work Sundays</span>
+      </label>
+      <div id="sundayFracRow" style="display:none;margin-top:8px;" class="input-row">
+        <label for="sundayVolumeFraction">Sunday volume fraction</label>
+        <input type="number" id="sundayVolumeFraction" min="0.1" max="1.0" step="0.05" value="0.4">
       </div>
 
       <h3 style="font-size: 15px; margin: 24px 0 6px 0;">Peak-season temp staffing</h3>
@@ -731,7 +739,8 @@ const state = {
   rules: {},            // any of: pack_stations, carts_available, pick_buffer_capacity,
                         //          day_start_hour, eod_hour, order_cutoff_hour,
                         //          lunch_hour, lunch_duration, carrier_pickup_hour,
-                        //          work_saturday, saturday_volume_fraction
+                        //          work_saturday, saturday_volume_fraction,
+                        //          work_sunday, sunday_volume_fraction
   peakStaffing: null,   // null OR {extra_workers, temp_oph_range:[low,high]}
   currentStep: 0,
 };
@@ -1537,6 +1546,18 @@ function onWorkSaturdayChange() {
   }
   persistDraft();
 }
+function onWorkSundayChange() {
+  const on = document.getElementById("workSunday").checked;
+  state.rules.work_sunday = on;
+  document.getElementById("sundayFracRow").style.display = on ? "" : "none";
+  if (on) {
+    const f = parseFloat(document.getElementById("sundayVolumeFraction").value);
+    if (isFinite(f)) state.rules.sunday_volume_fraction = f;
+  } else {
+    delete state.rules.sunday_volume_fraction;
+  }
+  persistDraft();
+}
 
 // ─── Build the combined config ─────────────────────────────────
 function buildConfig() {
@@ -1594,6 +1615,11 @@ function buildConfig() {
   }
   const rulesPayload = advanced && Object.keys(state.rules).length
     ? { ...state.rules } : null;
+  // Sunday volume fraction follows the checkbox + input.
+  if (rulesPayload && rulesPayload.work_sunday) {
+    const sf = parseFloat(document.getElementById("sundayVolumeFraction")?.value);
+    if (isFinite(sf)) rulesPayload.sunday_volume_fraction = sf;
+  }
   // Saturday volume fraction follows the checkbox + input.
   if (rulesPayload && rulesPayload.work_saturday) {
     const sf = parseFloat(document.getElementById("saturdayVolumeFraction")?.value);

@@ -534,9 +534,9 @@ def build_app(agent: Any, facilities_dir: str | Path,
         is_saturday = dow == 5
         is_sunday = dow == 6
         flags = []
-        if is_sunday:
-            flags.append("date is a Sunday; facility schedules only "
-                         "cover Mon-Sat")
+        if is_sunday and not rules.work_sunday:
+            flags.append("date is a Sunday but the facility is "
+                         "configured not to operate Sundays (work_sunday=false)")
         elif is_saturday and not rules.work_saturday:
             flags.append("date is a Saturday but the facility is "
                          "configured for Mon-Fri only (work_saturday=false)")
@@ -565,7 +565,8 @@ def build_app(agent: Any, facilities_dir: str | Path,
             "weekday": ["monday","tuesday","wednesday","thursday",
                         "friday","saturday","sunday"][dow],
             "month": month_name,
-            "is_workday": not (is_sunday or (is_saturday and not rules.work_saturday)),
+            "is_workday": not ((is_sunday and not rules.work_sunday)
+                               or (is_saturday and not rules.work_saturday)),
             "is_peak_month": is_peak,
             "is_saturday": is_saturday,
             "is_sunday": is_sunday,

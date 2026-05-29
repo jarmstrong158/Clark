@@ -332,8 +332,11 @@ def cmd_plan(args: argparse.Namespace):
     for day_offset in range(days_ahead):
         target_date = start_date + timedelta(days=day_offset)
 
-        # Skip weekends
-        if target_date.weekday() >= 5:
+        # Skip weekend days the facility doesn't operate.
+        _wd = target_date.weekday()
+        if _wd == 5 and not config.rules.work_saturday:
+            continue
+        if _wd == 6 and not config.rules.work_sunday:
             continue
 
         volume, vol_label = _sample_volume_for_date(config, target_date)

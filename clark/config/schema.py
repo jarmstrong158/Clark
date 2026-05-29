@@ -232,6 +232,8 @@ class BusinessRules:
     # Weekend operations
     work_saturday: bool = False
     saturday_volume_fraction: float = 0.4   # fraction of Monday's volume applied to Saturday
+    work_sunday: bool = False
+    sunday_volume_fraction: float = 0.4     # fraction of Monday's volume applied to Sunday
 
     # Late order exceptions (post-cutoff orders that still must ship)
     late_order_exception_rate: float = 0.0  # 0.05 = 5% of post-cutoff orders still count
@@ -662,6 +664,8 @@ class FacilityConfig:
             # Weekend operations
             work_saturday=bool(d.get("work_saturday", False)),
             saturday_volume_fraction=float(d.get("saturday_volume_fraction", 0.4)),
+            work_sunday=bool(d.get("work_sunday", False)),
+            sunday_volume_fraction=float(d.get("sunday_volume_fraction", 0.4)),
             # Late order exceptions
             late_order_exception_rate=float(d.get("late_order_exception_rate", 0.0)),
             # Inbound freight timing
@@ -896,6 +900,14 @@ class FacilityConfig:
                 errors.append(
                     f"saturday_volume_fraction ({rules.saturday_volume_fraction}) must be between "
                     "0.1 and 1.0 when work_saturday is True."
+                )
+
+        # Sunday operations validation
+        if rules.work_sunday:
+            if not (0.1 <= rules.sunday_volume_fraction <= 1.0):
+                errors.append(
+                    f"sunday_volume_fraction ({rules.sunday_volume_fraction}) must be between "
+                    "0.1 and 1.0 when work_sunday is True."
                 )
 
         return errors, warnings
