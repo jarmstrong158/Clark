@@ -270,6 +270,16 @@
   }
   .task-cap-row input[type="number"] { width: 60px; padding: 3px 6px; }
   .task-cap-row select { padding: 3px 6px; font-size: 11px; }
+  .progress-track {
+    width: 100%; height: 14px; background: var(--panel-2);
+    border: 1px solid var(--border); border-radius: 7px; overflow: hidden;
+    margin-top: 8px;
+  }
+  .progress-fill {
+    height: 100%; width: 0%; background: var(--accent, #4a9eff);
+    transition: width 0.4s ease;
+  }
+  .progress-fill.done { background: var(--success, #48bb78); }
   .custom-task-row {
     display: grid;
     grid-template-columns: 1fr 1.4fr 1fr 1fr 0.7fr auto;
@@ -1726,6 +1736,8 @@ function renderValidation(result) {
 
 // ─── YAML emit + training kickoff ──────────────────────────────
 let _generatedYamlPath = null;
+let _trainCheckpointPath = null;
+let _trainDoneNotified = false;
 
 async function generateYaml() {
   const cfg = buildConfig();
@@ -1788,6 +1800,13 @@ async function startTraining() {
     `wizard once it starts. Continue?`
   )) return;
 
+  // Ask for desktop-notification permission up front so we can alert the
+  // user when the run finishes (training takes hours; the tab is usually
+  // backgrounded by then).
+  if ("Notification" in window && Notification.permission === "default") {
+    try { Notification.requestPermission(); } catch (e) { /* ignore */ }
+  }
+
   const statusDiv = document.getElementById("trainStatus");
   statusDiv.innerHTML = '<div class="validation-item warning">Starting fine-tune subprocess...</div>';
   document.getElementById("trainBtn").disabled = true;
@@ -1818,13 +1837,55 @@ async function startTraining() {
         Manager (or run <code>taskkill /PID ${res.pid} /F</code> in a terminal).
         Closing the wizard does NOT stop training.
       </div>
+      <div id="trainProgress" style="margin-top: 12px;">
+        <div style="display:flex;justify-content:space-between;font-size:13px;color:var(--muted);">
+          <span id="progressLabel">Waiting for the trainer to report progress…</span>
+          <span id="progressEta"></span>
+        </div>
+        <div class="progress-track"><div class="progress-fill" id="progressFill"></div></div>
+      </div>
       <div id="livenessIndicator" style="margin-top: 8px; font-size: 13px; color: var(--muted);">PID ${res.pid}: checking...</div>
     `;
+    _trainCheckpointPath = res.checkpoint_path;
+    _trainDoneNotified = false;
     pollTrainingStatus(res.job_id);
   } catch (e) {
     statusDiv.innerHTML = `<div class="validation-item error">Request failed: ${escapeHtml(String(e))}</div>`;
     document.getElementById("trainBtn").disabled = false;
   }
+}
+
+function _fmtEta(sec) {
+  if (sec == null || !isFinite(sec)) return "";
+  if (sec < 90) return `~${Math.round(sec)}s left`;
+  if (sec < 5400) return `~${Math.round(sec / 60)} min left`;
+  return `~${(sec / 3600).toFixed(1)} h left`;
+}
+
+function _notifyDone(complete, detail) {
+  if (_trainDoneNotified) return;
+  _trainDoneNotified = true;
+  const title = complete ? "Clark training complete" : "Clark training stopped";
+  document.title = (complete ? "✓ " : "⚠ ") + title;
+  if ("Notification" in window && Notification.permission === "granted") {
+    try { new Notification(title, { body: detail }); } catch (e) { /* ignore */ }
+  }
+}
+
+function _updateProgress(s) {
+  const fill = document.getElementById("progressFill");
+  const label = document.getElementById("progressLabel");
+  const eta = document.getElementById("progressEta");
+  if (!fill || !label) return;
+  const cur = s.current_episode || 0;
+  const tgt = s.n_episodes_target || 0;
+  const pct = tgt > 0 ? Math.min(100, Math.round((cur / tgt) * 100)) : 0;
+  fill.style.width = pct + "%";
+  if (tgt > 0) {
+    label.textContent = `Episode ${cur} / ${tgt} (${pct}%)`;
+    if (eta) eta.textContent = s.alive ? _fmtEta(s.eta_s) : "";
+  }
+  return { cur, tgt, pct };
 }
 
 async function pollTrainingStatus(jobId) {
@@ -1833,13 +1894,26 @@ async function pollTrainingStatus(jobId) {
   try {
     const r = await fetch(`/train/${jobId}/status`);
     const s = await r.json();
+    const p = _updateProgress(s) || {};
     if (s.alive) {
       indicator.style.color = "var(--success)";
       indicator.textContent = `PID ${s.pid}: running (started ${s.started_at})`;
       setTimeout(() => pollTrainingStatus(jobId), 5000);
     } else {
-      indicator.style.color = "var(--muted)";
-      indicator.textContent = `PID ${s.pid}: stopped. Check ${s.log_dir}/stdout.log for outcome.`;
+      // Subprocess exited. Complete if it reached its episode target;
+      // otherwise it stopped early (finished, crashed, or was killed).
+      const complete = p.tgt > 0 && p.cur >= p.tgt;
+      const fill = document.getElementById("progressFill");
+      if (complete && fill) { fill.classList.add("done"); fill.style.width = "100%"; }
+      const ckpt = _trainCheckpointPath ? ` Checkpoint: ${escapeHtml(_trainCheckpointPath)}` : "";
+      indicator.style.color = complete ? "var(--success)" : "var(--muted)";
+      indicator.innerHTML = complete
+        ? `✓ Training complete — ${p.cur} episodes done.${ckpt}`
+        : `PID ${s.pid}: stopped at episode ${p.cur}${p.tgt ? " / " + p.tgt : ""}. `
+          + `Check ${escapeHtml(s.log_dir)}/stdout.log for the outcome.`;
+      _notifyDone(complete, complete
+        ? `${p.cur} episodes finished. Checkpoint saved.`
+        : `Stopped at episode ${p.cur}. See stdout.log.`);
     }
   } catch (e) {
     // The most common cause of "Failed to fetch" here isn't a

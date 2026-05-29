@@ -270,6 +270,7 @@ def cmd_finetune(args: argparse.Namespace):
             lr=args.lr,
             freeze_encoder=args.freeze_encoder,
             save_interval=eff_save_interval,
+            log_dir=args.log_dir,
         )
     except KeyboardInterrupt:
         print("\nFine-tuning interrupted.")
@@ -773,6 +774,11 @@ def build_parser() -> argparse.ArgumentParser:
                            "pick based on --episodes (max(1, min(10, "
                            "episodes // 3))), so small runs save more "
                            "frequently. Pass an explicit int to override.")
+    p_ft.add_argument("--log-dir", default=None,
+                      help="Where to write training_metrics.json + episode "
+                           "logs. Default: a 'logs_<facility>' dir next to "
+                           "--output. The wizard points this at the job dir so "
+                           "progress polling reads from one known location.")
 
     # plan
     p_plan = sub.add_parser("plan", help="Generate a shift plan using a trained model.")
@@ -1314,6 +1320,10 @@ def cmd_wizard(args: argparse.Namespace):
             "--base", str(base_model),
             "--output", str(ckpt_path),
             "--episodes", str(int(episodes)),
+            # Write episode logs + training_metrics.json into the job dir so
+            # the wizard's progress poll reads from one known location
+            # (instead of guessing logs_<facility-name> next to the output).
+            "--log-dir", str(job_log_dir),
         ]
         # stdin=DEVNULL is critical on Windows: the wizard subprocess
         # (this process) was launched from a bat → cmd → python chain
@@ -1336,6 +1346,7 @@ def cmd_wizard(args: argparse.Namespace):
             "config_path": yaml_path,
             "log_dir": str(job_log_dir),
             "checkpoint_path": str(ckpt_path),
+            "episodes": int(episodes),
             "started_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         }
         return {"job_id": job_id, **training_jobs[job_id]}
@@ -1395,6 +1406,35 @@ def cmd_wizard(args: argparse.Namespace):
                 except (OSError, ProcessLookupError):
                     alive = False
                 payload = {**job, "alive": alive}
+
+                # Progress: read the trainer's training_metrics.json from the
+                # job log dir (we point finetune --log-dir there). The trainer
+                # writes status.current_episode / n_episodes_target / elapsed_s
+                # on its heartbeat; before the first write we fall back to the
+                # requested episode count so the bar still has a target.
+                cur = 0
+                target = job.get("episodes")
+                elapsed = 0.0
+                try:
+                    mp = Path(job["log_dir"]) / "training_metrics.json"
+                    if mp.exists():
+                        data = _json.loads(mp.read_text(encoding="utf-8"))
+                        st = data.get("status") or {}
+                        cur = int(st.get("current_episode", 0))
+                        target = int(st.get("n_episodes_target", 0)) or target
+                        elapsed = float(st.get("elapsed_s", 0.0))
+                except Exception:
+                    pass
+                eta_s = None
+                if alive and cur > 0 and target and elapsed > 0:
+                    eta_s = max(0, int((elapsed / cur) * (target - cur)))
+                payload["current_episode"] = cur
+                payload["n_episodes_target"] = target
+                payload["elapsed_s"] = elapsed
+                payload["eta_s"] = eta_s
+                # done = the subprocess has exited (cleanly or not). The
+                # client decides "complete" vs "stopped early" from cur/target.
+                payload["done"] = not alive
                 self._send(200, "application/json",
                            _json.dumps(payload).encode("utf-8"))
             else:
