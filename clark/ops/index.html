@@ -700,14 +700,19 @@ function renderPlanOutcome(elId, d){
         <span style="color:var(--muted);font-size:12px">${esc(r.example)}</span>
       </div>`;
     }).join("");
+    const fId = elId + "_fdetail";
+    const fLabel = `why the ${d.f_count} F day${d.f_count>1?'s':''} failed`;
     fBreakdown = `
       <div style="margin-top:14px">
-        <div style="font-size:13px;color:var(--ink-dim);margin-bottom:4px">
-          Why the F days failed <span style="color:var(--muted)">(${d.f_count} of ${d.n_samples} runs)</span>
-        </div>
-        <div style="background:#160f12;border:1px solid #3a2630;border-radius:4px;padding:4px 14px">${rows}</div>
-        <div style="margin-top:6px;font-size:11px;color:var(--muted)">
-          Each cause is counted once per failing run; one run can trip several. The detail shows the worst case seen across the F runs.
+        <button type="button" data-target="${fId}"
+          data-show="Show ${fLabel}" data-hide="Hide ${fLabel}" onclick="toggleBox(this)"
+          style="background:none;border:1px solid #3a2630;color:#f08a8a;border-radius:4px;padding:4px 10px;cursor:pointer;font-size:12px">
+          Show ${fLabel}</button>
+        <div id="${fId}" style="display:none;margin-top:10px">
+          <div style="background:#160f12;border:1px solid #3a2630;border-radius:4px;padding:4px 14px">${rows}</div>
+          <div style="margin-top:6px;font-size:11px;color:var(--muted)">
+            Each cause is counted once per failing run; one run can trip several. The detail shows the worst case seen across the F runs.
+          </div>
         </div>
       </div>`;
   }
@@ -878,13 +883,17 @@ function _fmtDur(h){
   if (h < 1) return Math.round(h*60) + "m";
   return (Math.round(h*10)/10) + "h";
 }
-// Toggle the detailed tick-by-tick timeline (hidden by default).
-function toggleSchedDetail(btn){
+// Generic show/hide for a collapsible panel. The button carries
+// data-target (id of the box), data-show + data-hide (button labels).
+// Used by both the detailed timeline and the F-day explanation so they
+// collapse identically.
+function toggleBox(btn){
   const box = document.getElementById(btn.getAttribute("data-target"));
   if (!box) return;
   const show = box.style.display === "none";
   box.style.display = show ? "" : "none";
-  btn.textContent = show ? "Hide detailed timeline" : "Show detailed timeline";
+  btn.textContent = show ? (btn.getAttribute("data-hide") || "Hide")
+                         : (btn.getAttribute("data-show") || "Show");
 }
 
 function renderPlanSchedule(elId, d){
@@ -1001,7 +1010,8 @@ function renderPlanSchedule(elId, d){
       <tbody>${summaryRows}</tbody>
     </table>
     <div style="margin-top:10px">
-      <button type="button" class="lnk" data-target="${detailId}" onclick="toggleSchedDetail(this)"
+      <button type="button" class="lnk" data-target="${detailId}"
+        data-show="Show detailed timeline" data-hide="Hide detailed timeline" onclick="toggleBox(this)"
         style="background:none;border:1px solid var(--border);color:var(--ink-dim);border-radius:4px;padding:4px 10px;cursor:pointer;font-size:12px">
         Show detailed timeline</button>
       <span style="font-size:11px;color:var(--muted);margin-left:8px">Per-10-min-tick view. Note: the policy samples per tick, so rapid switches are sampling noise, not real reassignments.</span>
