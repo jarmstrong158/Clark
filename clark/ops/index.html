@@ -676,6 +676,42 @@ function renderPlanOutcome(elId, d){
       </div>`;
   }
 
+  // F-DAY BREAKDOWN: when any run fails, show exactly why so the operator
+  // can see what the model is doing (and trust or interrogate it) instead
+  // of staring at an unexplained "F 25%".
+  const F_LABEL = {
+    incomplete_orders: "Didn't ship all orders",
+    mgmt_minimum: "Management below daily minimum",
+    task_fail: "Required task missed its target (auto-fail)",
+    restock: "Restock incomplete",
+    mgmt_short: "Management short of target",
+    overtime: "Overtime used (non-peak)",
+    mgmt_backlog: "Management backlog over threshold",
+    task_unmet: "Task below daily target",
+    sim_error: "Simulation didn't finalize",
+  };
+  let fBreakdown = '';
+  if ((d.f_count || 0) > 0 && (d.f_reasons || []).length){
+    const rows = d.f_reasons.map(r => {
+      const label = F_LABEL[r.code] || r.code;
+      return `<div style="display:flex;gap:10px;align-items:baseline;padding:5px 0;border-top:1px solid #2a1b22">
+        <span style="min-width:210px;font-weight:600;color:#f08a8a">${esc(label)}</span>
+        <span style="min-width:96px;color:var(--ink-dim);font-family:ui-monospace,monospace">${r.count} of ${d.f_count} F${d.f_count>1?' runs':' run'}</span>
+        <span style="color:var(--muted);font-size:12px">${esc(r.example)}</span>
+      </div>`;
+    }).join("");
+    fBreakdown = `
+      <div style="margin-top:14px">
+        <div style="font-size:13px;color:var(--ink-dim);margin-bottom:4px">
+          Why the F days failed <span style="color:var(--muted)">(${d.f_count} of ${d.n_samples} runs)</span>
+        </div>
+        <div style="background:#160f12;border:1px solid #3a2630;border-radius:4px;padding:4px 14px">${rows}</div>
+        <div style="margin-top:6px;font-size:11px;color:var(--muted)">
+          Each cause is counted once per failing run; one run can trip several. The detail shows the worst case seen across the F runs.
+        </div>
+      </div>`;
+  }
+
   $("#"+elId).innerHTML = `
     <div class="meta">
       Day-outcome projection · ${esc(d.facility_id)} · ${esc(d.date)}
@@ -705,7 +741,7 @@ function renderPlanOutcome(elId, d){
       <b style="color:${color}">${esc(headline)}</b>
       <span style="color:var(--muted);margin-left:8px">— based on ${d.n_samples} stochastic re-runs of this exact date + volume</span>
     </div>
-    ${fineTuneHint}`;
+    ${fBreakdown}${fineTuneHint}`;
 }
 
 // Find recommended staffing: loop +0, +1, +2, ... using the

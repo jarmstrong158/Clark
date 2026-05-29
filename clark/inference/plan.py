@@ -245,8 +245,11 @@ def run_day_outcome_samples(config, agent, target_date: date,
             shipped = int(ft.get("orders_shipped", 0))
             total = int(ft.get("orders_total", 0) or 1)
             comp = shipped / total
+            reasons = ft.get("grade_reasons", [])
         else:
             grade, shipped, total, comp = "F", 0, 0, 0.0
+            reasons = [{"code": "sim_error",
+                        "detail": "simulation did not finalize a day"}]
 
         grades_counter[grade] = grades_counter.get(grade, 0) + 1
         completions.append(comp)
@@ -254,7 +257,8 @@ def run_day_outcome_samples(config, agent, target_date: date,
             full_comps += 1
         sample_rows.append({"seed": seed, "grade": grade,
                             "shipped": shipped, "total": total,
-                            "completion": round(comp, 4)})
+                            "completion": round(comp, 4),
+                            "reasons": reasons})
 
     n = float(n_samples)
     grade_pct = {g: round(c / n, 4) for g, c in grades_counter.items()}
@@ -265,6 +269,29 @@ def run_day_outcome_samples(config, agent, target_date: date,
                           int(round(p / 100.0 * (len(sorted_c) - 1)))))
         return round(sorted_c[idx], 4)
 
+    # Aggregate WHY the F runs failed so the UI can break them down and the
+    # operator can trust (or interrogate) the model. Count each cause once
+    # per failing run; keep an example detail + worst completion per cause.
+    from collections import Counter
+    f_rows = [s for s in sample_rows if s["grade"] == "F"]
+    f_codes = Counter()
+    f_detail, f_worst_comp = {}, {}
+    for s in f_rows:
+        for code in {r["code"] for r in s["reasons"]}:
+            f_codes[code] += 1
+        for r in s["reasons"]:
+            f_detail.setdefault(r["code"], r["detail"])
+            f_worst_comp[r["code"]] = min(
+                f_worst_comp.get(r["code"], 1.0), s["completion"])
+    f_count = len(f_rows)
+    f_reasons = [{
+        "code": code,
+        "count": cnt,
+        "runs_pct": round(cnt / max(1, f_count), 4),
+        "example": f_detail.get(code, ""),
+        "worst_completion": round(f_worst_comp.get(code, 0.0), 4),
+    } for code, cnt in f_codes.most_common()]
+
     return {
         "n_samples": n_samples,
         "grades": grades_counter,
@@ -273,6 +300,8 @@ def run_day_outcome_samples(config, agent, target_date: date,
         "completion_rate_p10": _pct(10),
         "completion_rate_p90": _pct(90),
         "full_completion_pct": round(full_comps / n, 4),
+        "f_count": f_count,
+        "f_reasons": f_reasons,
         "samples": sample_rows,
     }
 

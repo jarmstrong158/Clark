@@ -53,6 +53,46 @@ def _clean_A_day(env, cfg) -> None:
         w.task_hours_today["side_project"] = 0.0
 
 
+def _reason_codes(env, cfg):
+    ft = env.get_episode_summary(management_backlog=0.0)["footer"]
+    return ft["grade"], {r["code"] for r in ft["grade_reasons"]}
+
+
+def test_grade_reasons_empty_on_clean_A():
+    cfg = _load()
+    cfg.tasks.daily_hours = {"side_project": 2.0}
+    cfg.tasks.unmet_penalty = {"side_project": "none"}
+    env = FacilityEnv(cfg); env.reset(force_month=12, force_dow=4, force_volume=20)
+    _clean_A_day(env, cfg)
+    env.episode.workers[0].task_hours_today["side_project"] = 2.5  # cap met
+    grade, codes = _reason_codes(env, cfg)
+    assert grade == "A"
+    assert codes == set(), f"a clean A day should have no grade_reasons, got {codes}"
+
+
+def test_grade_reasons_incomplete_orders():
+    cfg = _load()
+    env = FacilityEnv(cfg); env.reset(force_month=12, force_dow=4, force_volume=20)
+    _clean_A_day(env, cfg)
+    # Leave 5 orders unshipped -> incomplete-orders hard fail.
+    env.orders_completed = env.episode.total_orders - 5
+    env.orders_in_queue = 5
+    grade, codes = _reason_codes(env, cfg)
+    assert grade == "F"
+    assert "incomplete_orders" in codes
+
+
+def test_grade_reasons_task_fail():
+    cfg = _load()
+    cfg.tasks.daily_hours = {"side_project": 2.0}
+    cfg.tasks.unmet_penalty = {"side_project": "fail"}
+    env = FacilityEnv(cfg); env.reset(force_month=12, force_dow=4, force_volume=20)
+    _clean_A_day(env, cfg)  # side_project left at 0h -> unmet
+    grade, codes = _reason_codes(env, cfg)
+    assert grade == "F"
+    assert "task_fail" in codes
+
+
 def test_task_capped_off_when_hours_met():
     cfg = _load()
     cfg.tasks.daily_hours = {"side_project": 2.0}

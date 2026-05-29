@@ -1347,6 +1347,8 @@ class FacilityEnv:
         _tasks_cfg = self.facility_config.tasks
         task_unmet_demerits = 0
         task_force_fail = False
+        _fail_tasks = []        # [(task, done, target)] -> forced F
+        _demerit_tasks = []     # [(task, letters, done, target)]
         for _t_id, _target in _tasks_cfg.daily_hours.items():
             _sev = _tasks_cfg.unmet_penalty.get(_t_id, "none")
             if _sev == "none" or _t_id == "management":
@@ -1355,10 +1357,43 @@ class FacilityEnv:
             if _done + 1e-9 < _target:
                 if _sev == "fail":
                     task_force_fail = True
+                    _fail_tasks.append((_t_id, _done, _target))
                 elif _sev == "two_letters":
                     task_unmet_demerits += 2
+                    _demerit_tasks.append((_t_id, 2, _done, _target))
                 elif _sev == "letter":
                     task_unmet_demerits += 1
+                    _demerit_tasks.append((_t_id, 1, _done, _target))
+
+        # Structured reasons so the UI can explain WHY a day got its grade
+        # (especially F days). Each entry: {code, detail}. We record every
+        # condition that is actually true, hard-fail causes first.
+        _pct = round((shipped / max(1, total)) * 100, 1)
+        grade_reasons = []
+        if not all_orders:
+            grade_reasons.append({"code": "incomplete_orders",
+                "detail": f"Shipped {shipped}/{total} orders ({_pct}%) - day not finished"})
+        if not mgmt_minimum:
+            grade_reasons.append({"code": "mgmt_minimum",
+                "detail": f"Management {total_mgmt_grade:.1f}h below the {min_hours:.1f}h daily minimum"})
+        for _t, _dn, _tg in _fail_tasks:
+            grade_reasons.append({"code": "task_fail",
+                "detail": f"{_t} {_dn:.1f}h below its {_tg:.1f}h target (auto-fail)"})
+        if not all_restock:
+            grade_reasons.append({"code": "restock",
+                "detail": f"Restock {round(restock_pct_raw*100)}% complete (< 95% required)"})
+        if not mgmt_full:
+            grade_reasons.append({"code": "mgmt_short",
+                "detail": f"Management {total_mgmt_grade:.1f}h short of the {required:.1f}h target"})
+        if not no_ot and not in_peak_season:
+            grade_reasons.append({"code": "overtime",
+                "detail": f"Overtime used ({self.ot_hours:.1f}h) outside peak season"})
+        if management_backlog > backlog_threshold:
+            grade_reasons.append({"code": "mgmt_backlog",
+                "detail": f"Management backlog {management_backlog:.1f} over the {backlog_threshold:.1f} weekly threshold"})
+        for _t, _ltr, _dn, _tg in _demerit_tasks:
+            grade_reasons.append({"code": "task_unmet",
+                "detail": f"{_t} {_dn:.1f}h below its {_tg:.1f}h target (-{_ltr} letter{'s' if _ltr > 1 else ''})"})
 
         if not all_orders or not mgmt_minimum or task_force_fail:
             grade = "F"
@@ -1406,6 +1441,9 @@ class FacilityEnv:
                 "deliberate_complete": self.deliberate_complete,
                 "filler_complete": self.filler_complete,
                 "grade": grade,
+                # Why this grade — structured causes for the UI to explain
+                # F (and B/C/D) days. Empty on a clean A.
+                "grade_reasons": grade_reasons,
                 # Per-worker per-task hours — diagnostic so we can spot
                 # patterns like "model assigned everyone to pack but no
                 # picked orders existed" or "Worker_3 was idle for 6h
