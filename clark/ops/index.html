@@ -924,11 +924,23 @@ function renderPlanSchedule(elId, d){
   // more often than a manager would actually reassign anyone), so the
   // day's task *mix* is the actionable signal.
   const summaryRows = workers.map(w => {
-    const th = {}; let total = 0, hustleH = 0;
-    (w.blocks||[]).forEach(b => {
-      const dur = b.end - b.start;
-      if (dur > 0){ th[b.task] = (th[b.task]||0) + dur; total += dur; if (b.hustle) hustleH += dur; }
-    });
+    // Prefer the env's ground-truth executed hours (task_hours); fall back
+    // to summing blocks for older payloads. Blocks can mis-attribute time
+    // when the policy thrashes (coalescing artifacts), so task_hours is the
+    // source of truth for the mix. Hustle% is still derived from blocks —
+    // it's a secondary annotation and not tracked in task_hours.
+    let th = {}, total = 0;
+    if (w.task_hours && Object.keys(w.task_hours).length){
+      th = {...w.task_hours};
+      total = Object.values(th).reduce((s,v)=>s+(v||0), 0);
+    } else {
+      (w.blocks||[]).forEach(b => {
+        const dur = b.end - b.start;
+        if (dur > 0){ th[b.task] = (th[b.task]||0) + dur; total += dur; }
+      });
+    }
+    let hustleH = 0, blockTot = 0;
+    (w.blocks||[]).forEach(b => { const dur=b.end-b.start; if(dur>0){ blockTot+=dur; if(b.hustle) hustleH+=dur; } });
     if (total <= 0){
       return `<tr><td>${esc(w.name)}</td>
         <td style="padding:6px 10px;color:var(--muted)">no activity</td><td></td></tr>`;
@@ -942,7 +954,7 @@ function renderPlanSchedule(elId, d){
     const totals = tasks.map(t =>
       `<span style="white-space:nowrap"><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${_taskColor(t)};margin-right:4px"></span>${esc(t)} ${_fmtDur(th[t])}</span>`
     ).join(' <span style="color:var(--muted)">·</span> ');
-    const hustlePct = total>0 ? Math.round((hustleH/total)*100) : 0;
+    const hustlePct = blockTot>0 ? Math.round((hustleH/blockTot)*100) : 0;
     return `<tr>
       <td>${esc(w.name)}</td>
       <td style="padding:6px 10px">

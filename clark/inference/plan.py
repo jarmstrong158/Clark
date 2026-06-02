@@ -504,13 +504,25 @@ def run_full_day_schedule(config, agent, target_date: date,
     shift_start = _snap(shift_start)
     shift_end = _snap(shift_end)
 
+    # Ground-truth per-worker task hours straight from the env's finalized
+    # day summary (footer.worker_time = {name: {task: hours}}). This is the
+    # actual executed allocation the simulator tallied per tick — unlike the
+    # coalesced `blocks` (which can over- or under-attribute time when the
+    # policy thrashes), it always matches what the worker really did, caps
+    # included. The summary view uses this; the timeline still uses blocks.
+    worker_time = {}
+    if env.daily_summaries:
+        worker_time = (env.daily_summaries[-1].get("footer", {})
+                       .get("worker_time", {}) or {})
+
     return {
         "shift_start": shift_start,
         "shift_end": shift_end,
         "tick_minutes": int(round(STEP_DURATION * 60)),
         "workers": [
             {"name": config.workers[i].name,
-             "blocks": cleaned_per_worker[i]}
+             "blocks": cleaned_per_worker[i],
+             "task_hours": worker_time.get(config.workers[i].name, {})}
             for i in range(n)
         ],
     }
