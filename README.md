@@ -71,21 +71,23 @@ Five tabs cover the common operator questions: Plan, Compare, Calendar check, Mo
 
 Pick a facility and date. Optionally mark workers absent or override volume. Three buttons:
 
-- **Schedule** runs the full day's simulation and renders a per-worker timeline (every 10-minute tick).
-- **Project outcome (×20)** runs the same day 20 times with different seeds and aggregates the grade distribution + completion rate.
+- **Schedule** runs the full day's simulation and shows a per-worker **task-mix summary** (hours per task), with the per-10-minute timeline available behind a toggle.
+- **Project outcome (×20)** runs the same day 20 times with different seeds and aggregates the grade distribution + completion rate, plus a per-cause breakdown of any F days.
 - **Find recommended staffing** loops +0, +1, +2... extra workers until A+B hits 80%, then reports the answer.
 
 ### Full-day schedule
 
 ![Full-day schedule view](docs/img/dash_schedule.png)
 
-Per-worker timeline showing exactly when Clark switches each worker between tasks. Bars are colored by task (pick / pack / restock / management / etc.). Brighter outlines mean hustle. The text column on the right lists each block as `start-end task (hustle)`. Useful when a manager wants to know "when does Lead switch off pack?" not just "what does Lead start the shift doing?".
+Defaults to a per-worker **task-mix summary**: one stacked bar showing each worker's share of the day, plus hours-by-task totals (e.g. `pick 3.1h · pack 2.4h · management 1.2h · cycle_count 0.5h`). The hours come straight from the simulator's per-tick tally (ground truth), so a task with a daily-hours cap shows its real capped duration, not a rendering artifact.
+
+A **Show detailed timeline** toggle reveals the per-10-minute, per-worker timeline (colored by task, bright outline = hustle). It's opt-in because the policy samples a task per tick at `tau ≈ 1.0`, so the tick-level switching is sampling noise — the task *mix* is the actionable signal, not which task at 11:20.
 
 ### Outcome projection + recommended staffing
 
 ![Outcome and recommended staffing](docs/img/dash_outcome_and_staffing.png)
 
-Top card: 20-sample Monte Carlo on the day's actual scenario (date + volume override + absences). Grade distribution stacked bar plus completion rate stats (mean, p10, p90, fraction of runs that ship 100%). One-line headline interprets the result ("Strong, A+B 85%" / "Risky, F 30%" / etc.).
+Top card: 20-sample Monte Carlo on the day's actual scenario (date + volume override + absences). Grade distribution stacked bar plus completion rate stats (mean, p10, p90, fraction of runs that ship 100%). One-line headline interprets the result ("Strong, A+B 85%" / "Risky, F 30%" / etc.). When any run grades F, a toggleable **"why the F days failed"** panel breaks down the causes (incomplete orders with the shipped %, management below minimum, restock, non-peak OT, management backlog, or an unmet task cap), counted once per failing run — so an F-rate is legible as "narrow 99% misses" vs "the model fell over" instead of an unexplained number.
 
 Bottom card: "Find recommended staffing" walks the roster up from current (+0) until A+B hits 80%. Each row in the trajectory table shows what the grade distribution looks like at that extra-worker count. The first row that hits the target is highlighted. Tells you in one number how many people you'd need to hire (or borrow) to reliably ship the scenario you're asking about.
 
@@ -146,6 +148,13 @@ filler tolerance, backlog tolerance). It validates as you go (catching
 broken combinations like OT-cost dominating incomplete-cost), generates
 the YAML, and can launch the fine-tune subprocess. Sessions save and
 resume.
+
+Advanced mode also exposes the per-task daily-hours caps + unmet penalty
+and weekend (Saturday/Sunday) operations described under [Configuring a
+facility](#configuring-a-facility). When you launch a fine-tune from the
+wizard it runs as a detached background process (it survives closing the
+wizard) and the page shows a live **progress bar** (episode X / Y + ETA),
+firing a desktop notification when the run completes.
 
 ### Scaffold and validate a facility config (advanced / manual)
 
@@ -278,6 +287,11 @@ the live API.
 ## Configuring a facility
 
 A facility is a YAML file with: `facility` (name, timezone), `workers` (roster, with name / role / OPH / shifts / eligibility, optional debuffs + per-task OPH overrides), `tasks` (enabled standard set + custom), `volume` (seasonal range + weekly curve), `business_rules` (OT, breaks, shift timing, carrier deadlines, equipment caps), optional `order_complexity` and `rewards` overrides.
+
+Two facility controls worth calling out:
+
+- **Per-task daily-hours caps.** `tasks.daily_hours` maps a task to a target number of worker-hours/day. Once the total hours spent on that task (summed across workers) reach the target, the action mask removes the task for the rest of the day, so no further labor is wasted on it. `tasks.unmet_penalty` sets what happens if the target *isn't* met by end of day — `none` (cap only), `letter` (−1 grade letter), `two_letters` (−2), or `fail` (force F). The cap is an env-side mask, so it holds on any checkpoint; a cap-aware fine-tune additionally teaches the policy not to fight it. (Management is not driven from here — it keeps `business_rules.management_daily_hours_required`.)
+- **Weekend operations.** `business_rules.work_saturday` / `work_sunday` enable each weekend day, with `saturday_volume_fraction` / `sunday_volume_fraction` scaling that day's volume off the Monday baseline. Days you don't enable are skipped in the year simulation and flagged as non-workdays by `clark serve`'s calendar check.
 
 See [`clark/data/configs/example_small.yaml`](clark/data/configs/example_small.yaml) for a fully-annotated reference, or run **Run Clark Wizard.bat** (Windows) / `clark wizard` to build one without touching YAML.
 

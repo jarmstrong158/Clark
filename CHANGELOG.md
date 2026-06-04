@@ -62,6 +62,20 @@ Major shipped items. For day-to-day commit history use `git log`.
 - **Validated on Jack's facility** — Clark foundation + 50 fine-tune episodes beats Jack's failure rate and A+B share on Jack's exact config (~0.2 sim years vs Jack's ~9.4). See README's *Results* section.
 - **Trained foundation weights** — *commercial, not publicly released by design* (see [Use Clark](README.md#use-clark--commercial-access)).
 
+## Facility controls & operator UX
+
+- **Per-task daily-hours caps** (`tasks.daily_hours`) with **auto-off** — once a task's summed worker-hours reach its target, the action mask removes it for the rest of the day so no labor is wasted on it (same pattern as the management quota, generalized). **Configurable unmet penalty** (`tasks.unmet_penalty`: `none` / `letter` / `two_letters` / `fail`) demerits or fails the grade if the target isn't met by EOD. Env-side mask, so it holds on any checkpoint; a cap-aware fine-tune additionally stops the policy fighting it. Surfaced in the wizard as per-task "stop after N hrs/day · penalty" controls.
+- **Sunday operations** (`work_sunday` + `sunday_volume_fraction`), mirroring Saturday across the year schedule, `clark serve`'s calendar check, `clark plan`, and the wizard's "Weekend operations" step.
+- **Summary-first full-day schedule** — the ops dashboard leads with a per-worker **task-mix** (hours per task, from the simulator's ground-truth per-tick tally), with the per-10-min timeline behind a toggle. Per-tick switching is `tau≈1.0` sampling noise, not an operational plan, so the mix is the default and the timeline is opt-in.
+- **F-day explanations** — the outcome projection breaks down *why* each F happened (incomplete orders + shipped %, management minimum, restock, non-peak OT, management backlog, unmet task caps), counted once per failing run, behind a toggle. Makes an F-rate legible as "narrow 99% misses" vs "model fell over."
+- **Wizard training progress bar + completion notification** — `/train/{job}/status` returns episode / target / ETA from `training_metrics.json`; the wizard renders a live bar and fires a desktop notification when the run finishes.
+
+## Reliability fixes (operator path)
+
+- **The wizard no longer kills the training it monitors.** On Windows `os.kill(pid, 0)` is `CTRL_C_EVENT` — *not* a liveness probe — so the 5-second status poll was delivering a Ctrl-C to the trainer's process group, killing freshly-started runs on the first poll (with the non-detached child sharing the wizard's console). Fixed two ways: the trainer is spawned **detached** (`DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP`; `start_new_session` on POSIX) so wizard signals can't reach it, and liveness now uses the `Popen` handle (`proc.poll()`), never `os.kill(pid,0)`. Training genuinely survives closing the wizard now.
+- **`Run Clark Dashboard.bat` made robust** — rewritten with `goto`-label flow (no nested-parenthesized-block parser abort, no delayed-expansion trap that silently skipped the serve auto-launch) and always pauses on exit so a startup error stays readable. Canonical `clark_foundation.pt` promoted to the current-architecture (`clark-v2.5`) weights so the launcher, `clark serve`, and `clark mcp` all load the newest model under one name.
+- **Schedule duration fidelity** — block coalescing no longer folds short blocks into the previous block under its label (which mis-attributed a capped task's post-cap churn, e.g. cycle_count rendering as hours). It now only merges same-task runs + true one-tick A-b-A flicker, and the task-mix summary reads ground-truth executed hours from the day summary.
+
 ## Post-pretrain refinement chain (v2.5 → v2.10)
 
 The 15k-episode pretrain finished with the policy stuck in a "filler during crunch is OK" attractor on heavy days. Five iterations on top of the foundation closed that gap and produced the current production checkpoint. Full rationale + measured deltas in the README's *Post-pretrain refinements* section.
