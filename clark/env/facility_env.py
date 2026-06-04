@@ -334,6 +334,14 @@ class FacilityEnv:
                     new_task = "pack"
 
                 if worker.can_do_task(new_task):
+                    # Flow/ramp streak: continuing the same task warms the
+                    # worker up; switching resets to the setup-cost floor.
+                    # Updated before work is credited this tick so the dip /
+                    # bonus applies to the tick just assigned.
+                    if new_task == worker.current_task:
+                        worker.ticks_on_task += 1
+                    else:
+                        worker.ticks_on_task = 0
                     worker.current_task = new_task
 
                     # Apply hustle flag

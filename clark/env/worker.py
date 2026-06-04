@@ -19,6 +19,20 @@ PICK_FATIGUE_THRESHOLD = 230        # orders picked before fatigue kicks in
 SORENESS_OPH_PENALTY = 0.50         # 50% drop when soreness activates
 SORENESS_HOUR_THRESHOLD = 4.0       # hours of non-side-project work before soreness activates
 
+# ── Task flow / ramp ──────────────────────────────────────────────────────────
+# Humans don't context-switch for free, and they don't switch every 10 minutes.
+# Each entry is the OPH multiplier for a throughput task as a function of how
+# many consecutive 10-min ticks the worker has been on it. Index 0 = the tick
+# they just switched in (setup/walk-over cost), climbing to a slight "flow"
+# bonus once they've settled. A worker who thrashes tasks every tick is stuck
+# at the 0.85 floor; one who holds a task for ~40 min runs at 1.05. This makes
+# sustained allocation genuinely more productive, so the policy is rewarded
+# (via throughput → completion) for keeping people on tasks — without a new
+# reward term to game. Time-based tasks (management/idle/cycle_count) have no
+# physical ramp and are exempt.
+TASK_FLOW_RAMP = (0.85, 0.92, 1.0, 1.03, 1.05)  # 10-min ticks; clamps to last
+FLOW_EXEMPT_TASKS = frozenset({"management", "idle", "cycle_count", "off"})
+
 DAY_START_HOUR = 9.0
 
 
@@ -39,6 +53,10 @@ class WorkerState:
 
     # Current state
     current_task: str = "idle"
+    # Consecutive 10-min ticks the worker has been on `current_task`. Drives
+    # the flow/ramp multiplier (see effective_oph): a fresh switch starts at
+    # 0 (setup-time dip), sustained work ramps up to a slight flow bonus.
+    ticks_on_task: int = 0
     hours_worked: float = 0.0
     shift_start: float = DAY_START_HOUR
     is_picker: bool = False
@@ -132,8 +150,24 @@ class WorkerState:
 
         hustle_mod = HUSTLE_MODE_BONUS if self.hustle_mode else 1.0
         exhaustion_mod = HUSTLE_EXHAUSTION_MULTIPLIER if self.is_hustle_exhausted else 1.0
+        flow_mod = self.flow_multiplier(task)
 
-        return base * sleep_mod * health_mod * individual_mod * fatigue_mod * hustle_mod * exhaustion_mod
+        return base * sleep_mod * health_mod * individual_mod * fatigue_mod * hustle_mod * exhaustion_mod * flow_mod
+
+    def flow_multiplier(self, task: str = None) -> float:
+        """Setup-cost-then-flow ramp for sustained work on a throughput task.
+
+        Only applies to the task the worker is *currently* sustaining — a
+        query for any other task gets 1.0 (you can't be 'in flow' on a task
+        you aren't doing; the dip is paid when you actually switch to it and
+        ticks_on_task resets). Time-based tasks are exempt.
+        """
+        if task is None:
+            task = self.current_task
+        if task != self.current_task or task in FLOW_EXEMPT_TASKS:
+            return 1.0
+        i = self.ticks_on_task
+        return TASK_FLOW_RAMP[i] if i < len(TASK_FLOW_RAMP) else TASK_FLOW_RAMP[-1]
 
     def _health_modifier_for_task(self, task: str) -> float:
         if self.health_debuff != "bad_headspace":

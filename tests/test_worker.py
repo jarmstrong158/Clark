@@ -97,7 +97,43 @@ def test_effective_oph_fatigue_and_soreness_stack_multiplicatively():
 def test_effective_oph_defaults_to_current_task():
     w = _w(base_oph=15.0)
     w.current_task = "pack"
+    w.ticks_on_task = 2  # steady state -> flow multiplier 1.0 (isolate the default behavior)
     assert w.effective_oph() == pytest.approx(15.0)
+    # The no-arg form must equal the explicit current-task form.
+    assert w.effective_oph() == pytest.approx(w.effective_oph("pack"))
+
+
+def test_flow_ramp_dip_then_bonus():
+    from clark.env.worker import TASK_FLOW_RAMP
+    w = _w(base_oph=20.0)
+    w.current_task = "pick"
+    # Just switched in: setup-cost dip.
+    w.ticks_on_task = 0
+    assert w.effective_oph("pick") == pytest.approx(20.0 * TASK_FLOW_RAMP[0])
+    # Settled: recovers to baseline.
+    w.ticks_on_task = 2
+    assert w.effective_oph("pick") == pytest.approx(20.0 * 1.0)
+    # In flow (well past the ramp): slight bonus, clamped to the last entry.
+    w.ticks_on_task = 50
+    assert w.effective_oph("pick") == pytest.approx(20.0 * TASK_FLOW_RAMP[-1])
+    assert TASK_FLOW_RAMP[-1] > 1.0  # bonus exists
+
+
+def test_flow_only_applies_to_current_task():
+    w = _w(base_oph=20.0)
+    w.current_task = "pick"
+    w.ticks_on_task = 0  # dip on pick
+    # Querying a DIFFERENT task gets no flow penalty/bonus (you aren't on it).
+    assert w.effective_oph("pack") == pytest.approx(20.0)
+    assert w.effective_oph("pick") < 20.0  # current task carries the dip
+
+
+def test_flow_exempts_time_based_tasks():
+    w = _w(base_oph=20.0)
+    for t in ("management", "idle", "cycle_count"):
+        w.current_task = t
+        w.ticks_on_task = 0  # would be a dip if it applied
+        assert w.effective_oph(t) == pytest.approx(20.0), f"{t} should be flow-exempt"
 
 
 def test_bad_headspace_uses_per_task_then_default():
