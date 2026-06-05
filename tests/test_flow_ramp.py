@@ -58,7 +58,9 @@ def test_dwell_locks_to_current_task_within_floor():
     w.ticks_on_task = 0                      # just started -> locked
     m = get_action_mask(env)
     assert m[0, pick] and int(m[0].sum()) == 1, "mid-dwell -> locked to current task only"
-    w.ticks_on_task = DWELL_MIN_TICKS - 1    # satisfied the floor -> free
+    w.ticks_on_task = DWELL_MIN_TICKS - 1    # still within the floor -> still locked
+    assert int(get_action_mask(env)[0].sum()) == 1, "held the full floor before release"
+    w.ticks_on_task = DWELL_MIN_TICKS        # floor satisfied -> free
     m2 = get_action_mask(env)
     assert int(m2[0].sum()) > 1, "after the dwell floor the worker can switch again"
 

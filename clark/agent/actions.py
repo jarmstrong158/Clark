@@ -300,7 +300,7 @@ def get_action_mask(env: "FacilityEnv") -> np.ndarray:
         # became invalid (hit a daily-hours cap, restock filled, pick buffer
         # full, stress-gated filler, ...) that's a legitimate reason to
         # switch, so the normal options stay open.
-        if worker.ticks_on_task < DWELL_MIN_TICKS - 1:
+        if worker.ticks_on_task < DWELL_MIN_TICKS:
             ct_idx = task_to_idx.get(worker.current_task, -1)
             if ct_idx >= 0 and mask[w_id, ct_idx]:
                 locked = np.zeros(M, dtype=bool)
