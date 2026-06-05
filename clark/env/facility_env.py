@@ -338,10 +338,17 @@ class FacilityEnv:
                     # worker up; switching resets to the setup-cost floor.
                     # Updated before work is credited this tick so the dip /
                     # bonus applies to the tick just assigned.
-                    if new_task == worker.current_task:
+                    prev_task = worker.current_task
+                    if new_task == prev_task:
                         worker.ticks_on_task += 1
                     else:
                         worker.ticks_on_task = 0
+                        # Per-switch penalty on genuine churn (a real task ->
+                        # a different real task). Starting from idle or going
+                        # idle isn't churn and isn't penalized.
+                        if (prev_task not in ("idle", "off")
+                                and new_task not in ("idle", "off")):
+                            step_reward += self._add_reward("per_task_switch")
                     worker.current_task = new_task
 
                     # Apply hustle flag

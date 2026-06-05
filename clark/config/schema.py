@@ -280,6 +280,7 @@ class RewardOverrides:
     per_productive_hour: Optional[float] = None
     per_management_hour: Optional[float] = None
     per_idle_hour: Optional[float] = None
+    per_task_switch: Optional[float] = None
     packers_starved: Optional[float] = None
     picked_backlog: Optional[float] = None
 
@@ -382,6 +383,12 @@ DEFAULT_REWARDS: dict[str, float] = {
     "deliberate_completion_bonus":    8.0,
     "side_project_during_crunch":    -2.0,
     "per_productive_hour":            0.3,
+    # Per task-switch penalty. Small, immediate, creditable gradient that
+    # discourages unnecessary churn — complements the structural minimum-dwell
+    # mask (which forbids switching within DWELL_MIN_TICKS) by shaping the
+    # post-floor switches the mask doesn't force. Only fires on a real ->
+    # different real task change (not idle/absent/forced redirects).
+    "per_task_switch":               -1.5,
     # per_management_hour history: 0.5 (v2.0-v2.8) -> 1.5 (v2.9) -> 1.0 (v2.10).
     # v2.8 added mgmt_backlog_norm as env_feats[17] so the policy could SEE
     # the multi-day backlog accumulator. v2.9 tripled the per-hour mgmt

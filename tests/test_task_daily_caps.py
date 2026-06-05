@@ -37,6 +37,10 @@ def _unstress(env) -> None:
     env.restock_level = 1.0
     rules = env.facility_config.rules
     env.current_hour = (rules.day_start_hour + env._eod_hour) / 2
+    # Clear the minimum-dwell lock so the cap is the only thing constraining
+    # task choice (these tests isolate cap behavior, not the dwell mask).
+    for w in env.episode.workers:
+        w.ticks_on_task = 999
 
 
 def _clean_A_day(env, cfg) -> None:

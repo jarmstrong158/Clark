@@ -52,6 +52,10 @@ def _zero_all_pressures(env):
     env.orders_picked_not_audited = 0
     env.orders_completed = env.episode.total_orders
     env.current_hour = env.facility_config.rules.day_start_hour
+    # Clear the minimum-dwell lock so filler-mask gates are tested in
+    # isolation (a mid-dwell worker is locked to their current task).
+    for w in env.episode.workers:
+        w.ticks_on_task = 999
 
 
 def test_gate1_projection_fires_mask():

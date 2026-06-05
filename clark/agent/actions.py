@@ -19,6 +19,12 @@ if TYPE_CHECKING:
 
 from clark.env.facility_env import HUSTLE_BLOCKED_TASKS, RESTOCK_PICK_PENALTY_THRESHOLD
 
+# Minimum-dwell: ticks a worker must stay on a task before a non-emergency
+# switch is allowed. 3 ticks = 30 min at 10-min ticks. Humans don't
+# context-switch every 10 minutes, and a pure productivity ramp was too weak
+# to stop the policy thrashing — this makes continuity structural.
+DWELL_MIN_TICKS = 3
+
 
 def get_action_mask(env: "FacilityEnv") -> np.ndarray:
     """
@@ -285,6 +291,21 @@ def get_action_mask(env: "FacilityEnv") -> np.ndarray:
 
             # General task: check worker eligibility
             mask[w_id, j] = worker.eligible_for(t_id)
+
+        # Minimum-dwell lock: once started, a worker must hold a task for
+        # DWELL_MIN_TICKS before a non-emergency switch. The OT / EOD /
+        # absent / pack-only branches above already `continue` past here, so
+        # real emergencies still override. We lock ONLY when the current task
+        # is still a valid choice this tick (its mask bit is True): if it just
+        # became invalid (hit a daily-hours cap, restock filled, pick buffer
+        # full, stress-gated filler, ...) that's a legitimate reason to
+        # switch, so the normal options stay open.
+        if worker.ticks_on_task < DWELL_MIN_TICKS - 1:
+            ct_idx = task_to_idx.get(worker.current_task, -1)
+            if ct_idx >= 0 and mask[w_id, ct_idx]:
+                locked = np.zeros(M, dtype=bool)
+                locked[ct_idx] = True
+                mask[w_id] = locked
 
         # Stranded-worker safety: never emit an all-False row (it would
         # NaN the policy softmax). If pick was blocked by the buffer cap,

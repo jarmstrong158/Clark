@@ -48,6 +48,48 @@ def test_streak_increments_on_hold_and_resets_on_switch():
     assert w.ticks_on_task == 0
 
 
+def test_dwell_locks_to_current_task_within_floor():
+    from clark.agent.actions import get_action_mask, DWELL_MIN_TICKS
+    cfg, env = _env()
+    pick = cfg.task_ids.index("pick")
+    w = env.episode.workers[0]
+    w.is_absent = False
+    w.current_task = "pick"
+    w.ticks_on_task = 0                      # just started -> locked
+    m = get_action_mask(env)
+    assert m[0, pick] and int(m[0].sum()) == 1, "mid-dwell -> locked to current task only"
+    w.ticks_on_task = DWELL_MIN_TICKS - 1    # satisfied the floor -> free
+    m2 = get_action_mask(env)
+    assert int(m2[0].sum()) > 1, "after the dwell floor the worker can switch again"
+
+
+def test_dwell_yields_when_current_task_becomes_invalid():
+    from clark.agent.actions import get_action_mask
+    cfg, env = _env()
+    rs = cfg.task_ids.index("restock")
+    w = env.episode.workers[0]
+    w.is_absent = False
+    w.current_task = "restock"
+    w.ticks_on_task = 0                      # mid-dwell...
+    env.restock_level = 1.0                  # ...but restock is full (invalid this tick)
+    m = get_action_mask(env)
+    assert not m[0, rs], "a now-invalid current task must not be force-held"
+    assert int(m[0].sum()) >= 1, "worker keeps valid options when the dwell lock yields"
+
+
+def test_switch_penalty_only_on_real_task_change():
+    cfg, env = _env()
+    # Workers start the day on role-based tasks; force a clean idle start so
+    # we can check the "starting work isn't churn" case.
+    env.episode.workers[0].current_task = "idle"
+    _step_worker0(env, cfg, "pick")          # idle -> pick: starting work, no penalty
+    p_start = env.reward_breakdown.get("per_task_switch", 0.0)
+    _step_worker0(env, cfg, "pack")          # pick -> pack: genuine churn, penalized
+    p_switch = env.reward_breakdown.get("per_task_switch", 0.0)
+    assert p_start == 0.0, "idle -> task is not a penalized switch"
+    assert p_switch < 0.0 and p_switch < p_start, "real -> real switch incurs per_task_switch"
+
+
 def test_sustained_work_outproduces_thrashing():
     """A worker who holds pick should accumulate more effective output than
     one who switches every tick (dip vs ramp). Uses effective_oph directly
