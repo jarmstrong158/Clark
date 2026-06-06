@@ -76,11 +76,14 @@ echo Launching ops dashboard on http://127.0.0.1:8092 ...
 echo Press Ctrl-C in this window to stop.
 echo.
 
-REM Open the browser tab explicitly via Windows `start` rather than
-REM relying on Python's webbrowser.open - that one silently no-ops
-REM when launched from a bat-spawned cmd on some Windows setups.
-REM Run the dashboard with --no-browser to avoid a double-open.
-start "" "http://127.0.0.1:8092/"
+REM Open the browser only AFTER a short delay so the dashboard has time to
+REM bind. Opening immediately races Python's startup (imports take a couple
+REM seconds), so the first hit lands on a not-yet-listening port and shows
+REM "connection refused" — which looks like the dashboard is broken. A
+REM minimized helper waits ~5s, then opens the default browser via
+REM `explorer` (fires reliably from a bat-spawned cmd, unlike Python's
+REM webbrowser.open). The dashboard itself runs in THIS window.
+start "" /min cmd /c "ping -n 6 127.0.0.1 >nul & explorer http://127.0.0.1:8092/"
 
 python -m cli.main ops --port 8092 --no-browser
 
