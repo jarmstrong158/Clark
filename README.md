@@ -530,6 +530,8 @@ Clark is a successor to Jack, not a wrapper around it. The two share design DNA 
 
 The architecture-and-training and infrastructure milestones (variable-shape transformer, IPPO-style per-worker ratio, symlog value targets, completion-dominant reward, foundation pre-train completion, Validated-on-Jack head-to-head, the wizard's Quick/Advanced split, the wizard's 50-episode default, the operations dashboard, `clark mcp` MCP-host integration, v2.5 multi-gate filler mask, v2.6 restock-proactivity 5th gate, v2.7 per-OT-hour reward bump, v2.8 management-backlog observation + `arch_version` bump to `clark-v2.5`, v2.10 per-management-hour bump (A+B = 88% on N=49), v2.11 task-flow ramp + minimum-dwell mask + switch penalty (kills ~29-switch/worker/day thrashing structurally), serve-temperature finding (argmax catastrophically underperforms; deploy at tau ≈ 1.0), ...) live in [CHANGELOG.md](CHANGELOG.md).
 
+For the transferable lessons behind these — structural masks vs reward shaping, measuring distributions over point estimates, inference-temperature, and a few good war stories where the data overruled a confident plan — see [docs/ENGINEERING_NOTES.md](docs/ENGINEERING_NOTES.md).
+
 ---
 
 ## License
