@@ -1687,8 +1687,14 @@ def cmd_eval(args: argparse.Namespace):
         _die(f"Failed to load model: {e}")
 
     def _progress(stage, done, total):
-        end = "\n" if done == total else ""
-        print(f"\r  stage {stage}: {done}/{total} years simulated…", end=end, flush=True)
+        if sys.stdout.isatty():
+            # interactive terminal: update one line in place
+            end = "\n" if done == total else ""
+            print(f"\r  stage {stage}: {done}/{total} years simulated…", end=end, flush=True)
+        else:
+            # redirected to a log (background run): one clean line per facility
+            # so the file is tailable live
+            print(f"  stage {stage}: {done}/{total} years simulated", flush=True)
 
     res = evaluate(agent, n_per_stage=args.n_per_stage, stages=stages,
                    base_seed=args.seed, progress=_progress)
