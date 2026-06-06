@@ -81,7 +81,7 @@ Pick a facility and date. Optionally mark workers absent or override volume. Thr
 
 Defaults to a per-worker **task-mix summary**: one stacked bar showing each worker's share of the day, plus hours-by-task totals (e.g. `pick 3.1h · pack 2.4h · management 1.2h · cycle_count 0.5h`). The hours come straight from the simulator's per-tick tally (ground truth), so a task with a daily-hours cap shows its real capped duration, not a rendering artifact.
 
-A **Show detailed timeline** toggle reveals the per-10-minute, per-worker timeline (colored by task, bright outline = hustle). It's opt-in because the policy samples a task per tick at `tau ≈ 1.0`, so the tick-level switching is sampling noise — the task *mix* is the actionable signal, not which task at 11:20.
+A **Show detailed timeline** toggle reveals the per-10-minute, per-worker timeline (colored by task, bright outline = hustle). Thanks to the task-flow ramp + minimum-dwell mask (see [v2.11](#v211-task-flow-ramp--minimum-dwell-mask--switch-penalty)), workers now hold tasks in realistic ~30–60-minute blocks rather than thrashing every tick, so the timeline reads as a genuine shift plan. The task-mix summary stays the default for a one-glance read; the timeline is there when you want to see exactly when someone switches.
 
 ### Outcome projection + recommended staffing
 
@@ -395,19 +395,27 @@ Index 0 is the tick a worker just switched in — they run at **0.85×** (setup 
 
 **Why the soft incentive wasn't enough.** A flow-only retrain (`clark_foundation_flow.pt`, 500 episodes, ramp active but no mask or penalty) *still* showed ~29 switches/worker/day. The throughput signal is too diffuse to beat the PPO entropy bonus, which actively rewards spreading probability across tasks at every tick — the same dynamic the v2.5 filler problem hit, where gradient pressure couldn't escape a learned attractor and a structural mask had to. So v2.11 took the v2.5 lesson and went structural.
 
-**Minimum-dwell mask (structural enforcement).** A worker who has just started a task is *locked* to it until they've held it for `DWELL_MIN_TICKS` before a non-emergency switch is allowed:
+**Minimum-dwell mask (structural enforcement).** A worker who has just started a task is *locked* to it for a minimum block before any non-emergency switch:
 
 ```
-DWELL_MIN_TICKS = 3   # 3 ticks = 30 min at 10-min ticks
+DWELL_MIN_TICKS = 6   # 6 ticks = 60 min at 10-min ticks
 ```
 
-At each tick, if `ticks_on_task < DWELL_MIN_TICKS` **and** the current task is still a valid choice (its mask bit is True), the action mask collapses that worker's row to the single current-task column. Emergencies override the lock by construction: the OT, EOD, absent, and pack-only branches all `continue` past the dwell check, and the lock only fires while the current task remains valid — if it just became invalid (hit a daily-hours cap, restock filled, pick buffer full, stress-gated filler), the normal options stay open so the worker can legitimately move. Lives in [`clark/agent/actions.py`](clark/agent/actions.py) (`get_action_mask`).
+At each tick, while `ticks_on_task < DWELL_MIN_TICKS`, the action mask collapses that worker's row to the single current-task column. The lock releases **only for hard stops** — `idle`/`off`, a met daily-hours cap, ineligibility, a satisfied management quota, or cycle-count ineligibility — plus the OT / EOD / absent / pack-only branches that already `continue` past the dwell check. It deliberately does **not** release for soft fluctuations (pick buffer wobble, restock topping out, a filler stress-gate); those are overridden so the worker holds a real block instead of bouncing pick↔pack as the buffer oscillates. Lives in [`clark/agent/actions.py`](clark/agent/actions.py) (`get_action_mask`).
 
-**Switch penalty (residual cleanup).** For the post-floor switches the mask *doesn't* force, a `per_task_switch = -1.5` reward fires — but only on genuine churn (a real task → a *different* real task). Starting from `idle`, going `idle`, and forced redirects are not penalized. This nudges the policy away from a switch the moment the 30-min lock releases unless there's a reason for it.
+**Switch penalty (residual cleanup).** For the post-floor switches the mask *doesn't* force, a `per_task_switch = -1.5` reward fires — but only on genuine churn (a real task → a *different* real task). Starting from `idle`, going `idle`, and forced redirects are not penalized.
 
-> **Dwell floor off-by-one.** The mask as first shipped enforced only 2 ticks (20 min) instead of the intended 3 — the counter is incremented *after* the assignment, so a worker at `ticks_on_task == 2` was already eligible to switch. Corrected so the full 30-min floor is held (regression-tested in [`tests/test_flow_ramp.py`](tests/test_flow_ramp.py)).
+**What actually moved the needle — the mask, not the training.** This is the honest result, and it mirrors v2.5: *the structural constraint was the lever; reward-shaping was a dead end.* Two retrains were run — the flow-ramp-only foundation (`clark_foundation_flow.pt`) and a mask+penalty fine-tune (`clark_foundation_dwell.pt`), ~6.5 h of GPU between them — and **neither meaningfully reduced switching** beyond what the mask itself does at inference. The dwell mask is model-agnostic: applied to *any* checkpoint at serve time, it cuts the cadence. Tuning the **mask** (free, no GPU) is what worked: an early 30-min soft-yield floor only reached ~21 switches/worker/day because it released on every soft gate; the **60-min hard-stop-only** floor brought it to **~14** (≈ a switch every 38 min vs the original ~10). Measured on a representative facility:
 
-A 500-episode fine-tune with the mask + penalty active (`clark_foundation_dwell.pt`) completed cleanly with win rates of **70–85%** and order completion holding at **~99%** — i.e. continuity was made structural without costing throughput. Switch counts drop to within the 30-min floor by construction.
+| | switches/worker/day | grades |
+|---|---|---|
+| original (no mask) | ~29 | — |
+| 30-min soft-yield | ~21 | — |
+| **60-min hard-stop-only** | **~14** | **A+B 90%, completion 100%, zero C/D, F-days are 99.7% near-misses** |
+
+Continuity is now structural and grade-neutral — and it needs no ongoing training cost. The shipped foundation carries the flow ramp; the dwell mask + switch penalty are env-side and apply to every served model.
+
+> **Implementation note.** An early version had an off-by-one (the streak is incremented *after* assignment, so the lock released a tick early) and released on soft gates; both are fixed and regression-tested in [`tests/test_flow_ramp.py`](tests/test_flow_ramp.py).
 
 ### Serve-time inference: temperature matters
 
