@@ -31,7 +31,7 @@ git clone https://github.com/jarmstrong158/Clark.git && cd Clark
 pip install -e .
 
 # download this checkpoint to where Clark expects it
-hf download jarmstrong158/clark-foundation clark_foundation.pt \
+hf download Roflimjonny/clark-foundation clark_foundation.pt \
   --local-dir clark/data/checkpoints
 
 # serve it (deploy at temperature tau ~ 1.0 — argmax catastrophically underperforms)
