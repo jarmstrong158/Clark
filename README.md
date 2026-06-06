@@ -3,6 +3,7 @@
 [![License: PolyForm NC 1.0.0](https://img.shields.io/badge/License-PolyForm%20NC%201.0.0-orange.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
 [![Architecture](https://img.shields.io/badge/arch-clark--v2.5-blue)](docs/ARCHITECTURE.md)
+[![Weights on Hugging Face](https://img.shields.io/badge/%F0%9F%A4%97%20weights-Hugging%20Face-yellow)](https://huggingface.co/Roflimjonny/clark-foundation)
 
 **A foundation reinforcement learning model for warehouse workforce scheduling.**
 
@@ -132,10 +133,13 @@ pip install -e .
 
 ### Get the trained foundation weights
 
-Download `clark_foundation.pt` (~216 MB) from the **[latest release](https://github.com/jarmstrong158/Clark/releases/latest)** and place it at `clark/data/checkpoints/clark_foundation.pt`. That's the trained `clark-v2.5` foundation — with it you can `clark serve` / `clark finetune` immediately instead of pre-training from scratch. Free for noncommercial use under [PolyForm NC](LICENSE) (commercial use: see [Use Clark](#use-clark--commercial-access)).
+Download the trained `clark-v2.5` foundation, `clark_foundation.pt` (~216 MB), and place it at `clark/data/checkpoints/clark_foundation.pt` — then you can `clark serve` / `clark finetune` immediately instead of pre-training from scratch. Free for noncommercial use under [PolyForm NC](LICENSE) (commercial use: see [Use Clark](#use-clark--commercial-access)).
 
 ```bash
-# e.g. with the GitHub CLI:
+# From Hugging Face (model home):
+hf download Roflimjonny/clark-foundation clark_foundation.pt --local-dir clark/data/checkpoints
+
+# ...or from the GitHub release:
 gh release download --repo jarmstrong158/Clark -p clark_foundation.pt -D clark/data/checkpoints
 ```
 
