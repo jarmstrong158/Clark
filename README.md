@@ -7,7 +7,7 @@
 
 **A foundation reinforcement learning model for warehouse workforce scheduling.**
 
-> **TL;DR.** Clark is a transformer + LSTM PPO agent. It pre-trains once on thousands of synthetic warehouses, then fine-tunes to any specific facility in about 30 minutes on a consumer GPU. One foundation model, many facilities. Variable workers, variable tasks, no per-site retrain from scratch. Successor to [Jack](https://github.com/jarmstrong158/Jack), the single-facility reference implementation.
+> **TL;DR.** Clark is a transformer + LSTM PPO agent. It pre-trains once on thousands of synthetic warehouses, then fine-tunes to any specific facility in ~50 episodes (a few hours on a consumer GPU). One foundation model, many facilities. Variable workers, variable tasks, no per-site retrain from scratch. Successor to [Jack](https://github.com/jarmstrong158/Jack), the single-facility reference implementation.
 
 Clark learns the underlying dynamics of warehouse operations (picking and packing throughput, overtime decisions, restock cycles, fatigue, hustle) from thousands of synthetic facility configurations. A single pre-trained foundation can then be fine-tuned to any specific facility in as few as **50 episodes (~3.3 h on a consumer GPU)**. That's the Jack-validation floor, where F-rate drops from 15% to **4.2%** and A+B day share lifts from 85% to **95.8%** on Jack's own setup — beating Jack-from-scratch (which required ~9 simulated years of facility-specific training) on A-grade rate. See [Validated on Jack's facility](#validated-on-jacks-facility) for the full head-to-head. The wizard defaults to 50. The `clark finetune` CLI defaults to 500 for users who want the deeper run.
 
@@ -190,7 +190,9 @@ clark validate my_warehouse.yaml
 # trained foundation see "Use Clark / Commercial access" below.
 clark pretrain --episodes 15000 --device cuda --n-envs 32 --mp
 
-# Fine-tune the foundation model on your facility (~30 min on consumer GPU)
+# Fine-tune the foundation model on your facility.
+# 50 episodes (the wizard default + Jack-validation floor) ≈ a few hours on
+# a consumer GPU; 500 (the CLI default below) is the deeper run.
 clark finetune \
   --config my_warehouse.yaml \
   --base clark/data/checkpoints/clark_foundation.pt \
