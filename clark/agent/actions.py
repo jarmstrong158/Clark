@@ -20,10 +20,10 @@ if TYPE_CHECKING:
 from clark.env.facility_env import HUSTLE_BLOCKED_TASKS, RESTOCK_PICK_PENALTY_THRESHOLD
 
 # Minimum-dwell: ticks a worker must stay on a task before a non-emergency
-# switch is allowed. 3 ticks = 30 min at 10-min ticks. Humans don't
+# switch is allowed. 6 ticks = 60 min at 10-min ticks. Humans don't
 # context-switch every 10 minutes, and a pure productivity ramp was too weak
 # to stop the policy thrashing — this makes continuity structural.
-DWELL_MIN_TICKS = 3
+DWELL_MIN_TICKS = 6
 
 
 def get_action_mask(env: "FacilityEnv") -> np.ndarray:
@@ -292,17 +292,25 @@ def get_action_mask(env: "FacilityEnv") -> np.ndarray:
             # General task: check worker eligibility
             mask[w_id, j] = worker.eligible_for(t_id)
 
-        # Minimum-dwell lock: once started, a worker must hold a task for
-        # DWELL_MIN_TICKS before a non-emergency switch. The OT / EOD /
-        # absent / pack-only branches above already `continue` past here, so
-        # real emergencies still override. We lock ONLY when the current task
-        # is still a valid choice this tick (its mask bit is True): if it just
-        # became invalid (hit a daily-hours cap, restock filled, pick buffer
-        # full, stress-gated filler, ...) that's a legitimate reason to
-        # switch, so the normal options stay open.
+        # Minimum-dwell lock (hard-stop releases only): hold the current task
+        # for DWELL_MIN_TICKS unless a HARD reason to switch applies. OT / EOD
+        # / absent / pack-only already `continue` above. Here we release only
+        # for: idle/off, a met daily-hours cap, ineligibility, a satisfied
+        # management quota, or cycle-count ineligibility. We deliberately do
+        # NOT release for soft fluctuations (pick-buffer full, restock topped
+        # out, filler stress-gate) — those get overridden so the worker holds
+        # a real block instead of bouncing pick<->pack as the buffer wobbles.
         if worker.ticks_on_task < DWELL_MIN_TICKS:
-            ct_idx = task_to_idx.get(worker.current_task, -1)
-            if ct_idx >= 0 and mask[w_id, ct_idx]:
+            ct = worker.current_task
+            ct_idx = task_to_idx.get(ct, -1)
+            hard_release = (
+                ct in ("idle", "off")
+                or ct in _capped_met
+                or not worker.eligible_for(ct)
+                or (ct == "management" and not _management_available(w_id))
+                or (ct == "cycle_count" and w_id not in cycle_eligible_ids)
+            )
+            if ct_idx >= 0 and not hard_release:
                 locked = np.zeros(M, dtype=bool)
                 locked[ct_idx] = True
                 mask[w_id] = locked

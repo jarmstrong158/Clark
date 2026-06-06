@@ -65,18 +65,35 @@ def test_dwell_locks_to_current_task_within_floor():
     assert int(m2[0].sum()) > 1, "after the dwell floor the worker can switch again"
 
 
-def test_dwell_yields_when_current_task_becomes_invalid():
+def test_dwell_holds_through_soft_gate():
+    # A soft fluctuation (restock topping out) must NOT release the lock —
+    # the worker holds the block instead of bouncing off it.
     from clark.agent.actions import get_action_mask
     cfg, env = _env()
     rs = cfg.task_ids.index("restock")
     w = env.episode.workers[0]
     w.is_absent = False
     w.current_task = "restock"
-    w.ticks_on_task = 0                      # mid-dwell...
-    env.restock_level = 1.0                  # ...but restock is full (invalid this tick)
+    w.ticks_on_task = 0
+    env.restock_level = 1.0                   # full (soft-invalid) -> overridden
     m = get_action_mask(env)
-    assert not m[0, rs], "a now-invalid current task must not be force-held"
-    assert int(m[0].sum()) >= 1, "worker keeps valid options when the dwell lock yields"
+    assert m[0, rs] and int(m[0].sum()) == 1, "soft gate must not break the dwell lock"
+
+
+def test_dwell_releases_on_hard_stop_cap():
+    # A met daily-hours cap is a HARD stop -> the worker is released.
+    from clark.agent.actions import get_action_mask
+    cfg, env = _env()
+    cfg.tasks.daily_hours = {"side_project": 1.0}
+    sp = cfg.task_ids.index("side_project")
+    w = env.episode.workers[0]
+    w.is_absent = False
+    w.current_task = "side_project"
+    w.ticks_on_task = 0
+    w.task_hours_today["side_project"] = 2.0  # cap met -> hard release
+    m = get_action_mask(env)
+    assert not m[0, sp], "a met cap is a hard stop -> task off even mid-dwell"
+    assert int(m[0].sum()) >= 1, "worker released to other tasks on a hard stop"
 
 
 def test_switch_penalty_only_on_real_task_change():
