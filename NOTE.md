@@ -239,6 +239,74 @@ clark dashboard                   — launch local dashboard server
 
 ---
 
+## Anti-thrashing: task-flow ramp + minimum-dwell mask (v2.11)
+
+**Problem.** A post-v2.10 audit of the per-worker timeline found the policy
+reassigning workers to a different task almost every 10-min tick —
+~29 switches/worker/day. It doesn't move the daily *grade* (the grader
+scores task-mix and completion, not switch count), but it's not how a real
+warehouse runs: people don't context-switch every 10 minutes, and each
+switch costs real setup/walk-over time. An operator handed a plan that
+reshuffles everyone six times an hour won't trust it. We wanted the policy
+to value *sustained* allocation.
+
+**Attempt 1 — soft incentive (task-flow ramp).** Make continuity pay for
+itself through throughput rather than a new reward term. Each worker carries
+a `ticks_on_task` counter; a throughput task's effective OPH is scaled by a
+flow curve `TASK_FLOW_RAMP = (0.85, 0.92, 1.0, 1.03, 1.05)` indexed on it
+(clamps to the last entry). Tick 0 after a switch = 0.85× (setup cost);
+holding ~40 min reaches a 1.05× flow bonus. Time-based tasks
+(`management`/`idle`/`cycle_count`/`off`) are physically exempt
+(`FLOW_EXEMPT_TASKS`). The appeal: it's an *implicit* incentive — sustained
+work yields more completion → more reward, nothing for PPO to game directly.
+Lives in `clark/env/worker.py` (`flow_multiplier`, applied in
+`effective_oph`).
+
+**Why the soft incentive failed.** A flow-only retrain
+(`clark_foundation_flow.pt`, 500 episodes, ramp on, no mask/penalty) *still*
+showed ~29 switches/worker/day. The throughput signal is too diffuse to
+overcome the PPO entropy bonus, which actively pays the policy to spread
+probability mass across tasks every tick. A ~13% per-switch throughput dip,
+diluted across a whole simulated year and competing against entropy, just
+isn't a sharp enough gradient. This is the **same shape as the v2.5 filler
+problem**: a behavior baked in by the entropy-regularized objective that
+gradient-pressure interventions (observation features, reward shaping)
+couldn't dislodge — and which a *structural action mask* solved cleanly.
+Precedent said: stop nudging, enforce.
+
+**Attempt 2 — structural enforcement (minimum-dwell mask).** Once a worker
+starts a task, lock them to it for `DWELL_MIN_TICKS = 3` (30 min) before a
+non-emergency switch is allowed. At each tick, if
+`ticks_on_task < DWELL_MIN_TICKS` and the current task's mask bit is still
+True, collapse that worker's mask row to the single current-task column.
+Emergencies override by construction — the OT / EOD / absent / pack-only
+branches all `continue` past the dwell check, and the lock fires *only*
+while the current task remains valid, so if it just became invalid (hit a
+daily-hours cap, restock filled, pick buffer full, stress-gated filler) the
+normal options stay open. Lives in `clark/agent/actions.py`
+(`get_action_mask`). Layered on top: `per_task_switch = -1.5`, charged only
+on genuine churn (real task → a *different* real task; idle starts/exits and
+forced redirects are exempt) to discourage the post-floor switches the mask
+doesn't force.
+
+**Off-by-one (fixed).** As first shipped the mask enforced only 2 ticks
+(20 min): `ticks_on_task` is incremented *after* the assignment is applied,
+so a worker at counter==2 was already releasable. Corrected so the intended
+3-tick / 30-min floor actually holds; regression-pinned in
+`tests/test_flow_ramp.py`.
+
+**Result.** A 500-episode fine-tune with mask + penalty active
+(`clark_foundation_dwell.pt`) completed cleanly, win rates 70–85%,
+completion ~99% — continuity made structural with no throughput cost. The
+ramp stays in (it's free and makes sustained work genuinely faster); the
+mask is what does the enforcing. **Lesson, restated:** when a behavior is an
+attractor of the entropy-regularized PPO objective, prefer a structural mask
+over gradient pressure. Soft incentives shape *within* the basin; masks
+change the basin. (See also the v2.5 filler mask in the README's
+*Post-pretrain refinements*.)
+
+---
+
 ## Cloud / API layer — scrapped; minimal local inference endpoint sanctioned
 
 A FastAPI + Celery/Redis + S3 deployment was prototyped and **scrapped**.

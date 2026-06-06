@@ -309,7 +309,7 @@ This is the *training*-metrics dashboard (loss curves, episode log, year snapsho
 
 Foundation pre-training **completed** at episode 15 000 (target reached, clean termination: `status.alive=False`, value head stable, no end-of-run divergence). ~11 h on a single RTX 5070 Ti. The training infrastructure was validated end-to-end (PPO updates, day-boundary cadence, multi-process env stepping, pipelined CPU/GPU overlap), and the policy importance-sampling ratio behaved correctly throughout (clip fraction in the healthy 5-20% range after the per-worker ratio refactor).
 
-> **Which checkpoint ships.** The headline table immediately below is the raw v2 baseline at ep 15 000. The deployable foundation — `clark_foundation.pt`, architecture `clark-v2.5` — carries the v2.5 → v2.10 refinements documented further down, and is what `clark serve`, the operations dashboard, and `clark mcp` load by default. For the current numbers see [v2.10](#v210-per-management-hour-reward-05--10) and [Validated on Jack's facility](#validated-on-jacks-facility).
+> **Which checkpoint ships.** The headline table immediately below is the raw v2 baseline at ep 15 000. The deployable foundation — `clark_foundation.pt`, architecture `clark-v2.5` — carries the v2.5 → v2.11 refinements documented further down, and is what `clark serve`, the operations dashboard, and `clark mcp` load by default. For the current numbers see [v2.10](#v210-per-management-hour-reward-05--10) and [Validated on Jack's facility](#validated-on-jacks-facility).
 
 **Headline numbers at completion** (rolling window of the final 500 days across stage-3 synthetic configs up to N=40, M=7):
 
@@ -380,6 +380,34 @@ On the heaviest stage-3 episode at run-end (N=49 workers, M=6 tasks, full simula
 A+B = 88% on the hardest tier the curriculum samples is a real promotion over v2.8's typical 65-75% A+B on equivalent runs. The remaining ~2% F-rate is the irreducible-failure floor for stage-3 stress configs that exceed rescue capacity by design.
 
 > **Methodology note.** An earlier head-to-head probe between v2.8 and v2.10 reported "essentially tied." That probe was wrong: it ran single-day episodes (env exits after day 1, not the full year) and used a 3-grade rule (A / C / D / F, no B, no restock / mgmt / backlog demerits) that collapses exactly the bands these iterations were optimizing. The training-time grader above is the production rule (4 demerits: restock-95%, mgmt-required-hours, OT-in-non-peak, mgmt-backlog-threshold; demerit count drops the grade letter) and is the right signal for the promotion decision.
+
+### v2.11: task-flow ramp + minimum-dwell mask + switch penalty
+
+A post-v2.10 audit of the per-worker timeline found the policy *thrashing* — workers reassigned to a different task almost every 10-min tick (~29 switches/worker/day), which a real warehouse never does (people don't context-switch every 10 minutes). It doesn't hurt the daily grade directly, but it makes the plan operationally unusable and wastes the setup/walk-over time a real worker pays on every switch. v2.11 fixes it in two layers, soft then structural.
+
+**Task-flow ramp (soft incentive).** Each worker carries a `ticks_on_task` counter (consecutive 10-min ticks on the current task). The effective OPH of a throughput task is multiplied by a flow curve indexed on that counter:
+
+```
+TASK_FLOW_RAMP = (0.85, 0.92, 1.0, 1.03, 1.05)   # by consecutive ticks; clamps to last
+```
+
+Index 0 is the tick a worker just switched in — they run at **0.85×** (setup / walk-over cost). Hold the task and they warm up, reaching a slight **1.05× flow bonus** at ~40 min (4+ ticks). A worker who thrashes every tick is stuck at the 0.85 floor; one who settles runs 20% faster. Time-based tasks (`management`, `idle`, `cycle_count`, `off`) have no physical ramp and are exempt (`FLOW_EXEMPT_TASKS`). This is a purely *implicit* incentive — sustained allocation produces more throughput → more completion → more reward, with no new reward term for PPO to game. Lives in [`clark/env/worker.py`](clark/env/worker.py) (`flow_multiplier`, applied in `effective_oph`).
+
+**Why the soft incentive wasn't enough.** A flow-only retrain (`clark_foundation_flow.pt`, 500 episodes, ramp active but no mask or penalty) *still* showed ~29 switches/worker/day. The throughput signal is too diffuse to beat the PPO entropy bonus, which actively rewards spreading probability across tasks at every tick — the same dynamic the v2.5 filler problem hit, where gradient pressure couldn't escape a learned attractor and a structural mask had to. So v2.11 took the v2.5 lesson and went structural.
+
+**Minimum-dwell mask (structural enforcement).** A worker who has just started a task is *locked* to it until they've held it for `DWELL_MIN_TICKS` before a non-emergency switch is allowed:
+
+```
+DWELL_MIN_TICKS = 3   # 3 ticks = 30 min at 10-min ticks
+```
+
+At each tick, if `ticks_on_task < DWELL_MIN_TICKS` **and** the current task is still a valid choice (its mask bit is True), the action mask collapses that worker's row to the single current-task column. Emergencies override the lock by construction: the OT, EOD, absent, and pack-only branches all `continue` past the dwell check, and the lock only fires while the current task remains valid — if it just became invalid (hit a daily-hours cap, restock filled, pick buffer full, stress-gated filler), the normal options stay open so the worker can legitimately move. Lives in [`clark/agent/actions.py`](clark/agent/actions.py) (`get_action_mask`).
+
+**Switch penalty (residual cleanup).** For the post-floor switches the mask *doesn't* force, a `per_task_switch = -1.5` reward fires — but only on genuine churn (a real task → a *different* real task). Starting from `idle`, going `idle`, and forced redirects are not penalized. This nudges the policy away from a switch the moment the 30-min lock releases unless there's a reason for it.
+
+> **Dwell floor off-by-one.** The mask as first shipped enforced only 2 ticks (20 min) instead of the intended 3 — the counter is incremented *after* the assignment, so a worker at `ticks_on_task == 2` was already eligible to switch. Corrected so the full 30-min floor is held (regression-tested in [`tests/test_flow_ramp.py`](tests/test_flow_ramp.py)).
+
+A 500-episode fine-tune with the mask + penalty active (`clark_foundation_dwell.pt`) completed cleanly with win rates of **70–85%** and order completion holding at **~99%** — i.e. continuity was made structural without costing throughput. Switch counts drop to within the 30-min floor by construction.
 
 ### Serve-time inference: temperature matters
 
@@ -475,7 +503,7 @@ Clark is a successor to Jack, not a wrapper around it. The two share design DNA 
 
 ## Changelog
 
-The architecture-and-training and infrastructure milestones (variable-shape transformer, IPPO-style per-worker ratio, symlog value targets, completion-dominant reward, foundation pre-train completion, Validated-on-Jack head-to-head, the wizard's Quick/Advanced split, the wizard's 50-episode default, the operations dashboard, `clark mcp` MCP-host integration, v2.5 multi-gate filler mask, v2.6 restock-proactivity 5th gate, v2.7 per-OT-hour reward bump, v2.8 management-backlog observation + `arch_version` bump to `clark-v2.5`, v2.10 per-management-hour bump (A+B = 88% on N=49), serve-temperature finding (argmax catastrophically underperforms; deploy at tau ≈ 1.0), ...) live in [CHANGELOG.md](CHANGELOG.md).
+The architecture-and-training and infrastructure milestones (variable-shape transformer, IPPO-style per-worker ratio, symlog value targets, completion-dominant reward, foundation pre-train completion, Validated-on-Jack head-to-head, the wizard's Quick/Advanced split, the wizard's 50-episode default, the operations dashboard, `clark mcp` MCP-host integration, v2.5 multi-gate filler mask, v2.6 restock-proactivity 5th gate, v2.7 per-OT-hour reward bump, v2.8 management-backlog observation + `arch_version` bump to `clark-v2.5`, v2.10 per-management-hour bump (A+B = 88% on N=49), v2.11 task-flow ramp + minimum-dwell mask + switch penalty (kills ~29-switch/worker/day thrashing structurally), serve-temperature finding (argmax catastrophically underperforms; deploy at tau ≈ 1.0), ...) live in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
