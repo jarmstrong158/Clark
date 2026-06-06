@@ -235,10 +235,13 @@ clark ops                          # Operations dashboard (port 8092). Forms ove
 clark pretrain --episodes 15000    # Foundation pre-train (~11 h on RTX 5070 Ti)
 clark finetune --config my.yaml --base clark_foundation.pt --episodes 50
 clark plan --config my.yaml --model my_agent.pt --date 2026-06-01
+clark eval --model clark_foundation.pt --n-per-stage 20   # held-out eval (full-year sims, distributions)
 clark serve --model my_agent.pt --facilities-dir clark/data/configs --port 8000
 clark mcp                          # MCP stdio server (Claude Desktop, Cursor, ...)
 clark dashboard                    # Live training metrics in browser
 ```
+
+`clark eval` samples fresh synthetic facilities the model never trained on, simulates a full work-year on each with the in-env production grader, and reports **metric distributions** (median / p10–p90) per curriculum stage — so claims rest on a spread across held-out configs, not one facility, and the stage 1→3 trend reads as a generalization curve. (`tools/clark_eval.py` does paired head-to-head between two checkpoints.)
 
 `clark serve` exposes stateless read routes (`/health`, `/facilities`, `/facility/{id}`, `/capabilities`, `/plan`, `/plan_schedule`, `/plan_outcome`, `/what_if`, `/compare`, `/calendar_check`, `/simulate`) consumed by the ops dashboard and by `clark mcp` (see below). Layout: standard Python package; browse on GitHub.
 

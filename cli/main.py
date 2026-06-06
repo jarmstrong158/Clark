@@ -791,6 +791,22 @@ def build_parser() -> argparse.ArgumentParser:
     p_plan.add_argument("--days", type=int, default=1,
                         help="Number of days to plan ahead (default: 1).")
 
+    # eval (held-out evaluation over synthetic facilities)
+    p_eval = sub.add_parser("eval", help="Evaluate a checkpoint on held-out "
+                                          "synthetic facilities (full-year sim, "
+                                          "production grader, metric distributions).")
+    p_eval.add_argument("--model", default="clark/data/checkpoints/clark_foundation.pt",
+                        help="Path to the checkpoint to evaluate.")
+    p_eval.add_argument("--n-per-stage", type=int, default=10,
+                        help="Held-out facilities sampled per curriculum stage (default: 10).")
+    p_eval.add_argument("--stages", default="1,2,3",
+                        help="Comma-separated curriculum stages to evaluate (default: 1,2,3).")
+    p_eval.add_argument("--seed", type=int, default=0,
+                        help="Base seed for config sampling + sim (reproducible).")
+    p_eval.add_argument("--device", default="cpu", help="torch device (default: cpu).")
+    p_eval.add_argument("--json", default=None,
+                        help="Optional path to also write the full results as JSON.")
+
     # dashboard
     p_dash = sub.add_parser("dashboard", help="Launch the Clark training dashboard.")
     p_dash.add_argument("--log-dir", default="clark/data/logs/pretrain",
@@ -1645,6 +1661,66 @@ def cmd_wizard(args: argparse.Namespace):
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
+def cmd_eval(args: argparse.Namespace):
+    """Held-out evaluation: full-year sims on freshly-sampled synthetic
+    facilities, production grader, metric distributions per stage."""
+    _header()
+    model_path = Path(args.model)
+    if not model_path.exists():
+        _die(f"Checkpoint not found: {model_path}")
+    try:
+        stages = tuple(int(s) for s in str(args.stages).split(",") if s.strip())
+    except ValueError:
+        _die(f"--stages must be comma-separated ints, got {args.stages!r}")
+
+    print(f"Evaluating {model_path.name} — {args.n_per_stage} held-out "
+          f"facilities/stage (stages {','.join(map(str, stages))}), "
+          f"full-year sims + production grader.")
+    print("Every facility is freshly sampled (the model never trained on it), "
+          "so this measures generalization.\n")
+
+    try:
+        from clark.agent.ppo import ClarkAgent
+        from clark.inference.evaluate import evaluate
+        agent = ClarkAgent.load(str(model_path), device=args.device)
+    except Exception as e:
+        _die(f"Failed to load model: {e}")
+
+    def _progress(stage, done, total):
+        end = "\n" if done == total else ""
+        print(f"\r  stage {stage}: {done}/{total} years simulated…", end=end, flush=True)
+
+    res = evaluate(agent, n_per_stage=args.n_per_stage, stages=stages,
+                   base_seed=args.seed, progress=_progress)
+
+    def _row(label, agg):
+        a, ab, f = agg["a_pct"], agg["ab_pct"], agg["f_pct"]
+        sw, cp = agg["ship_win_pct"], agg["completion_pct"]
+        return ("  %-8s| %5.1f | %5.1f [%4.1f-%4.1f] | %5.1f | %6.1f | %6.1f"
+                % (label, a["median"], ab["median"], ab["p10"], ab["p90"],
+                   f["median"], sw["median"], cp["median"]))
+
+    print("\n  Median per metric across held-out facilities; [p10-p90] = spread on A+B.")
+    print("  Stage   |  A%  |  A+B% [p10-p90]  |  F%  | shipwin% |  cmp%")
+    print("  " + "-" * 62)
+    for st in stages:
+        print(_row(f"stage {st}", res["per_stage"][st]))
+    print("  " + "-" * 62)
+    print(_row("overall", res["overall"]))
+
+    if len(stages) > 1:
+        lo, hi = stages[0], stages[-1]
+        drop = (res["per_stage"][lo]["ab_pct"]["median"]
+                - res["per_stage"][hi]["ab_pct"]["median"])
+        print(f"\n  Generalization: A+B median moves {(-drop):+.1f} pts from stage "
+              f"{lo} to stage {hi} (smaller drop = generalizes better to harder configs).")
+
+    if args.json:
+        import json as _json
+        Path(args.json).write_text(_json.dumps(res, indent=2), encoding="utf-8")
+        print(f"\n  Full results written to {args.json}")
+
+
 def main():
     parser = build_parser()
     args = parser.parse_args()
@@ -1660,6 +1736,7 @@ def main():
         "wizard":    cmd_wizard,
         "serve":     cmd_serve,
         "mcp":       cmd_mcp,
+        "eval":      cmd_eval,
     }
 
     fn = dispatch.get(args.command)
