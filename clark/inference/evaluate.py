@@ -115,16 +115,23 @@ def _aggregate(runs: list[dict]) -> dict:
 
 
 def evaluate(agent, n_per_stage: int = 10, stages=(1, 2, 3),
-             base_seed: int = 0, progress=None) -> dict:
+             base_seed: int = 0, progress=None, year_runner=None) -> dict:
     """Run held-out evaluation. For each stage, sample `n_per_stage` fresh
     synthetic facilities, simulate a full year on each, and aggregate metric
     distributions. Returns {"per_stage": {stage: {...}}, "overall": {...},
     "n_per_stage", "stages"}.
 
+    `year_runner(agent, cfg) -> summary` defaults to `run_one_year` (the
+    trained policy). Pass a different runner (e.g.
+    `clark.inference.baseline.run_one_year_baseline`) to evaluate a non-RL
+    scheduler over the *same* sampled facilities — apples-to-apples.
+
     Determinism: config sampling and the sim are seeded per (stage, i) off
     `base_seed`, so the same args reproduce the same facilities + numbers.
     """
     from clark.training.synthetic_gen import generate_random_facility
+
+    runner = year_runner or run_one_year
 
     per_stage = {}
     all_runs = []
@@ -140,7 +147,7 @@ def evaluate(agent, n_per_stage: int = 10, stages=(1, 2, 3),
                 torch.manual_seed(seed)
             except Exception:
                 pass
-            m = summarize_year(run_one_year(agent, cfg))
+            m = summarize_year(runner(agent, cfg))
             stage_runs.append(m)
             all_runs.append(m)
             if progress:

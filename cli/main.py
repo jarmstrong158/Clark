@@ -804,6 +804,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_eval.add_argument("--seed", type=int, default=0,
                         help="Base seed for config sampling + sim (reproducible).")
     p_eval.add_argument("--device", default="cpu", help="torch device (default: cpu).")
+    p_eval.add_argument("--baseline", choices=["greedy"], default=None,
+                        help="Evaluate a non-RL baseline instead of --model "
+                             "(same facilities + grader + masks). 'greedy' = "
+                             "bottleneck-priority heuristic, for Clark-vs-classical "
+                             "comparison.")
     p_eval.add_argument("--json", default=None,
                         help="Optional path to also write the full results as JSON.")
 
@@ -1673,18 +1678,25 @@ def cmd_eval(args: argparse.Namespace):
     except ValueError:
         _die(f"--stages must be comma-separated ints, got {args.stages!r}")
 
-    print(f"Evaluating {model_path.name} — {args.n_per_stage} held-out "
+    from clark.inference.evaluate import evaluate
+    subject = f"baseline '{args.baseline}'" if args.baseline else model_path.name
+    print(f"Evaluating {subject} — {args.n_per_stage} held-out "
           f"facilities/stage (stages {','.join(map(str, stages))}), "
           f"full-year sims + production grader.")
-    print("Every facility is freshly sampled (the model never trained on it), "
-          "so this measures generalization.\n")
+    print("Every facility is freshly sampled (held-out), so this measures "
+          "generalization. Baselines obey the same action masks as the policy.\n")
 
-    try:
-        from clark.agent.ppo import ClarkAgent
-        from clark.inference.evaluate import evaluate
-        agent = ClarkAgent.load(str(model_path), device=args.device)
-    except Exception as e:
-        _die(f"Failed to load model: {e}")
+    year_runner = None
+    if args.baseline == "greedy":
+        from clark.inference.baseline import GreedyScheduler, run_one_year_baseline
+        agent = GreedyScheduler()
+        year_runner = run_one_year_baseline
+    else:
+        try:
+            from clark.agent.ppo import ClarkAgent
+            agent = ClarkAgent.load(str(model_path), device=args.device)
+        except Exception as e:
+            _die(f"Failed to load model: {e}")
 
     def _progress(stage, done, total):
         if sys.stdout.isatty():
@@ -1697,7 +1709,7 @@ def cmd_eval(args: argparse.Namespace):
             print(f"  stage {stage}: {done}/{total} years simulated", flush=True)
 
     res = evaluate(agent, n_per_stage=args.n_per_stage, stages=stages,
-                   base_seed=args.seed, progress=_progress)
+                   base_seed=args.seed, progress=_progress, year_runner=year_runner)
 
     def _row(label, agg):
         a, ab, f = agg["a_pct"], agg["ab_pct"], agg["f_pct"]
