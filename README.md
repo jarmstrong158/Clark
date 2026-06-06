@@ -12,7 +12,7 @@ Clark learns the underlying dynamics of warehouse operations (picking and packin
 
 Where its predecessor [Jack](https://github.com/jarmstrong158/Jack) was a single-facility PPO + LSTM agent operating on a fixed 7-worker, 14-action state vector, Clark is built around a transformer + LSTM hybrid that handles **variable** numbers of workers and tasks. The same model weights generalize across facilities.
 
-> **Status.** Foundation pre-training completed at 15 000 episodes (~11 h on a single RTX 5070 Ti, clean termination, value head stable). The architecture, training loop, fine-tune workflow, config schema, CLI, setup wizard, and operations dashboard are stable. **Trained weights and managed deployments are a commercial offering.** The source is open for review under [PolyForm Noncommercial 1.0.0](LICENSE); for production or commercial use see [Use Clark](#use-clark--commercial-access).
+> **Status.** Foundation pre-training completed at 15 000 episodes (~11 h on a single RTX 5070 Ti, clean termination, value head stable). The architecture, training loop, fine-tune workflow, config schema, CLI, setup wizard, and operations dashboard are stable. **The source and the trained foundation weights are both freely available for noncommercial use** under [PolyForm Noncommercial 1.0.0](LICENSE) — grab `clark_foundation.pt` from the [latest release](https://github.com/jarmstrong158/Clark/releases/latest). Commercial / for-profit production use (or selling services built on Clark) requires a separate agreement — see [Use Clark](#use-clark--commercial-access).
 
 ---
 
@@ -128,6 +128,15 @@ cd Clark
 
 # Install (editable install with all dependencies)
 pip install -e .
+```
+
+### Get the trained foundation weights
+
+Download `clark_foundation.pt` (~216 MB) from the **[latest release](https://github.com/jarmstrong158/Clark/releases/latest)** and place it at `clark/data/checkpoints/clark_foundation.pt`. That's the trained `clark-v2.5` foundation — with it you can `clark serve` / `clark finetune` immediately instead of pre-training from scratch. Free for noncommercial use under [PolyForm NC](LICENSE) (commercial use: see [Use Clark](#use-clark--commercial-access)).
+
+```bash
+# e.g. with the GitHub CLI:
+gh release download --repo jarmstrong158/Clark -p clark_foundation.pt -D clark/data/checkpoints
 ```
 
 ### Set up a facility (the wizard, recommended)
@@ -472,24 +481,23 @@ any config.
 
 ---
 
-Trained foundation weights are **not publicly released**. They are part of the commercial offering (see [Use Clark](#use-clark--commercial-access)). For noncommercial use (research, evaluation, learning) the source is open under [PolyForm NC](LICENSE); you can pre-train your own foundation from scratch (~11 h on a consumer GPU) or train per-facility from a fresh init.
+The **trained foundation weights are publicly available** for noncommercial use — download `clark_foundation.pt` from the [latest release](https://github.com/jarmstrong158/Clark/releases/latest) (~216 MB) and drop it at `clark/data/checkpoints/clark_foundation.pt`. They're released under the same [PolyForm Noncommercial 1.0.0](LICENSE) license as the source: free for research, evaluation, personal, and educational use. **Commercial / for-profit production use requires a separate agreement** (see [Use Clark](#use-clark--commercial-access)). You can also pre-train your own foundation from scratch (~11 h on a consumer GPU) or train per-facility from a fresh init.
 
 ---
 
 ## Use Clark / Commercial access
 
-The **source is open** under [PolyForm Noncommercial 1.0.0](LICENSE). Read, study, audit, run for research / personal / educational use, contribute back.
+Everything you need to **use Clark noncommercially is free and public**, under [PolyForm Noncommercial 1.0.0](LICENSE): the full source, *and* the trained foundation weights (`clark_foundation.pt`, [latest release](https://github.com/jarmstrong158/Clark/releases/latest)). Download the weights, `clark serve` or `clark finetune`, and you're running the real trained model — no pre-training required. Research, evaluation, personal, and educational use: go for it, the license already grants permission.
 
-The **trained foundation checkpoint** (`clark_foundation.pt`) and **production deployments** are commercial:
+**Commercial / for-profit use requires a separate agreement.** That covers running Clark in production for a for-profit operation, or selling a product or service built on it or its derivatives. If that's you, what a commercial arrangement can add:
 
-- **Trained foundation weights.** Skip the ~11 h pre-train; start fine-tuning on your facility in minutes.
-- **Per-facility fine-tune service.** Bring your roster + volume history; we deliver a fine-tuned checkpoint matched to your operation.
-- **Hosted inference / managed deployment.** `clark serve` running with the trained foundation, plus the operations dashboard (or an MCP-host integration via `clark mcp`) for your team.
-- **Operational support and integration.** Facility config authoring (Clark's `wizard` is the on-ramp), WMS integration if needed, ongoing monitoring.
+- **Per-facility fine-tune service.** Bring your roster + volume history; get a checkpoint matched to your operation.
+- **Hosted inference / managed deployment.** `clark serve` + the operations dashboard (or an MCP-host integration via `clark mcp`) run for your team.
+- **Operational support and integration.** Facility config authoring (the `wizard` is the on-ramp), WMS integration, ongoing monitoring.
 
-For commercial access: **open a GitHub Issue** in this repo with the label `commercial-access` and a one-line description of your use case. (A direct contact channel is being set up; the Issue route is the canonical channel until then.)
+For commercial use: **open a GitHub Issue** with the label `commercial-access` and a one-line description of your use case.
 
-> *Why noncommercial?* The model represents real RL engineering effort and the foundation checkpoint is the work-product worth selling. Source-available keeps the project honest, auditable, and useful for the research / learning audience; the noncommercial restriction backs the commercial offering. If your use is genuinely noncommercial (academic, personal, evaluation, journalism) you do not need permission; the license already grants it.
+> *Why this split?* The weights are real RL engineering effort and worth sharing — locking them away only blocked the researchers, students, and tinkerers who'd actually get value from Clark, while protecting a commercial line that a noncommercial license already protects. So the artifact is public for everyone who isn't running it for profit; the for-profit case still routes through an agreement.
 
 ---
 
@@ -519,7 +527,7 @@ The architecture-and-training and infrastructure milestones (variable-shape tran
 
 [PolyForm Noncommercial 1.0.0](LICENSE). Source-available. Read, study, run, modify, and contribute back for any noncommercial purpose. Commercial use (including selling services that use Clark or its derivatives, or running Clark in production for a for-profit operation) requires a separate agreement, see [Use Clark](#use-clark--commercial-access).
 
-Trained model weights, when released, are licensed separately and may have additional terms.
+The trained foundation weights ([latest release](https://github.com/jarmstrong158/Clark/releases/latest)) are released under the **same** PolyForm Noncommercial license as the source — free for noncommercial use, commercial use by separate agreement.
 
 ---
 
