@@ -16,7 +16,7 @@ greedy turns out competitive.
 """
 from __future__ import annotations
 
-_RESTOCK_LOW = 0.5  # treat restock as "needed" below this fill level
+_RESTOCK_PROACTIVE = 0.8  # staff restock once stock dips below this (pre-cliff)
 
 
 class GreedyScheduler:
@@ -31,8 +31,11 @@ class GreedyScheduler:
          the duty is met, management leaves the mask and the worker rejoins
          the floor. Skipping this was the naive v1's fatal hole: an unmet
          management minimum is an automatic F.)
-      2. **Restock coverage** — keep one worker restocking while stock is low,
-         pre-empting the picking-speed cliff.
+      2. **Restock coverage (proactive + scaled)** — staff restock *before*
+         stock hits the picking-speed cliff (below 0.8 fill, not after it's
+         critical), with the number of restockers scaled to the stock deficit
+         and roster size. Under-staffing restock was the v2 hole: stock
+         collapsed → picking crashed → days couldn't finish even on full OT.
       3. **Balance pick vs pack by backlog** — split the remaining workers in
          proportion to (orders waiting to be picked) vs (picked-but-unpacked),
          instead of dog-piling one task. Falls back through the mask if a
@@ -56,27 +59,37 @@ class GreedyScheduler:
 
         queue = day_env.orders_in_queue
         buffer = day_env.orders_picked_not_audited
-        restock_low = (getattr(day_env, "_restock_enabled", False)
-                       and getattr(day_env, "restock_level", 1.0) < _RESTOCK_LOW)
 
         assigned: dict[int, int] = {}
         used: set[int] = set()
 
         def reserve(t):
-            """Put the first available worker who can do task t on it."""
+            """Put the first available worker who can do task t on it.
+            Returns True if one was assigned."""
             if t is None or t >= M:
-                return
+                return False
             for w in range(N):
                 if w not in used and mask[w][t]:
                     assigned[w] = t
                     used.add(w)
-                    return
+                    return True
+            return False
 
         # 1) cover the management duty (mask self-limits once it's met)
         reserve(mgmt)
-        # 2) keep restock going while stock is low
-        if restock_low:
-            reserve(restock)
+        # 2) restock — proactive + scaled. Staff it before stock hits the
+        #    picking-speed cliff (a late, single-worker reaction can't recover
+        #    in time, especially with the 60-min dwell lock). Count scales with
+        #    the deficit below the proactive band and the roster size, capped
+        #    at a quarter of the roster.
+        if restock is not None and getattr(day_env, "_restock_enabled", False):
+            level = getattr(day_env, "restock_level", 1.0)
+            if level < _RESTOCK_PROACTIVE:
+                deficit = _RESTOCK_PROACTIVE - level
+                n_restock = max(1, min(round(N * deficit * 0.4), max(1, N // 4)))
+                for _ in range(n_restock):
+                    if not reserve(restock):
+                        break
 
         # 3) split the rest between pick and pack proportional to the backlog
         remaining = [w for w in range(N) if w not in used]
