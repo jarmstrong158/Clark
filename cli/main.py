@@ -804,11 +804,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_eval.add_argument("--seed", type=int, default=0,
                         help="Base seed for config sampling + sim (reproducible).")
     p_eval.add_argument("--device", default="cpu", help="torch device (default: cpu).")
-    p_eval.add_argument("--baseline", choices=["greedy"], default=None,
+    p_eval.add_argument("--baseline", choices=["heuristic", "greedy"], default=None,
                         help="Evaluate a non-RL baseline instead of --model "
-                             "(same facilities + grader + masks). 'greedy' = "
-                             "bottleneck-priority heuristic, for Clark-vs-classical "
-                             "comparison.")
+                             "(same facilities + grader + masks). 'heuristic' "
+                             "(alias 'greedy') = bottleneck-priority rule-based "
+                             "scheduler, for Clark-vs-classical comparison.")
     p_eval.add_argument("--json", default=None,
                         help="Optional path to also write the full results as JSON.")
 
@@ -1687,7 +1687,7 @@ def cmd_eval(args: argparse.Namespace):
           "generalization. Baselines obey the same action masks as the policy.\n")
 
     year_runner = None
-    if args.baseline == "greedy":
+    if args.baseline in ("heuristic", "greedy"):
         from clark.inference.baseline import GreedyScheduler, run_one_year_baseline
         agent = GreedyScheduler()
         year_runner = run_one_year_baseline

@@ -475,6 +475,26 @@ Clark's design goal: match Jack's per-facility numbers after fine-tuning, while 
 
 Read honestly: the median is strong — A+B ~97%, F essentially zero, and every day's orders ship — and the **p10 of 65% A+B** is the part a single-facility number would hide: a couple of genuinely hard facilities sit in the low tail. That's the point of reporting a distribution. Two things this shows together: the foundation **generalizes** to facilities it never saw, and the cadence work (which cut task-switching in half — see [v2.11](#v211-task-flow-ramp--minimum-dwell-mask--switch-penalty)) **cost nothing on grades**. Reproduce with `clark eval --n-per-stage 20 --stages 3`. This is the broad-distribution complement to the single-facility Jack head-to-head below.
 
+### Benchmarked against a strong heuristic scheduler
+
+A model is only as impressive as the baseline it beats, so Clark is measured against a deliberately *strong* classical scheduler — not a strawman. The **heuristic scheduler** ([`clark/inference/baseline.py`](clark/inference/baseline.py)) is a rule-based dispatcher that runs through the **same action masks, the same in-env production grader, and the same 20 held-out facilities** as Clark; only the decision rule differs. It was iterated under audit (management coverage → proactive restock → balancing against the *bottleneck rate* rather than queue size, since picking runs 2.5× pack speed → aligning the restock target to the grade's 95% fill line) from a naive 29% A+B up to a genuinely competitive policy. Head-to-head on the identical 20 stage-3 facilities:
+
+| Metric (median over 20 held-out facilities) | Heuristic scheduler | **Clark (`clark-v2.5`)** |
+|---|---|---|
+| A + B grade days | 98.3% | 97.5% |
+| Order completion | 100% | 100% |
+| **A grade days (finished without overtime)** | 43.3% | **76.5%** |
+| **F grade days** | 1.7% | **0.5%** |
+| A+B p10 (worst-case tail) | 56.9 | **65.1** |
+
+Read this honestly — it's the most useful comparison in the repo precisely because the baseline is hard to beat:
+
+- **On "does the day ship," they tie.** A+B ~98% and 100% completion for both. A well-engineered heuristic matches the foundation model on raw throughput. That is the honest result, and stating it plainly is the point.
+- **Clark's edge is specific and real: overtime and reliability.** It finishes within regular hours **~33 pp more often** (A-rate 76.5 vs 43.3) — the heuristic hits the same pass/fail grade but *spends overtime to get there*, and OT is paid labor. Clark also has **~3× fewer catastrophic days** and a better worst-case tail. Two independent attempts to close the overtime gap with reactive heuristic tweaks failed, which is the tell: closing it needs the *foresight* the policy learned, and a tick-by-tick rule structurally can't add it cheaply.
+- **The heuristic's constants are hand-fit to this sim's distribution** (the 2.5× pick ratio, the 95% restock line, the dwell window). Clark's pitch is generalizing across arbitrary facilities with **zero per-site tuning** — which the held-out spread above demonstrates and the heuristic can't claim.
+
+We also built a **constraint-programming completion bound** with Google OR-Tools CP-SAT ([`clark/inference/optimizer.py`](clark/inference/optimizer.py)) — a perfect-foresight optimal planner. Building it faithfully and auditing the grader produced a sharper finding: the A-grade is **multi-factor** (on a representative facility the non-A days split overtime / restock-fill<95% / incomplete), so a pure order-flow optimizer can bound *completion* but not the full A-grade. What it bounds cleanly answers the strategic question anyway — **~100% of days are completion-feasible, so throughput is never the binding constraint.** The entire Clark-vs-classical difference lives in jointly satisfying the *soft* quality objectives (overtime checkpoint, restock %, management, per-task), exactly the multi-objective trade-off a learned policy is meant to handle better than a fixed rule. Full write-up of both — the heuristic audit and the bound — in [ENGINEERING_NOTES §9–§10](docs/ENGINEERING_NOTES.md). Reproduce with `clark eval --baseline heuristic --stages 3 --n-per-stage 20 --seed 0`.
+
 ### Validated on Jack's facility
 
 Real measurement, not promise. Jack's hardcoded 7-worker setup
@@ -542,7 +562,7 @@ Clark is a successor to Jack, not a wrapper around it. The two share design DNA 
 
 ## Changelog
 
-The architecture-and-training and infrastructure milestones (variable-shape transformer, IPPO-style per-worker ratio, symlog value targets, completion-dominant reward, foundation pre-train completion, Validated-on-Jack head-to-head, the wizard's Quick/Advanced split, the wizard's 50-episode default, the operations dashboard, `clark mcp` MCP-host integration, v2.5 multi-gate filler mask, v2.6 restock-proactivity 5th gate, v2.7 per-OT-hour reward bump, v2.8 management-backlog observation + `arch_version` bump to `clark-v2.5`, v2.10 per-management-hour bump (A+B = 88% on N=49), v2.11 task-flow ramp + minimum-dwell mask + switch penalty (kills ~29-switch/worker/day thrashing structurally), serve-temperature finding (argmax catastrophically underperforms; deploy at tau ≈ 1.0), ...) live in [CHANGELOG.md](CHANGELOG.md).
+The architecture-and-training and infrastructure milestones (variable-shape transformer, IPPO-style per-worker ratio, symlog value targets, completion-dominant reward, foundation pre-train completion, Validated-on-Jack head-to-head, the wizard's Quick/Advanced split, the wizard's 50-episode default, the operations dashboard, `clark mcp` MCP-host integration, v2.5 multi-gate filler mask, v2.6 restock-proactivity 5th gate, v2.7 per-OT-hour reward bump, v2.8 management-backlog observation + `arch_version` bump to `clark-v2.5`, v2.10 per-management-hour bump (A+B = 88% on N=49), v2.11 task-flow ramp + minimum-dwell mask + switch penalty (kills ~29-switch/worker/day thrashing structurally), serve-temperature finding (argmax catastrophically underperforms; deploy at tau ≈ 1.0), the heuristic-scheduler benchmark (a strong rule-based baseline that ties Clark on A+B/completion; Clark wins on overtime-avoidance + robustness) and the CP-SAT constraint-programming completion bound (throughput is never the binding constraint), ...) live in [CHANGELOG.md](CHANGELOG.md).
 
 For the transferable lessons behind these — structural masks vs reward shaping, measuring distributions over point estimates, inference-temperature, and a few good war stories where the data overruled a confident plan — see [docs/ENGINEERING_NOTES.md](docs/ENGINEERING_NOTES.md).
 
