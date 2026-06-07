@@ -2,17 +2,22 @@
 
 Clark's whole premise is that a *learned* policy beats classical scheduling
 on this problem. You can't claim that without a baseline. `GreedyScheduler`
-is the cheap one: a transparent bottleneck-priority heuristic. It plugs into
-the same evaluation path as the trained agent (`clark eval --baseline
-greedy`), runs the same held-out facilities through the same in-env
+is a **deliberately strong** bottleneck-priority heuristic — iterated under
+audit (v1 naive → v5; see docs/ENGINEERING_NOTES.md §9) until it stopped
+losing to its own structure, not a strawman. It plugs into the same
+evaluation path as the trained agent (`clark eval --baseline heuristic`,
+alias `greedy`), runs the same held-out facilities through the same in-env
 production grader, and crucially **obeys the exact same action masks** Clark
 does — eligibility, OT/EOD, daily-hours caps, the minimum-dwell lock. So the
 comparison is apples-to-apples: same constraints, same scoring, only the
 decision rule differs.
 
-This is deliberately simple (start cheap — see docs/ENGINEERING_NOTES.md). A
-strong constraint-program / CP-SAT baseline is the natural next rung if the
-greedy turns out competitive.
+It turned out competitive: on 20 held-out stage-3 facilities this heuristic
+*ties* Clark on A+B (98.3 vs 97.5) and completion (100%); Clark's edge is
+overtime avoidance, tail robustness, and zero-per-facility-tuning. The
+constraint-program rung that "if competitive" anticipated was then built as a
+CP-SAT *completion bound* (clark/inference/optimizer.py, ENGINEERING_NOTES
+§10) — it showed throughput is never the binding constraint.
 """
 from __future__ import annotations
 

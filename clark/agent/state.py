@@ -246,7 +246,7 @@ class StateBuilder:
 
     def _build_env_feats(self, env: "FacilityEnv") -> np.ndarray:
         """
-        17 global environment features (mirrors _get_state() ENV block in FacilityEnv).
+        18 global environment features (mirrors _get_state() ENV block in FacilityEnv).
 
           0   time_of_day_norm        (current_hour - DAY_START) / shift_span
           1   orders_in_queue_norm    orders_in_queue / total_orders

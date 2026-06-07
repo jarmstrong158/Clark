@@ -5,7 +5,7 @@ Key differences from Jack's LSTM-only PPO:
   - Config-agnostic model: same weights work across different facility configs
   - Two action heads: task assignment (N, M) and hustle (N, 2), both variable-dim
   - RolloutBuffer stores structured state dicts instead of flat numpy arrays
-  - TBPTT with chunk_size=16 for gradient truncation through the LSTM
+  - TBPTT with chunk_size=64 for gradient truncation through the LSTM
   - evaluate_sequence replays stored state_dicts step-by-step (can't vectorize
     across steps like Jack because N/M may vary, though within one episode N/M
     are constant)
