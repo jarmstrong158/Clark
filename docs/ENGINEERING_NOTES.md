@@ -154,6 +154,50 @@ built the baseline to win, not to lose. (See
 [baseline.py](../clark/inference/baseline.py); reproduce with
 `clark eval --baseline greedy --stages 3 --n-per-stage 20 --seed 0`.)
 
+## 10. The CP-SAT bound: when the model you built answers a different question
+
+To check whether Clark's A-rate (OT-free days) was near optimal, I built a
+CP-SAT planner (`clark/inference/optimizer.py`) — perfect foresight, optimal
+allocation, an optimistic relaxation that should *upper-bound* any online
+policy. Getting it faithful was a tour of the sim's real mechanics, each
+revealed by the model contradicting ground truth:
+
+- **0% feasible (v1):** I gated worker presence on `shift_start/shift_end`.
+  The sim gates on `is_absent` — the whole roster is on the floor all day. My
+  model sent everyone home at 13:00.
+- **Still 0% (v2):** I treated `eod` as a hard wall. It isn't — the day runs
+  to the **OT hard stop**, and late arrivals shipped after eod cost no OT.
+- **Off by ~8 orders (v3):** integer whole-worker counts can't land on the
+  arrival cap when picking runs 6.75 orders/worker-tick. Modelling labour as
+  **centi-workers** (fractional, like the sim's `work_carry`) fixed it.
+
+Each fix made the bound *more* faithful — and then the data delivered the
+real lesson. A "B" day in the trace had **`ot_hours = 0`**. Auditing the
+grader: on a representative facility the non-A days split **overtime 39 /
+restock-fill-under-95% 35 / incomplete 6**. The A-grade is **multi-factor**.
+An order-flow optimiser — however carefully built — can model the OT
+dimension but not restock dynamics, management backlog, or per-task demerits,
+so it is **not** a faithful "optimal A-rate" ceiling, and reporting one would
+have been a confident lie. The honest move was to *scope it down*: report only
+what it bounds soundly.
+
+What it bounds soundly is **completion**, and that turns out to be the
+valuable answer: across held-out days, ~**100%** are completion-feasible
+(median unshippable ≈ 0.1%). **Throughput is never the binding constraint.**
+So the entire Clark-vs-classical gap lives not in raw scheduling capacity but
+in jointly satisfying the *soft* quality constraints — the OT checkpoint,
+restock %, management, per-task caps — which is exactly the multi-objective
+trade-off a learned policy is meant to handle better than a fixed rule. The
+"failed" bound reframed the whole question: stop asking "can it schedule
+enough?" (always yes) and start asking "can it balance four soft objectives at
+once?" (the real game).
+
+Meta-lesson: when a model you trust keeps disagreeing with ground truth, each
+disagreement is free knowledge about the system — but once it's faithful,
+believe what it tells you even when that's "you built the wrong tool for this
+question." A bound that honestly answers a narrower question beats one that
+dishonestly answers the question you wanted.
+
 ---
 
 *Throughout: the project's value came less from any single result than from
