@@ -71,7 +71,9 @@ Clark is benchmarked against a deliberately *strong* rule-based **heuristic sche
 | **F days** | 1.7% | **0.5%** |
 | A+B worst-case (p10) | 56.9 | **65.1** |
 
-A well-engineered heuristic **ties Clark on throughput** (A+B, completion). Clark's edge is specific: it finishes **without overtime ~33 pp more often** (less paid OT), has **~3× fewer catastrophic days**, and generalizes across facilities with **zero per-site tuning** (the heuristic's constants are hand-fit to one distribution). A separate CP-SAT (constraint-programming) bound confirms throughput is never the binding constraint — the difference is in balancing the *soft* quality objectives. Write-up: [ENGINEERING_NOTES §9–§10](https://github.com/jarmstrong158/Clark/blob/master/docs/ENGINEERING_NOTES.md).
+A well-engineered heuristic **ties Clark on throughput** (A+B, completion). Clark's edge is specific: it finishes **without overtime ~33 pp more often** (less paid OT), has **~3× fewer catastrophic days**, and generalizes across facilities with **zero per-site tuning** (the heuristic's constants are hand-fit to one distribution). A separate CP-SAT (constraint-programming) bound confirms throughput is never the binding constraint — the difference is in balancing the *soft* quality objectives.
+
+Is an 18M-param model a heavy hammer for a problem a heuristic ties on the headline? Yes — and a deliberate one. The tie is on *aggregate pass/fail*; the heuristic buys it by spending overtime and by running on hand-fit per-facility constants. Clark hits the same pass rate *without* the overtime, blows up ~3× less, and ports to unseen facilities with no re-tuning. For one well-understood site, use the heuristic. The foundation model earns its weight when you need lower operating cost + higher reliability + portability across many sites at once — the axes the headline hides. Write-up: [ENGINEERING_NOTES §9–§10](https://github.com/jarmstrong158/Clark/blob/master/docs/ENGINEERING_NOTES.md).
 
 ## Limitations
 
