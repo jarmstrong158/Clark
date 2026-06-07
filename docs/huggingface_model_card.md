@@ -55,6 +55,24 @@ Validated on the predecessor "[Jack](https://github.com/jarmstrong158/Jack)" sin
 
 v2.11 additionally makes the per-worker schedule realistic — task switching drops from ~29/worker/day (a flip every ~10 min) to ~14 (every ~38 min) via a structural minimum-dwell mask, with grades held (A+B ~90%, 100% completion on the validation facility). Full methodology, the honest F-rate read, and the v2.5→v2.11 iteration log are in the [repo README](https://github.com/jarmstrong158/Clark#readme) and [CHANGELOG](https://github.com/jarmstrong158/Clark/blob/master/CHANGELOG.md).
 
+### Held-out generalization
+
+On **20 freshly-sampled stage-3 facilities the model never trained on** (hardest tier — up to 50 workers, deliberate-overload days), each a full simulated work-year scored by the in-env production grader: median **A+B 97.5%** (p10–p90 65.1–100), **A 76.5%**, **F 0.5%**, order completion **100%**. Reproduce with `clark eval --n-per-stage 20 --stages 3`.
+
+### Vs. a strong classical baseline (honest comparison)
+
+Clark is benchmarked against a deliberately *strong* rule-based **heuristic scheduler** (bottleneck-aware dispatching, same action masks, same grader, same 20 held-out facilities). The honest result:
+
+| Metric (median, 20 held-out facilities) | Heuristic scheduler | **Clark** |
+|---|---|---|
+| A + B grade days | 98.3% | 97.5% |
+| Order completion | 100% | 100% |
+| **A days (no overtime)** | 43.3% | **76.5%** |
+| **F days** | 1.7% | **0.5%** |
+| A+B worst-case (p10) | 56.9 | **65.1** |
+
+A well-engineered heuristic **ties Clark on throughput** (A+B, completion). Clark's edge is specific: it finishes **without overtime ~33 pp more often** (less paid OT), has **~3× fewer catastrophic days**, and generalizes across facilities with **zero per-site tuning** (the heuristic's constants are hand-fit to one distribution). A separate CP-SAT (constraint-programming) bound confirms throughput is never the binding constraint — the difference is in balancing the *soft* quality objectives. Write-up: [ENGINEERING_NOTES §9–§10](https://github.com/jarmstrong158/Clark/blob/master/docs/ENGINEERING_NOTES.md).
+
 ## Limitations
 
 - Numbers above are on synthetic facilities + the Jack-translated config; real facilities will vary, and a per-facility fine-tune is recommended.
