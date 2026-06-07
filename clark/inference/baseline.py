@@ -17,6 +17,10 @@ greedy turns out competitive.
 from __future__ import annotations
 
 _RESTOCK_PROACTIVE = 0.8  # staff restock once stock dips below this (pre-cliff)
+_BUFFER_HEALTHY_FLOOR = 8  # buffer above max(this, roster) -> only trickle pickers
+_PICK_TRICKLE_DIV = 6      # healthy-buffer pickers ≈ remaining // this
+_PICK_REFILL_FRAC = 0.30   # buffer thinning -> ramp pickers to this frac of remaining
+_HUSTLE_CRUNCH_FRAC = 0.6  # hustle only when (queue+buffer) exceeds this * roster
 
 
 class GreedyScheduler:
@@ -36,13 +40,21 @@ class GreedyScheduler:
          critical), with the number of restockers scaled to the stock deficit
          and roster size. Under-staffing restock was the v2 hole: stock
          collapsed → picking crashed → days couldn't finish even on full OT.
-      3. **Balance pick vs pack by backlog** — split the remaining workers in
-         proportion to (orders waiting to be picked) vs (picked-but-unpacked),
-         instead of dog-piling one task. Falls back through the mask if a
-         worker can't do the targeted task; idle only as a last resort.
+      3. **Pack-bottleneck-aware pick/pack split** — picking runs at ~2.5×
+         pack speed (PICK_MULTIPLIER vs pack's 1.0), and the morning-pick
+         round front-loads the buffer, so **pack is the perennial constraint**
+         and daily throughput ≈ pack capacity. Balancing by *backlog size*
+         (v3) over-chased the big WIP buffer with packers while still missing
+         days. Instead: keep only enough pickers to keep the buffer non-empty
+         (trickle when it's healthy, ramp when it's thinning), and throw
+         everyone else at pack to drain WIP. Audited A/B: A+B 78→90, F 21→9.
+      4. **Concentrate hustle on the crunch** — the daily hustle budget is
+         capped, so hustling whenever *any* backlog exists (v3) burned it out
+         early and left nothing for the afternoon pack crunch. Hustle only
+         when the pile (queue+buffer) is large relative to the roster.
 
-    No learning, no lookahead — but no obvious holes. This is the bar Clark
-    has to clear to justify the RL.
+    No learning, no lookahead — but no obvious holes, and grounded in the
+    sim's actual bottleneck. This is the bar Clark has to clear.
     """
 
     name = "greedy"
@@ -91,14 +103,24 @@ class GreedyScheduler:
                     if not reserve(restock):
                         break
 
-        # 3) split the rest between pick and pack proportional to the backlog
+        # 3) pack-bottleneck-aware split of the rest. Pack is the constraint
+        #    (2.5x slower than pick), so size pickers only to keep the buffer
+        #    fed; everyone else packs to drain WIP.
         remaining = [w for w in range(N) if w not in used]
-        total = queue + buffer
-        pack_target = round(len(remaining) * (buffer / total)) if total > 0 else 0
-        packers = 0
+        R = len(remaining)
+        if queue <= 0:                       # nothing left to pick -> all pack
+            target_pick = 0
+        elif buffer <= 0:                    # buffer empty -> refill hard
+            target_pick = R
+        elif buffer > max(_BUFFER_HEALTHY_FLOOR, R):   # healthy buffer -> trickle
+            target_pick = max(1, R // _PICK_TRICKLE_DIV)
+        else:                                # buffer thinning -> ramp pickers
+            target_pick = max(1, round(R * _PICK_REFILL_FRAC))
+
+        pickers = 0
         for w in remaining:
-            want = pack if packers < pack_target else pick
-            alt = pick if want == pack else pack
+            want = pick if pickers < target_pick else pack
+            alt = pack if want == pick else pick
             if want is not None and want < M and mask[w][want]:
                 assigned[w] = want
             elif alt is not None and alt < M and mask[w][alt]:
@@ -106,12 +128,13 @@ class GreedyScheduler:
             else:
                 vi = [j for j in range(M) if mask[w][j]]
                 assigned[w] = vi[0] if vi else idle
-            if assigned[w] == pack:
-                packers += 1
+            if assigned[w] == pick:
+                pickers += 1
 
         task_actions = [assigned.get(w, idle) for w in range(N)]
-        under_load = total > 0
-        hustle_actions = [bool(under_load and hmask[w][1]) for w in range(N)]
+        # 4) concentrate the capped hustle budget on the crunch
+        crunch = (queue + buffer) > N * _HUSTLE_CRUNCH_FRAC
+        hustle_actions = [bool(crunch and hmask[w][1]) for w in range(N)]
         return task_actions, hustle_actions
 
 

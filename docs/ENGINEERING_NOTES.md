@@ -110,6 +110,50 @@ launch, not after a long run) is what cracked it. Two lessons: detach
 child processes you want to outlive the parent, and never assume a
 cross-platform call means the same thing on every platform.
 
+## 9. A baseline you didn't try to break isn't a baseline
+
+The whole point of Clark is that a *learned* policy beats classical
+scheduling — a claim that's worthless without a real baseline. The first
+greedy was naive (no management coverage) and scored **A+B 29%**; it would
+have been easy, and dishonest, to stop there and say "RL crushes classical."
+
+Auditing the greedy instead of defending it is what produced the real story:
+
+- **v1 → v2:** add management coverage (an unmet management minimum is an
+  auto-F). A+B 29 → ~55.
+- **v2 → v3:** staff restock *proactively and scaled to the deficit*, before
+  stock hits the picking-speed cliff a single late restocker can't recover.
+  A+B 55 → 93.
+- **v3 → v4:** the decisive one — **balance against the bottleneck rate, not
+  the queue size.** v3 split pick/pack proportional to *backlog*, chasing a
+  giant work-in-progress buffer with packers. But picking runs **2.5×** pack
+  speed (`PICK_MULTIPLIER` vs pack's 1.0) and the morning-pick round
+  front-loads the buffer, so **pack is the perennial constraint** and daily
+  throughput ≈ pack capacity. The fat buffer was a *symptom*, not the
+  problem. Fix: keep only enough pickers to keep the buffer non-empty, throw
+  everyone else at pack, and spend the **capped hustle budget on the crunch**
+  instead of dribbling it whenever any backlog exists. A+B 93 → **98** on the
+  same 20 held-out facilities, F 6.3 → 1.9.
+
+The lesson is classic theory-of-constraints / flow-shop, and it's the kind of
+structural fact a reactive rule misses until you **instrument it** — a
+per-tick audit (workers-per-task, buffer trajectory, hustle rate, split by
+day outcome) is what exposed that the greedy was over-serving the non-
+bottleneck stage. "Go measure it" beat three rounds of plausible guessing.
+
+**The honest result this produced:** a properly-built classical greedy
+reaches **A+B 98.1%** — statistically indistinguishable from Clark's 97.5% —
+at 100% order completion. So the foundation model does *not* win on the
+headline metric. Where it still earns its keep is narrow and specific:
+**(1) overtime avoidance** (A-rate 76.5% vs 46.5% — Clark finishes within
+regular hours where the greedy leans on OT to hit the same A+B), and
+**(2) worst-case robustness** (F 0.5% vs 1.9%, A+B p10 65 vs 55 — it degrades
+more gracefully on the hardest configs). That is a far more credible and
+useful claim than "RL crushes classical," and we only have it because we
+built the baseline to win, not to lose. (See
+[baseline.py](../clark/inference/baseline.py); reproduce with
+`clark eval --baseline greedy --stages 3 --n-per-stage 20 --seed 0`.)
+
 ---
 
 *Throughout: the project's value came less from any single result than from

@@ -1,6 +1,7 @@
-"""GreedyScheduler (fair v2) decision logic: management coverage, restock
-coverage, and backlog-proportional pick/pack balance — all while respecting
-the action mask. Fast unit tests with a fake day_env (no simulation)."""
+"""GreedyScheduler decision logic: management coverage, proactive restock,
+pack-bottleneck-aware pick/pack split, and crunch-concentrated hustle — all
+while respecting the action mask. Fast unit tests with a fake day_env (no
+simulation)."""
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -38,16 +39,28 @@ def test_reserves_one_worker_for_management():
     assert ta.count(T2I["management"]) == 1, "exactly one worker should cover management"
 
 
-def test_balances_pick_pack_by_backlog():
+def test_packs_most_when_buffer_healthy():
+    # pack is the bottleneck (2.5x pick): with a healthy buffer, only trickle
+    # pickers (keep the buffer fed), throw everyone else at pack to drain WIP.
     g = GreedyScheduler()
-    env = _env(queue=10, buffer=30)             # buffer 3x queue -> mostly packers
-    # pick+pack only (mgmt/restock masked out) to isolate the balance logic
+    env = _env(queue=10, buffer=50)             # healthy buffer (> roster)
     pp = [False, True, True, False, False]
-    ta, _ = g.act(env, _mask([pp] * 4), _hmask(4))
-    assert ta.count(T2I["pack"]) == 3 and ta.count(T2I["pick"]) == 1
+    ta, _ = g.act(env, _mask([pp] * 8), _hmask(8))
+    assert ta.count(T2I["pick"]) == 1 and ta.count(T2I["pack"]) == 7
+
+
+def test_refills_pickers_when_buffer_thinning():
+    # buffer thin (below max(floor, roster)) but queue waiting -> ramp pickers
+    # so packers don't starve.
+    g = GreedyScheduler()
+    env = _env(queue=20, buffer=3)
+    pp = [False, True, True, False, False]
+    ta, _ = g.act(env, _mask([pp] * 10), _hmask(10))
+    assert ta.count(T2I["pick"]) == 3 and ta.count(T2I["pack"]) == 7
 
 
 def test_no_packers_when_buffer_empty():
+    # buffer empty -> refill hard: everyone picks (packers would only starve).
     g = GreedyScheduler()
     env = _env(queue=12, buffer=0)
     pp = [False, True, True, False, False]
@@ -87,3 +100,15 @@ def test_no_hustle_without_backlog():
     env = _env(queue=0, buffer=0)
     _, ha = g.act(env, _mask([[False, True, True, True, True]]), _hmask(1))
     assert ha[0] is False
+
+
+def test_hustle_concentrated_on_crunch():
+    # capped hustle budget is spent only when the pile is large vs the roster.
+    g = GreedyScheduler()
+    pp = [False, True, True, False, False]
+    # small pile (1) across a 10-worker roster -> below crunch threshold (6)
+    _, ha_small = g.act(_env(queue=1, buffer=0), _mask([pp] * 10), _hmask(10))
+    assert not any(ha_small)
+    # big pile (40) -> crunch -> hustle the (hustle-eligible) roster
+    _, ha_big = g.act(_env(queue=20, buffer=20), _mask([pp] * 10), _hmask(10))
+    assert all(ha_big)
