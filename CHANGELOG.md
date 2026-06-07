@@ -60,7 +60,7 @@ Major shipped items. For day-to-day commit history use `git log`.
 - **Wizard `--episodes` default lowered 500 → 50** (the Jack-validation floor; ~3.3 h on a consumer GPU vs the old ~36 h). CLI default stays 500 for backwards compatibility.
 - **Foundation pre-training run completed** at episode 15 000 / 15 000, clean termination, value head stable.
 - **Validated on Jack's facility** — Clark foundation + 50 fine-tune episodes beats Jack's failure rate and A+B share on Jack's exact config (~0.2 sim years vs Jack's ~9.4). See README's *Results* section.
-- **Trained foundation weights** — *commercial, not publicly released by design* (see [Use Clark](README.md#use-clark--commercial-access)).
+- **Trained foundation weights publicly released** under [PolyForm Noncommercial 1.0.0](LICENSE) — free for research / evaluation / personal / educational use. `clark_foundation.pt` is on the [GitHub release](https://github.com/jarmstrong158/Clark/releases/latest) and [Hugging Face](https://huggingface.co/Roflimjonny/clark-foundation). Commercial / for-profit production use requires a separate agreement (see [Use Clark](README.md#use-clark--commercial-access)). *(Earlier in the project the weights were held back as commercial-only; that was reversed — locking them away only blocked the noncommercial users who'd benefit, while the license already protects the commercial line.)*
 
 ## Facility controls & operator UX
 

@@ -132,8 +132,16 @@ Auditing the greedy instead of defending it is what produced the real story:
   throughput ≈ pack capacity. The fat buffer was a *symptom*, not the
   problem. Fix: keep only enough pickers to keep the buffer non-empty, throw
   everyone else at pack, and spend the **capped hustle budget on the crunch**
-  instead of dribbling it whenever any backlog exists. A+B 93 → **98** on the
-  same 20 held-out facilities, F 6.3 → 1.9.
+  instead of dribbling it whenever any backlog exists. A+B 93 → **98.1** on
+  the same 20 held-out facilities, F 6.3 → 1.9, A-rate → 46.5.
+- **v4 → v5:** the audit (via the CP-SAT `grade_reasons`, §10) showed ~half
+  the *non-overtime* A-losses were restock-fill-under-95% demerits, and the
+  greedy was targeting only 80% stock — parked inside the penalty band.
+  Raising the restock target to the grade's 95% line nearly eliminated that
+  demerit. Net on the 20 facilities: A+B 98.1 → **98.3**, F 1.9 → **1.7**,
+  p10 55 → 57 — but A-rate 46.5 → **43.3** (holding 95% stock costs some
+  order-throughput labour → a few A's become OT B's). A deliberate trade of
+  the OT axis for fewer failures + better tail; v5 is the shipped baseline.
 
 The lesson is classic theory-of-constraints / flow-shop, and it's the kind of
 structural fact a reactive rule misses until you **instrument it** — a
@@ -141,18 +149,18 @@ per-tick audit (workers-per-task, buffer trajectory, hustle rate, split by
 day outcome) is what exposed that the greedy was over-serving the non-
 bottleneck stage. "Go measure it" beat three rounds of plausible guessing.
 
-**The honest result this produced:** a properly-built classical greedy
-reaches **A+B 98.1%** — statistically indistinguishable from Clark's 97.5% —
-at 100% order completion. So the foundation model does *not* win on the
-headline metric. Where it still earns its keep is narrow and specific:
-**(1) overtime avoidance** (A-rate 76.5% vs 46.5% — Clark finishes within
-regular hours where the greedy leans on OT to hit the same A+B), and
-**(2) worst-case robustness** (F 0.5% vs 1.9%, A+B p10 65 vs 55 — it degrades
+**The honest result this produced:** the shipped (v5) heuristic reaches
+**A+B 98.3%** — statistically indistinguishable from Clark's 97.5% — at 100%
+order completion. So the foundation model does *not* win on the headline
+metric. Where it still earns its keep is narrow and specific:
+**(1) overtime avoidance** (A-rate 76.5% vs 43.3% — Clark finishes within
+regular hours where the heuristic leans on OT to hit the same A+B), and
+**(2) worst-case robustness** (F 0.5% vs 1.7%, A+B p10 65 vs 57 — it degrades
 more gracefully on the hardest configs). That is a far more credible and
 useful claim than "RL crushes classical," and we only have it because we
 built the baseline to win, not to lose. (See
 [baseline.py](../clark/inference/baseline.py); reproduce with
-`clark eval --baseline greedy --stages 3 --n-per-stage 20 --seed 0`.)
+`clark eval --baseline heuristic --stages 3 --n-per-stage 20 --seed 0`.)
 
 ## 10. The CP-SAT bound: when the model you built answers a different question
 
