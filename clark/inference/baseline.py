@@ -20,18 +20,26 @@ _RESTOCK_LOW = 0.5  # treat restock as "needed" below this fill level
 
 
 class GreedyScheduler:
-    """Per-tick bottleneck-priority rule. Each worker takes the highest-
-    priority task that's *valid for them this tick* (per the action mask):
+    """A *competent* (not naive) priority-rule scheduler — a fair classical
+    baseline. Each tick it allocates the roster the way a sensible manager
+    would, respecting the action mask (so eligibility, caps, dwell, OT all
+    still bind):
 
-      1. pack   — if there are picked-but-unpacked orders (clear the buffer → ship)
-      2. pick   — if there are orders waiting in the queue
-      3. restock — if stock is below the low threshold
-      4. management / any remaining valid task
-      5. idle (only if nothing else is valid)
+      1. **Management coverage** — keep one eligible worker on management
+         whenever the duty is still owed. (The mask only *offers* management
+         while it's under the daily requirement, so this self-limits — once
+         the duty is met, management leaves the mask and the worker rejoins
+         the floor. Skipping this was the naive v1's fatal hole: an unmet
+         management minimum is an automatic F.)
+      2. **Restock coverage** — keep one worker restocking while stock is low,
+         pre-empting the picking-speed cliff.
+      3. **Balance pick vs pack by backlog** — split the remaining workers in
+         proportion to (orders waiting to be picked) vs (picked-but-unpacked),
+         instead of dog-piling one task. Falls back through the mask if a
+         worker can't do the targeted task; idle only as a last resort.
 
-    No learning, no lookahead — a manager's "work the current bottleneck"
-    reflex. The mask does the constraint enforcement, so this never violates
-    eligibility, caps, dwell, or OT rules.
+    No learning, no lookahead — but no obvious holes. This is the bar Clark
+    has to clear to justify the RL.
     """
 
     name = "greedy"
@@ -51,36 +59,45 @@ class GreedyScheduler:
         restock_low = (getattr(day_env, "_restock_enabled", False)
                        and getattr(day_env, "restock_level", 1.0) < _RESTOCK_LOW)
 
-        # State-dependent task priority (high → low).
-        prio: list[int] = []
-        def _add(t):
-            if t is not None and t not in prio:
-                prio.append(t)
-        if buffer > 0:
-            _add(pack)
-        if queue > 0:
-            _add(pick)
+        assigned: dict[int, int] = {}
+        used: set[int] = set()
+
+        def reserve(t):
+            """Put the first available worker who can do task t on it."""
+            if t is None or t >= M:
+                return
+            for w in range(N):
+                if w not in used and mask[w][t]:
+                    assigned[w] = t
+                    used.add(w)
+                    return
+
+        # 1) cover the management duty (mask self-limits once it's met)
+        reserve(mgmt)
+        # 2) keep restock going while stock is low
         if restock_low:
-            _add(restock)
-        # fallbacks so a worker always has a sensible default
-        for t in (pick, pack, restock, mgmt):
-            _add(t)
+            reserve(restock)
 
-        task_actions = []
-        for w in range(N):
-            valid = mask[w]
-            chosen = None
-            for t in prio:
-                if t is not None and t < M and valid[t]:
-                    chosen = t
-                    break
-            if chosen is None:  # nothing prioritized is valid → first valid, else idle
-                vi = [j for j in range(M) if valid[j]]
-                chosen = vi[0] if vi else idle
-            task_actions.append(chosen)
+        # 3) split the rest between pick and pack proportional to the backlog
+        remaining = [w for w in range(N) if w not in used]
+        total = queue + buffer
+        pack_target = round(len(remaining) * (buffer / total)) if total > 0 else 0
+        packers = 0
+        for w in remaining:
+            want = pack if packers < pack_target else pick
+            alt = pick if want == pack else pack
+            if want is not None and want < M and mask[w][want]:
+                assigned[w] = want
+            elif alt is not None and alt < M and mask[w][alt]:
+                assigned[w] = alt
+            else:
+                vi = [j for j in range(M) if mask[w][j]]
+                assigned[w] = vi[0] if vi else idle
+            if assigned[w] == pack:
+                packers += 1
 
-        # Hustle when there's real backlog and the worker is able to.
-        under_load = (queue + buffer) > 0
+        task_actions = [assigned.get(w, idle) for w in range(N)]
+        under_load = total > 0
         hustle_actions = [bool(under_load and hmask[w][1]) for w in range(N)]
         return task_actions, hustle_actions
 
