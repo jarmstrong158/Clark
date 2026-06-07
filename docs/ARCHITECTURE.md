@@ -295,8 +295,36 @@ These were arrived at through a sequenced, attribution-disciplined debugging arc
 | `test_schema.py` | `validate()` error/warning contract + YAML round-trip |
 | `test_synthetic_gen.py` | every generated config validates; volume never exceeds the OT-rescue ceiling; no inverted ranges |
 | `test_env_smoke.py` | full-day reset+step loop stays finite and terminates |
+| `test_baseline.py` | heuristic-scheduler invariants (management coverage, bottleneck-aware pick/pack split, crunch-only hustle) |
+| `test_optimizer.py` | CP-SAT completion bound (ample capacity → feasible; starved roster → infeasible) |
 
 The synthetic-gen tests have already caught one latent crash (an inverted volume range that would have killed a stage-3 run mid-flight) before it reached training.
+
+---
+
+## Baselines and evaluation
+
+A learned policy's claim is only as strong as the baseline it's measured against, so two non-RL reference points are maintained alongside the model, both run through the **same action masks, the same in-env production grader, and the same held-out facilities** as Clark (`clark eval`).
+
+### Heuristic scheduler ([`clark/inference/baseline.py`](../clark/inference/baseline.py))
+
+A deliberately *strong* rule-based dispatcher (not a strawman). Per tick it: (1) covers the management duty, (2) staffs restock proactively, scaled to the stock deficit, with the target tracking the grade's 95% fill line, (3) splits the rest **by the bottleneck rate** — picking runs at `PICK_MULTIPLIER_MAIN` (2.5×) pack speed, so pack is the perennial constraint; keep just enough pickers to feed the buffer and throw everyone else at pack, and (4) spends the capped hustle budget only on the crunch. Iterated under audit from a naive 29% A+B to a competitive policy. Run via `clark eval --baseline heuristic`.
+
+### CP-SAT completion bound ([`clark/inference/optimizer.py`](../clark/inference/optimizer.py))
+
+A perfect-foresight constraint-programming planner (Google OR-Tools CP-SAT). Models the order pipeline faithfully (flow precedence against the real arrival schedule, `is_absent`-based availability, the OT hard-stop close window, management labour, fractional labour via centi-workers). It bounds **completion**, not the full A-grade — the grader is multi-factor (overtime + restock + management + per-task), which a pure order-flow model can't capture.
+
+### Result (20 held-out stage-3 facilities, median)
+
+| Metric | Heuristic | Clark (`clark-v2.5`) |
+|---|---|---|
+| A+B grade days | 98.3% | 97.5% |
+| Order completion | 100% | 100% |
+| A grade days (no overtime) | 43.3% | **76.5%** |
+| F grade days | 1.7% | **0.5%** |
+| A+B p10 (worst tail) | 56.9 | **65.1** |
+
+The heuristic **ties Clark on throughput** (A+B, completion); Clark's edge is **overtime avoidance** (A-rate), **robustness** (F-rate, worst-case tail), and **zero-per-facility-tuning generalization** (the heuristic's constants are hand-fit to this distribution). The CP-SAT bound shows ~100% of days are completion-feasible — **throughput is never the binding constraint**, so the entire gap lives in balancing the soft quality objectives. Full narrative in [ENGINEERING_NOTES §9–§10](ENGINEERING_NOTES.md).
 
 ---
 
