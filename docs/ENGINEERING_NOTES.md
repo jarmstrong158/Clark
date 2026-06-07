@@ -198,6 +198,50 @@ believe what it tells you even when that's "you built the wrong tool for this
 question." A bound that honestly answers a narrower question beats one that
 dishonestly answers the question you wanted.
 
+## 11. How much of Clark is linear? A value-distillation probe
+
+A reviewer suggested an alternative to the deep net: an Approximate-LP
+approach — represent the value as an *affine* function of features and solve
+an LP over simulated snapshots (Powell, *Approximate Dynamic Programming*,
+§10.8). It only works if the value is roughly linear in known features. That's
+a cheap, decidable question, so instead of arguing it we measured it
+([`tools/distill_value_probe.py`](../tools/distill_value_probe.py)): run the
+trained foundation through held-out facilities, log `(φ(s), V(s))` at every
+tick where `V(s)` is Clark's own critic estimate (carrying full LSTM history),
+and fit a linear model `φ(s) → V(s)`. `φ` is the 18 env features + the
+mean-pooled 14 worker features + two grade-cliff hinge features (a
+`max(0, 0.95 − restock)` kink, schedule pressure). R² = the fraction of
+Clark's value *variance* a memoryless affine value recovers.
+
+The result is a clean two-part answer:
+
+- **Within a single facility, ~0.58 mean R²** (range 0.24–0.88 across 5
+  facilities; env-only features 0.41, so the worker aggregates + the restock
+  hinge carry real signal). Better than chance, but well short of the ~0.9
+  that would mean "the value is basically linear" — **~40% of the
+  within-facility value is nonlinear / LSTM-history** an affine value can't
+  see. And it's *inconsistent*: linear on some facilities, not others, with
+  the worst fit on the highest-value-variance facility.
+- **Across facilities, a single global linear value does not transfer at all**
+  (held-out R² ≈ −8, worse than predicting the mean). Clark's cross-facility
+  value structure is genuinely nonlinear — that is the foundation-model edge,
+  quantified. The 3 months bought *that*.
+
+Two lessons. First, **a confident architectural opinion ("a linear model would
+do") is a measurement, not a debate** — the probe cost one afternoon and a
+checkpoint we already had, and it converted hand-waving into 0.58 / −8.
+Second, mind what the number *is*: **R² of the value is an upper-bound proxy
+for policy quality, not policy quality.** A 58%-explained value can still
+yield a serviceable greedy policy (the decision only needs the right
+*ordering* of actions, not exact magnitudes); conversely a high R² doesn't
+guarantee good actions. So the probe bounds the ALP's *ceiling* and says "this
+would likely beat the hand-tuned heuristic but not match Clark, and
+unpredictably so" — but the only way to know the realized policy quality is to
+build the ALP and run it head-to-head through the same grader. We stopped at
+the cheap upper-bound because it already answered the decision: pursue a
+linear/ALP policy only if the goal is a GPU-free, interpretable, per-facility
+"edge Clark," accepting it will be sub-Clark and inconsistent.
+
 ---
 
 *Throughout: the project's value came less from any single result than from
