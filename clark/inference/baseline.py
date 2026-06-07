@@ -16,7 +16,9 @@ greedy turns out competitive.
 """
 from __future__ import annotations
 
-_RESTOCK_PROACTIVE = 0.8  # staff restock once stock dips below this (pre-cliff)
+_RESTOCK_PROACTIVE = 0.95  # staff restock below this — matches the grade's 95%
+#                            restock-fill threshold (targeting 0.8 parked stock
+#                            right in the demerit zone; see ENGINEERING_NOTES §10)
 _BUFFER_HEALTHY_FLOOR = 8  # buffer above max(this, roster) -> only trickle pickers
 _PICK_TRICKLE_DIV = 6      # healthy-buffer pickers ≈ remaining // this
 _PICK_REFILL_FRAC = 0.30   # buffer thinning -> ramp pickers to this frac of remaining
@@ -36,10 +38,12 @@ class GreedyScheduler:
          the floor. Skipping this was the naive v1's fatal hole: an unmet
          management minimum is an automatic F.)
       2. **Restock coverage (proactive + scaled)** — staff restock *before*
-         stock hits the picking-speed cliff (below 0.8 fill, not after it's
-         critical), with the number of restockers scaled to the stock deficit
-         and roster size. Under-staffing restock was the v2 hole: stock
-         collapsed → picking crashed → days couldn't finish even on full OT.
+         stock hits the picking-speed cliff, with the number of restockers
+         scaled to the stock deficit and roster size. Under-staffing restock
+         was the v2 hole: stock collapsed → picking crashed → days couldn't
+         finish even on full OT. The target tracks the grade's 95% restock-fill
+         line (v5): parking stock at 80% sat right inside the demerit band and
+         cost A-grades on otherwise-clean days.
       3. **Pack-bottleneck-aware pick/pack split** — picking runs at ~2.5×
          pack speed (PICK_MULTIPLIER vs pack's 1.0), and the morning-pick
          round front-loads the buffer, so **pack is the perennial constraint**
