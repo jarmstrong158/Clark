@@ -1,3 +1,728 @@
 {
-  "items": []
+  "items": [
+    {
+      "id": "k-c12fb96d",
+      "type": "memory",
+      "kind": "decision",
+      "content": "Pick and pack tasks must have SEPARATE per-task demand_signals, computed from queue depth.",
+      "why": "",
+      "tags": [
+        "state-representation",
+        "pick-pack-balance",
+        "context-keeper"
+      ],
+      "scope": "team",
+      "project": "Clark",
+      "source": {
+        "system": "context-keeper",
+        "ref": "dec-007"
+      },
+      "created_by": "jonny-desktop",
+      "created_at": "2026-07-10T17:53:22.258199+00:00",
+      "updated_at": "2026-07-10T17:54:35.966017+00:00",
+      "status": "active",
+      "trust": {
+        "recalls": 3,
+        "endorsements": [],
+        "projects": [
+          "Clark"
+        ]
+      }
+    },
+    {
+      "id": "k-ad7d17eb",
+      "type": "memory",
+      "kind": "decision",
+      "content": "First scaffold of the facility setup wizard \u00e2\u20ac\u201d local web UI that bridges non-technical warehouse operators to valid FacilityConfig YAML for fine-tuning. Vanilla JS, save/resume, preset-based pain-point mapping with no LLM calls.",
+      "why": "Mirrored the existing dashboard architecture (Python http.server + single-file HTML/JS) for zero new dependencies and a consistent codebase pattern. Built three artifacts: presets.json (archetype + question library, hand-curated mapping from user-friendly choices to specific reward weights \u00e2\u20ac\u201d zero AI needed at runtime), index.html (vanilla JS multi-step wizard with localStorage for in-flight state and POST /sessions for named save/resume), and cmd_wizard in cli/main.py (HTTP server with /presets, /sessions GET+POST+GET-by-id, /validate POST). The validation endpoint walks a rules array in presets.json and reports errors/warnings on the combined config \u00e2\u20ac\u201d catches things like \"no shipping reward\" (broken) or \"OT cost dominates incomplete cost\" (agent will prefer leaving orders unshipped). The whole \"intelligence\" lives in the JSON, not in code or API calls, so refining the question library is a content-edit not an engineering task.</why_chosen>\n<parameter name=\"what_we_tried\">Considered React/Vue for the frontend \u00e2\u20ac\u201d rejected for the no-toolchain reason (matches the dashboard pattern). Considered LLM-driven free-text intake \u00e2\u20ac\u201d rejected for cost (user explicitly flagged) and for \"free text is the worst UX because users describe edge cases\". Considered sliders for pain-point answers \u00e2\u20ac\u201d rejected in favor of discrete presets because preset values are known-tested, slider values are not. Considered putting the wizard logic in clark/training/ rather than its own module \u00e2\u20ac\u201d rejected for separation-of-concerns; wizard is presentation, training is execution.</what_we_tried>\n<parameter name=\"tradeoffs\">Single-page HTML in one file is fine for the current 3-4-step prototype but will need refactoring at 8-10 steps. localStorage for in-flight state means a hard browser crash can lose unsaved work \u00e2\u20ac\u201d mitigated by a manual Save button, could later auto-save on each step transition. The validation rules are hand-coded checks in cmd_wizard (per_order_shipped_gt_zero, ot_cost_vs_incomplete, idle_not_negative, any_weight_extreme); adding a new rule requires both a presets.json entry AND a check branch in _validate_config. Acceptable for the first 5-10 rules; if the rule library grows large, refactor to a pure-data rule format.",
+      "tags": [
+        "wizard",
+        "fine-tuning",
+        "ux",
+        "config-builder",
+        "presets",
+        "context-keeper"
+      ],
+      "scope": "team",
+      "project": "Clark",
+      "source": {
+        "system": "context-keeper",
+        "ref": "dec-014"
+      },
+      "created_by": "jonny-desktop",
+      "created_at": "2026-07-10T17:53:22.258199+00:00",
+      "updated_at": "2026-07-10T17:54:35.966017+00:00",
+      "status": "active",
+      "trust": {
+        "recalls": 9,
+        "endorsements": [],
+        "projects": [
+          "Clark"
+        ]
+      }
+    },
+    {
+      "id": "k-b87fbf36",
+      "type": "memory",
+      "kind": "decision",
+      "content": "Vectorized the batched action sampler in transformer.py select_action_batched: one batched Categorical + one GPU-to-CPU transfer per head, replacing the per-env Python loop. Gated behind a distribution-equivalence test suite.",
+      "why": "torch.distributions.Categorical batches over leading dims independently, so a single Categorical(logits=full_padded_(B,max_N,K)) is mathematically distribution-identical to the per-env sliced loop for real worker rows. Padded worker rows and padded task columns are -1e9-masked by forward_batched upstream, so their probability underflows to exactly 0 (can never be sampled, contributes nothing to logsumexp) and they are sliced off per-env after sampling. This collapses 2*B syncs/tick to 2, the agent projecting ~5-6x faster rollout. It was chosen over gumbel-max (more code, same result, harder to prove equivalent) and over leaving it alone (the bottleneck IS the rollout sampler, ~7x the real compute). Critically, a correct speed-only change is behavior-neutral: it does not contaminate the in-flight dec-015 feasibility-fix measurement and actually makes that measurement window arrive sooner, so it is the one class of change safe to ship during a let-it-cook phase.",
+      "tags": [
+        "performance",
+        "throughput",
+        "transformer",
+        "sampler",
+        "convergence-audit",
+        "context-keeper"
+      ],
+      "scope": "team",
+      "project": "Clark",
+      "source": {
+        "system": "context-keeper",
+        "ref": "dec-016"
+      },
+      "created_by": "jonny-desktop",
+      "created_at": "2026-07-10T17:53:22.258199+00:00",
+      "updated_at": "2026-07-10T17:54:35.966017+00:00",
+      "status": "active",
+      "trust": {
+        "recalls": 12,
+        "endorsements": [],
+        "projects": [
+          "Clark"
+        ]
+      }
+    },
+    {
+      "id": "k-b2d43afb",
+      "type": "memory",
+      "kind": "decision",
+      "content": "Shipped epochs_per_update 4 to 2 as a gated speed A/B (Lever 1), consciously trading the in-flight dec-015 clean read for ~1.8x projected throughput. Keep only if win/cmp learning is not materially worse over the next few hundred episodes; one-line revert otherwise.",
+      "why": "epochs_per_update linearly scales both eval and rest (the 82%), so 4 to 2 roughly halves the dominant cost for a one-line, instantly-reversible change. Honest finding delivered to user first: NO large speedup here is behavior-neutral (unlike the distribution-identical sampler vectorization) \u00e2\u20ac\u201d batching per-env updates changes optimizer-step cadence + advantage-norm scope + EMA cadence and cannot equal N serial Adam steps; async changes on-policyness. Since every big lever changes learning, the criterion shifts from 'faster and identical' (impossible at scale here) to 'faster and demonstrably not worse'. Lever 1 is strictly the lower-risk path to that bar: one line vs a large silent-bug-prone refactor, learning impact measurable in a few hundred episodes on the win/cmp trend already tracked, trivial revert. Run it first; its measured result decides whether Lever 2's large refactor is even justified.",
+      "tags": [
+        "performance",
+        "ppo",
+        "hyperparameter",
+        "ab-test",
+        "epochs-per-update",
+        "context-keeper"
+      ],
+      "scope": "team",
+      "project": "Clark",
+      "source": {
+        "system": "context-keeper",
+        "ref": "dec-017"
+      },
+      "created_by": "jonny-desktop",
+      "created_at": "2026-07-10T17:53:22.258199+00:00",
+      "updated_at": "2026-07-10T17:54:35.966017+00:00",
+      "status": "active",
+      "trust": {
+        "recalls": 9,
+        "endorsements": [],
+        "projects": [
+          "Clark"
+        ]
+      }
+    },
+    {
+      "id": "k-a9b6576f",
+      "type": "memory",
+      "kind": "decision",
+      "content": "Keep epochs_per_update=2 unreverted (banked ~2x speed); defer the Defect-B management reward/grade fix until the epochs=2 learning gate clears a defined stability trigger, then ship it as the single isolated change.",
+      "why": "User chose to keep the production-profiler-confirmed ~2x speed win rather than revert epochs=2 for a cleaner read, accepting the management fix waits. This is the disciplined sequence-don't-confound path (con-008/con-011): two learning changes get serial clean-ish reads instead of one uninterpretable everything-at-once. The management fix is locked and queued with fixed rationale so there is no re-litigation later. Recorded correction: the user's 'model appears to be doing well' is NOT observable \u00e2\u20ac\u201d all buffered win/cmp/grade data is pre-epochs-change residue, the epochs=2 verdict is genuinely pending and must not be read off residue (con-005).",
+      "tags": [
+        "sequencing",
+        "reward-shaping",
+        "management",
+        "ab-test",
+        "attribution-discipline",
+        "context-keeper"
+      ],
+      "scope": "team",
+      "project": "Clark",
+      "source": {
+        "system": "context-keeper",
+        "ref": "dec-018"
+      },
+      "created_by": "jonny-desktop",
+      "created_at": "2026-07-10T17:53:22.258199+00:00",
+      "updated_at": "2026-07-10T17:54:35.966017+00:00",
+      "status": "active",
+      "trust": {
+        "recalls": 3,
+        "endorsements": [],
+        "projects": [
+          "Clark"
+        ]
+      }
+    },
+    {
+      "id": "k-34f14e55",
+      "type": "memory",
+      "kind": "decision",
+      "content": "Shipped the Defect-B management reward fix (removed the high-volume escape hatch in facility_env.py so management_duty_missed applies whenever below minimum regardless of day volume). dec-018 gate cleared on substance. Now live alongside the previously-committed peak-season-OT grade change.",
+      "why": "The dec-018 gate's real criterion was 'epochs=2 not materially degrading learning', answered decisively by ~50 stage-3 episodes (win/cmp not below band, v_loss mean 2.7 vs pre-epochs 6.75, no instability). The 7100-episode figure was a confidence proxy, not the criterion; acting on answered substance beats bureaucratic round-number waiting. The fix is minimal and surgical: delete the elif-high_volume-pass branch so the reward penalizes missing management whenever below minimum, matching the grade which hard-F's that case regardless of volume. Exactly one isolated learning change (con-008).",
+      "tags": [
+        "reward-shaping",
+        "management",
+        "defect-b",
+        "shipped",
+        "attribution-discipline",
+        "context-keeper"
+      ],
+      "scope": "team",
+      "project": "Clark",
+      "source": {
+        "system": "context-keeper",
+        "ref": "dec-019"
+      },
+      "created_by": "jonny-desktop",
+      "created_at": "2026-07-10T17:53:22.258199+00:00",
+      "updated_at": "2026-07-10T17:54:35.966017+00:00",
+      "status": "active",
+      "trust": {
+        "recalls": 3,
+        "endorsements": [],
+        "projects": [
+          "Clark"
+        ]
+      }
+    },
+    {
+      "id": "k-2c3276a5",
+      "type": "memory",
+      "kind": "decision",
+      "content": "Live-experiment state as of commit bf21561 / ~ep 6900: three changes are simultaneously active in the running pretrain \u00e2\u20ac\u201d epochs=2 (dec-017), the Defect-B management reward fix (dec-019), and the peak-season-OT grade change. Records what the next health read must separate.",
+      "why": "A single consolidated state note is the cheapest way to preserve attribution across compaction. The next health check (anchor ~ep 7200-7400+, after buffer turnover) MUST separate: (1) epochs=2 \u00e2\u20ac\u201d speed half confirmed ~2x via profiler, learning gate substantively cleared at ~ep6889 (win/cmp at-or-above pre-change band, no degradation); (2) Defect-B management fix \u00e2\u20ac\u201d a LEARNING change, gradual over episodes, its win-rate effect is fewer perfect-completion-but-not-A days (~332/1000 baseline); (3) peak-season-OT grade change \u00e2\u20ac\u201d a METRIC-ONLY change that mechanically lifts win-rate on peak-OT days the instant it activated, zero learning effect; (4) dec-015 feasibility-bounded volume, already accepted as confounded. A win-rate jump is NOT proof the management fix worked \u00e2\u20ac\u201d part is the mechanical OT rescoring.",
+      "tags": [
+        "training-state",
+        "attribution",
+        "in-flight",
+        "continuity",
+        "pre-compaction",
+        "context-keeper"
+      ],
+      "scope": "team",
+      "project": "Clark",
+      "source": {
+        "system": "context-keeper",
+        "ref": "dec-021"
+      },
+      "created_by": "jonny-desktop",
+      "created_at": "2026-07-10T17:53:22.258199+00:00",
+      "updated_at": "2026-07-10T17:54:35.966017+00:00",
+      "status": "active",
+      "trust": {
+        "recalls": 6,
+        "endorsements": [],
+        "projects": [
+          "Clark"
+        ]
+      }
+    },
+    {
+      "id": "k-f79ecc60",
+      "type": "memory",
+      "kind": "decision",
+      "content": "Eval-metric split: log ship_win (fraction of days that shipped 100% \u00e2\u20ac\u201d the operational primary KPI) separately from the grade-conflated win, in record_episode/record_window (additive JSON keys) and the dashboard. Commits 5b58ea0 + d6ae441.",
+      "why": "Verified grade/win_year is NOT in the PPO loss and NOT in curriculum gating (_get_stage is config-count driven), so adding/splitting the metric is purely evaluation-side: non-learning-affecting, no restart, live run untouched. Additive JSON keys keep the dashboard backward compatible. Dashboard headline ship-win tile is derived from already-logged per-day completion so it is live immediately; the per-N column and trend overlay populate after the next natural restart and degrade to '\u00e2\u20ac\u201d' until then rather than faking zeros.",
+      "tags": [
+        "evaluation",
+        "metrics",
+        "dashboard",
+        "instrumentation",
+        "non-learning-affecting",
+        "context-keeper"
+      ],
+      "scope": "team",
+      "project": "Clark",
+      "source": {
+        "system": "context-keeper",
+        "ref": "dec-025"
+      },
+      "created_by": "jonny-desktop",
+      "created_at": "2026-07-10T17:53:22.258199+00:00",
+      "updated_at": "2026-07-10T17:54:35.966017+00:00",
+      "status": "active",
+      "trust": {
+        "recalls": 3,
+        "endorsements": [],
+        "projects": [
+          "Clark"
+        ]
+      }
+    },
+    {
+      "id": "k-682a49f1",
+      "type": "memory",
+      "kind": "decision",
+      "content": "Shipped a dense, gated management reward (management_progress_gated=6.0, paid per-management-hour only once orders are essentially shipped and capped at required hours). Targets the ~half of lost wins that are completed-but-demerited days. Commit a33cbbb. Resumed from the ep-11436 re-tuned checkpoint. Eligibility-widening explicitly deferred as the isolated next lever.",
+      "why": "A triple-audit DIVERGED: auditor 1 said incentive (the decisive management signal is a sparse EOD grade-tier lump +10->+30 on a day already worth ~3600, normalized to noise by PPO's per-batch advantage normalization; management is already the best dense per-hour action yet not chosen); auditor 2 said eligibility (only manager/asst-mgr can do management, exactly 1 + 0-2 per facility regardless of N, so slack is on ineligible workers; reward fix is wasted). Reconciled from first principles: on the targeted completed days orders are shipped with 118h slack and the requirement is <=6h, so a single manager (8h shift) has both eligibility AND spare capacity \u00e2\u20ac\u201d capacity exists, the policy just isn't assigning it. Therefore it is fundamentally an incentive problem; eligibility is a real but secondary amplifier (fragile/needle-in-haystack at large N, explains auditor 2's size-stratified split). Fix makes the management signal DENSE (per-tick, shipped-stream scale) so it survives advantage normalization, GATED to post-completion and CAPPED at required hours so it can never trade against shipping or become a grind.",
+      "tags": [
+        "reward-shaping",
+        "management",
+        "convergence-audit",
+        "gated-reward",
+        "divergent-audit",
+        "win-rate-ceiling",
+        "supersedes-premise-dec-024",
+        "context-keeper"
+      ],
+      "scope": "team",
+      "project": "Clark",
+      "source": {
+        "system": "context-keeper",
+        "ref": "dec-027"
+      },
+      "created_by": "jonny-desktop",
+      "created_at": "2026-07-10T17:53:22.258199+00:00",
+      "updated_at": "2026-07-10T17:54:35.966017+00:00",
+      "status": "active",
+      "trust": {
+        "recalls": 6,
+        "endorsements": [],
+        "projects": [
+          "Clark"
+        ]
+      }
+    },
+    {
+      "id": "k-30cb9e81",
+      "type": "memory",
+      "kind": "decision",
+      "content": "Fixed the dead management-bonus gate: changed it from pending<=order_incomplete_threshold(=0) to pending<=10% of the day's total orders (\"shipping under control\"), and surfaced the term as rb.mgmt_gated. The prior gate (dec-027) was inert by construction and never fired. No rollback \u00e2\u20ac\u201d the apparent decline was not a real regression. Commit 05278be, resumed from ep-13192 checkpoint.",
+      "why": "Two independent minimal-context audits converged: (1) the gate `_orders_pending <= order_incomplete_threshold` with threshold=0 is only true in the last ~0.5h of a day and never on the ~27% OT days \u00e2\u20ac\u201d orders arrive on a curve and pack is 2.5x slower than pick, so pending>0 the whole time management is performed. The term fired literally zero times across 438 windows (dominance min=max=mean=0). (2) The 'decline' was NOT caused by the (inert) term: it was a favorable resume-from-checkpoint transient mean-reverting to the long-run ~0.55 win baseline, plus a facility-size-mix artifact (ship_win vs N corr -0.39 vs -0.11 vs time); cmp_year (core capability) flat ~0.95, value head healthy (median v_loss 0.01-0.03). Both audits independently said do NOT roll back (inert term is harmless, decline isn't real). Fix gates on pending<=10% of total (inverse of the env's crunch threshold) so the bonus has a real multi-hour window on on-track days while staying inert during genuine crunch (still cannot trade against shipping, still capped at required hours).",
+      "tags": [
+        "reward-shaping",
+        "management",
+        "gated-reward",
+        "bugfix",
+        "convergence-audit",
+        "observability",
+        "context-keeper"
+      ],
+      "scope": "team",
+      "project": "Clark",
+      "source": {
+        "system": "context-keeper",
+        "ref": "dec-028"
+      },
+      "created_by": "jonny-desktop",
+      "created_at": "2026-07-10T17:53:22.258199+00:00",
+      "updated_at": "2026-07-10T17:54:35.966017+00:00",
+      "status": "active",
+      "trust": {
+        "recalls": 3,
+        "endorsements": [],
+        "projects": [
+          "Clark"
+        ]
+      }
+    },
+    {
+      "id": "k-bc09be27",
+      "type": "memory",
+      "kind": "decision",
+      "content": "Added curriculum stress tier to _generate_volume: stress_prob 0%/15%/25% per stage, allowing peak-summer volume up to 1.7x OT rescue ceiling. Re-pretrain from ep 15000 to ep 17500 (clark_foundation_stress.pt; pre_stress.bak preserves original) to expose policy to real overload scenarios.",
+      "why": "Probes (tools/probe_foundation_behavior.py + tools/probe_curriculum_shape.py) invalidated three more-obvious proposed fixes one by one. Probe data showed: F-day filler reward is only +1.5 (noise, not pull), crunch cap never binds on this config (0/30 days), buffer never fills during non-OT hours (0 incidents). All three reward/env levers were non-issues. THEN the curriculum probe found the smoking gun: across 1500 sampled configs, peak vol/capacity mean=0.29 / p90=0.34. The 'Fork C' generator hard-caps every config at OT rescue ceiling so every day is winnable. Jack_baseline at vol=450 is 1.56x rescue ceiling, literally outside the entire training distribution. The model defaults to its learned moderate-pressure behavior because for every config it ever saw, that was the right answer. The stress tier teaches graceful partial-completion on real overload (ship what you can, no filler, no defeatism) WITHOUT touching reward weights or env mechanics. Stage-gated so stage 1 stays all-winnable (basics-first) while stages 2/3 see real overload. STRESS_MULT=1.7 means stress configs can reach up to 2.125x comfortable capacity. The env reward signal (dec-023 completion-dominant + dec-011 no look-busy floor + dec-012 scaled crunch penalty) already shapes the right partial-completion behavior; just needs scenarios to learn from.",
+      "tags": [
+        "curriculum",
+        "foundation-retrain",
+        "stress-tier",
+        "synthetic-gen",
+        "reward-shaping",
+        "audit-discipline",
+        "supersedes-fork-c-invariant",
+        "context-keeper"
+      ],
+      "scope": "team",
+      "project": "Clark",
+      "source": {
+        "system": "context-keeper",
+        "ref": "dec-032"
+      },
+      "created_by": "jonny-desktop",
+      "created_at": "2026-07-10T17:53:22.258199+00:00",
+      "updated_at": "2026-07-10T17:54:35.966017+00:00",
+      "status": "active",
+      "trust": {
+        "recalls": 9,
+        "endorsements": [],
+        "projects": [
+          "Clark"
+        ]
+      }
+    },
+    {
+      "id": "k-89092f21",
+      "type": "memory",
+      "kind": "decision",
+      "content": "Pivot from observation-feature interventions (v2.1 dvc projection, v2.2 queue_pressure) to structural action-mask interventions (v2.4 \u00e2\u2020\u2019 v2.5 \u00e2\u2020\u2019 v2.6) after both obs attempts FAILED head-to-head A/B vs v2 baseline.",
+      "why": "Structural masking removes invalid actions from the policy's action space entirely (set to \u00e2\u02c6\u20191e9 logits before softmax), so the policy cannot subvert the constraint regardless of how its weights are pointed. Compared to gradient-pressure interventions: (a) takes effect from tick 1 of episode 1, no PPO updates needed; (b) cannot be over-ridden by clip-capped policy update; (c) doesn't depend on the value head learning a new reward landscape; (d) is testable in isolation with the existing test framework. The pretrain weights stay loadable since obs_feat_dim and arch are unchanged.",
+      "tags": [
+        "action-mask",
+        "filler-vs-orders",
+        "structural-intervention",
+        "warm-start-fine-tune",
+        "post-mortem-v2.1-v2.2",
+        "context-keeper"
+      ],
+      "scope": "team",
+      "project": "Clark",
+      "source": {
+        "system": "context-keeper",
+        "ref": "dec-033"
+      },
+      "created_by": "jonny-desktop",
+      "created_at": "2026-07-10T17:53:22.258199+00:00",
+      "updated_at": "2026-07-10T17:54:35.966017+00:00",
+      "status": "active",
+      "trust": {
+        "recalls": 6,
+        "endorsements": [],
+        "projects": [
+          "Clark"
+        ]
+      }
+    },
+    {
+      "id": "k-3ffcc411",
+      "type": "memory",
+      "kind": "constraint",
+      "content": "Clark rollout buffers must store log-probs and values as 0-D torch tensors, not Python floats",
+      "why": "Calling .item() on every rollout step forces a GPU\u00e2\u2020\u2019CPU sync and serializes the next kernel launch. For a small model where the forward is already kernel-launch-bound, this doubles per-step latency on CUDA. Batch-flush once at update time via torch.stack \u00e2\u20ac\u201d needs .float() to upcast bf16 before numpy conversion because numpy doesn't support bf16.",
+      "tags": [
+        "clark",
+        "gpu",
+        "performance",
+        "ppo",
+        "context-keeper"
+      ],
+      "scope": "team",
+      "project": "Clark",
+      "source": {
+        "system": "context-keeper",
+        "ref": "con-001"
+      },
+      "created_by": "jonny-desktop",
+      "created_at": "2026-07-10T17:53:22.258199+00:00",
+      "updated_at": "2026-07-10T17:54:35.966017+00:00",
+      "status": "active",
+      "trust": {
+        "recalls": 3,
+        "endorsements": [],
+        "projects": [
+          "Clark"
+        ]
+      }
+    },
+    {
+      "id": "k-2776e96f",
+      "type": "memory",
+      "kind": "constraint",
+      "content": "Clark checkpoint save() must deep-copy optimizer state via recursive _deep_cpu helper, never mutate optimizer.state_dict() in place",
+      "why": "torch.optim.Optimizer.state_dict() returns a dict whose tensor values are REFERENCES to the live optimizer state, not copies. Rewriting entries in that dict to CPU clones moves the real live momentum buffers (exp_avg, exp_avg_sq) onto CPU \u00e2\u20ac\u201d next optimizer.step() crashes inside torch._foreach_lerp_ with a mixed-device error because model gradients are still on CUDA. Caught at ep 50 of a batched pretrain run (triggered by save_interval=50). Fix: recursive _deep_cpu helper that walks dicts/lists/tuples and detach().cpu()s tensors into a brand-new container, leaving the live state untouched. Subtlety: PyTorch's newer Adam keeps the 'step' counter as a CPU scalar tensor by design \u00e2\u20ac\u201d don't treat that as corruption at load time. Load() must use map_location and re-move optimizer state to target device so GPU-trained checkpoints load on CPU-only hosts.",
+      "tags": [
+        "clark",
+        "checkpoint",
+        "gpu",
+        "serialization",
+        "bug-caught",
+        "context-keeper"
+      ],
+      "scope": "team",
+      "project": "Clark",
+      "source": {
+        "system": "context-keeper",
+        "ref": "con-002"
+      },
+      "created_by": "jonny-desktop",
+      "created_at": "2026-07-10T17:53:22.258199+00:00",
+      "updated_at": "2026-07-10T17:54:35.966017+00:00",
+      "status": "active",
+      "trust": {
+        "recalls": 6,
+        "endorsements": [],
+        "projects": [
+          "Clark"
+        ]
+      }
+    },
+    {
+      "id": "k-cb639522",
+      "type": "memory",
+      "kind": "constraint",
+      "content": "When launching pretrain training, ALWAYS open a visible Windows PowerShell window the user can see, NOT a hidden background process or a file-tail workaround.",
+      "why": "User explicitly demanded this multiple times after I tried to substitute background processes + log file tail for what they wanted (a visible terminal). The reliable spawn pattern from this Bash environment is `powershell -Command \"Start-Process powershell -ArgumentList '-NoExit','-Command','cd C:/Users/jarms/repos/clark; python -m cli.main pretrain ...'\"`. The `cmd //c start \"Title\" cmd //k \"...\"` pattern was unreliable \u00e2\u20ac\u201d sometimes the window didn't appear for the user.",
+      "tags": [
+        "training",
+        "ux",
+        "windows",
+        "context-keeper"
+      ],
+      "scope": "team",
+      "project": "Clark",
+      "source": {
+        "system": "context-keeper",
+        "ref": "con-003"
+      },
+      "created_by": "jonny-desktop",
+      "created_at": "2026-07-10T17:53:22.258199+00:00",
+      "updated_at": "2026-07-10T17:54:35.966017+00:00",
+      "status": "active",
+      "trust": {
+        "recalls": 3,
+        "endorsements": [],
+        "projects": [
+          "Clark"
+        ]
+      }
+    },
+    {
+      "id": "k-576c23a6",
+      "type": "memory",
+      "kind": "constraint",
+      "content": "Before any architectural change to the value head, model architecture, or major reward weight, BACKUP the current checkpoint as clark_foundation.pt.preXXX.bak.",
+      "why": "We've shipped many destructive changes this session (value head reset 3x, reward weight redesigns, curriculum changes). Each backup gave a known-good rollback point. Lost-progress recovery is days of training; backup is 207MB and 1 second.",
+      "tags": [
+        "checkpointing",
+        "safety",
+        "context-keeper"
+      ],
+      "scope": "team",
+      "project": "Clark",
+      "source": {
+        "system": "context-keeper",
+        "ref": "con-004"
+      },
+      "created_by": "jonny-desktop",
+      "created_at": "2026-07-10T17:53:22.258199+00:00",
+      "updated_at": "2026-07-10T17:54:35.966017+00:00",
+      "status": "active",
+      "trust": {
+        "recalls": 3,
+        "endorsements": [],
+        "projects": [
+          "Clark"
+        ]
+      }
+    },
+    {
+      "id": "k-1fe503df",
+      "type": "memory",
+      "kind": "constraint",
+      "content": "Never propose value-head reset as a solution without first checking whether the upstream cause (return distribution) has been addressed. Reset is symptomatic; without fixing the root distribution shift, saturation will recur within hours.",
+      "why": "Reset the value head 3 times in this session. Each time we thought a per-trigger fix would prevent recurrence; each time a new distribution shift triggered it again. The permanent fix was symlog target compression, which makes the value head structurally robust to any future shift.",
+      "tags": [
+        "value-head",
+        "debugging",
+        "lesson-learned",
+        "context-keeper"
+      ],
+      "scope": "team",
+      "project": "Clark",
+      "source": {
+        "system": "context-keeper",
+        "ref": "con-006"
+      },
+      "created_by": "jonny-desktop",
+      "created_at": "2026-07-10T17:53:22.258199+00:00",
+      "updated_at": "2026-07-10T17:54:35.966017+00:00",
+      "status": "active",
+      "trust": {
+        "recalls": 3,
+        "endorsements": [],
+        "projects": [
+          "Clark"
+        ]
+      }
+    },
+    {
+      "id": "k-4600a9fd",
+      "type": "memory",
+      "kind": "constraint",
+      "content": "Always ship 1-2 changes per training restart, never bundle 3+ unrelated changes. Lost attribution is the most expensive bug in RL debugging.",
+      "why": "Multiple times this session bundled changes ('reset + reward + curriculum') and couldn't tell which fix did the work. The cleanest experiment is a single-knob change against a known baseline. Worth the extra restarts.",
+      "tags": [
+        "debugging",
+        "process",
+        "context-keeper"
+      ],
+      "scope": "team",
+      "project": "Clark",
+      "source": {
+        "system": "context-keeper",
+        "ref": "con-008"
+      },
+      "created_by": "jonny-desktop",
+      "created_at": "2026-07-10T17:53:22.258199+00:00",
+      "updated_at": "2026-07-10T17:54:35.966017+00:00",
+      "status": "active",
+      "trust": {
+        "recalls": 3,
+        "endorsements": [],
+        "projects": [
+          "Clark"
+        ]
+      }
+    },
+    {
+      "id": "k-222c4016",
+      "type": "memory",
+      "kind": "constraint",
+      "content": "Performance bottleneck claims must be validated against the live production training loop (the permanent pretrain.py tick profiler), never a microbench or analogy to the canonical RL bottleneck. Do not act on a projected speedup until the production profiler confirms it.",
+      "why": "Microbenchmarks and \"this is the usual RL bottleneck\" reasoning measure the wrong thing in a pipelined multiprocess loop. Acting on them wastes restarts, churns the training run, and produces fixes that don't move wall-clock \u00e2\u20ac\u201d exactly the failure this project keeps having.",
+      "tags": [
+        "performance",
+        "profiling",
+        "debugging-discipline",
+        "measurement",
+        "context-keeper"
+      ],
+      "scope": "team",
+      "project": "Clark",
+      "source": {
+        "system": "context-keeper",
+        "ref": "con-011"
+      },
+      "created_by": "jonny-desktop",
+      "created_at": "2026-07-10T17:53:22.258199+00:00",
+      "updated_at": "2026-07-10T17:54:35.966017+00:00",
+      "status": "active",
+      "trust": {
+        "recalls": 3,
+        "endorsements": [],
+        "projects": [
+          "Clark"
+        ]
+      }
+    },
+    {
+      "id": "k-9b712636",
+      "type": "memory",
+      "kind": "constraint",
+      "content": "The cmp_year>1.0 carryover accounting fix (clamping cmp_year) is LEARNING-AFFECTING \u00e2\u20ac\u201d cmp_year feeds year_completion_bonus (= 500 x cmp_year), a reward term. Never bundle it into an eval-side/non-learning-affecting commit; it requires backup + isolated A/B restart discipline and must ride a dedicated learning-affecting restart.",
+      "why": "On order_carryover configs a catch-up day can ship more than the day's base order total, so cmp_year exceeds 1.0 and year_completion_bonus overpays. Clamping changes the gradient on those days, so treating it as a harmless accounting fix and bundling it with non-learning-affecting work would silently perturb training and destroy attribution (con-008).",
+      "tags": [
+        "reward-shaping",
+        "carryover",
+        "attribution-discipline",
+        "learning-affecting",
+        "deferred",
+        "context-keeper"
+      ],
+      "scope": "team",
+      "project": "Clark",
+      "source": {
+        "system": "context-keeper",
+        "ref": "con-014"
+      },
+      "created_by": "jonny-desktop",
+      "created_at": "2026-07-10T17:53:22.258199+00:00",
+      "updated_at": "2026-07-10T17:54:35.966017+00:00",
+      "status": "active",
+      "trust": {
+        "recalls": 3,
+        "endorsements": [],
+        "projects": [
+          "Clark"
+        ]
+      }
+    },
+    {
+      "id": "k-fc9587d9",
+      "type": "memory",
+      "kind": "constraint",
+      "content": "Before shipping ANY gated reward term, empirically measure how often the gate is actually open during the hours the target behavior occurs \u00e2\u20ac\u201d using the REAL trained policy (not reasoning, not a masked-random policy whose pacing differs). The measurement (gate-open hours/day, % actionable with an eligible worker present, % of days with a usable window, % of days still inert) is a precondition of the change, not a post-hoc check.",
+      "why": "A gate that is reasoned to \"open a real window\" can be inert in practice. The management bonus shipped TWICE on reasoning alone: first gate (pending<=0) fired literally zero times for ~1700 episodes; it was only caught because the user asked 'did you check the frequency?'. Reasoning about gate frequency is not a substitute for measuring it; an inert gate silently wastes entire training cycles.",
+      "tags": [
+        "reward-shaping",
+        "gated-reward",
+        "verification-discipline",
+        "measure-not-reason",
+        "process",
+        "context-keeper"
+      ],
+      "scope": "team",
+      "project": "Clark",
+      "source": {
+        "system": "context-keeper",
+        "ref": "con-015"
+      },
+      "created_by": "jonny-desktop",
+      "created_at": "2026-07-10T17:53:22.258199+00:00",
+      "updated_at": "2026-07-10T17:54:35.966017+00:00",
+      "status": "active",
+      "trust": {
+        "recalls": 3,
+        "endorsements": [],
+        "projects": [
+          "Clark"
+        ]
+      }
+    },
+    {
+      "id": "k-11248a8d",
+      "type": "memory",
+      "kind": "constraint",
+      "content": "Before proposing any reward-weight or env-mechanic change to fix a behavior failure, run a measurement probe against the current foundation that quantifies the suspected root cause. The probe must produce numbers, not reasoning. Only after the data EXCLUDES simpler explanations (reward gradient already correct, env mechanic already firing, etc.) may a curriculum or training change be proposed. This rule extends con-015 from gate-frequency measurement to root-cause measurement generally.",
+      "why": "In a single session today, four sequential rounds of \"the obvious problem is X, let's change X and retrain\" would have burned 4 \u00c3\u2014 ~12h foundation retrains chasing the wrong levers. Probes invalidated all four before any retrain cost was paid. The pattern is general: under time pressure, reasoning leans toward the most-recently-discussed mechanism; only data exposes which mechanism is actually firing on the failure mode in question. The cost of writing a probe is ~30 minutes; the cost of an unwarranted retrain is half a day plus the attribution chaos of changing two things at once.",
+      "tags": [
+        "audit-discipline",
+        "verification",
+        "probe-first",
+        "training-cost-control",
+        "context-keeper"
+      ],
+      "scope": "team",
+      "project": "Clark",
+      "source": {
+        "system": "context-keeper",
+        "ref": "con-016"
+      },
+      "created_by": "jonny-desktop",
+      "created_at": "2026-07-10T17:53:22.258199+00:00",
+      "updated_at": "2026-07-10T17:54:35.966017+00:00",
+      "status": "active",
+      "trust": {
+        "recalls": 3,
+        "endorsements": [],
+        "projects": [
+          "Clark"
+        ]
+      }
+    },
+    {
+      "id": "k-1aaf64ed",
+      "type": "memory",
+      "kind": "constraint",
+      "content": "When auditing what's preventing higher grade rates, treat OT use as a binary disqualifier \u00e2\u20ac\u201d measure A-rate stratified by `ot_hours == 0` separately from days that used any OT. The env's grading collapses A\u00e2\u2020\u2019B (or lower) on any OT >0, regardless of completion. Trying to optimize \"A-rate\" without isolating this gate misattributes the bottleneck.",
+      "why": "The v2.5 audit revealed: among 227 perfect-ship days (100% orders shipped), the A-rate was 69% for `ot_hours==0` days and 0% for any `ot_hours > 0`. This made \"what's preventing A-rate gains\" a question about preventing OT use, which traced back to restock-collapse \u00e2\u2020\u2019 5%-picking-speed \u00e2\u2020\u2019 OT cascade. Mis-attributing this would have sent v2.6 design in the wrong direction (e.g., trying to push more pick/pack allocation when the actual fix is preventing the restock cliff).",
+      "tags": [
+        "grading",
+        "audit-discipline",
+        "ot-mechanics",
+        "v2.6-design-input",
+        "context-keeper"
+      ],
+      "scope": "team",
+      "project": "Clark",
+      "source": {
+        "system": "context-keeper",
+        "ref": "con-017"
+      },
+      "created_by": "jonny-desktop",
+      "created_at": "2026-07-10T17:53:22.258199+00:00",
+      "updated_at": "2026-07-10T17:54:35.966017+00:00",
+      "status": "active",
+      "trust": {
+        "recalls": 3,
+        "endorsements": [],
+        "projects": [
+          "Clark"
+        ]
+      }
+    }
+  ]
 }
