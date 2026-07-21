@@ -46,3 +46,4 @@ proflog_*.txt
 
 # Operator scratch scripts/logs (intentionally untracked)
 tmp_*
+.cambium/
