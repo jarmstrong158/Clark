@@ -10,8 +10,9 @@ from pathlib import Path
 
 import pytest
 
-pytest.importorskip("fastapi")
-
+# No importorskip: fastapi is a hard test dependency (the `dev` extra
+# pulls in `clark[serve]`). A missing dep must fail loudly here, not
+# quietly delete the serve layer's coverage. See tests/test_optional_deps.py.
 from fastapi.testclient import TestClient
 
 from clark.agent.ppo import ClarkAgent
