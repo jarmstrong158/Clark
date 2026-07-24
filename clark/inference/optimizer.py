@@ -87,7 +87,8 @@ def plan_day(episode, rules, mean_oph):
     try:
         from ortools.sat.python import cp_model
     except ImportError as e:  # pragma: no cover
-        raise ImportError("CP-SAT bound needs ortools: pip install ortools") from e
+        raise ImportError(
+            'CP-SAT bound needs ortools: pip install -e ".[optimizer]"') from e
 
     D = int(episode.total_orders)
     if D <= 0:

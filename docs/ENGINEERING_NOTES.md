@@ -167,7 +167,7 @@ built the baseline to win, not to lose. (See
 To check whether Clark's A-rate (OT-free days) was near optimal, I built a
 CP-SAT planner (`clark/inference/optimizer.py`) — perfect foresight, optimal
 allocation, an optimistic relaxation that should *upper-bound* any online
-policy. Getting it faithful was a tour of the sim's real mechanics, each
+policy. (The solver is an optional extra: `pip install -e ".[optimizer]"`.) Getting it faithful was a tour of the sim's real mechanics, each
 revealed by the model contradicting ground truth:
 
 - **0% feasible (v1):** I gated worker presence on `shift_start/shift_end`.
