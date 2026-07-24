@@ -6,7 +6,9 @@ dist/
 build/
 
 # Virtualenvs
-.venv/
+# Glob, not just `.venv/` — a 736MB `.venv-ci/` (a clean-install CI mirror)
+# sat untracked and unignored because the bare `.venv/` rule missed it.
+.venv*/
 venv/
 
 # Secrets

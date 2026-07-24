@@ -5,11 +5,17 @@ name: CI
 # 5-tuple-vs-4-unpack bug (which shipped to master because nothing enforced
 # the tests) fails in CI instead of in someone's `clark plan`.
 
+# Keep this gate in sync with the default branch. It used to read `master`,
+# which was correct until the default branch was renamed to `main` — at which
+# point the workflow simply stopped triggering, with no error anywhere. Last
+# run was 2026-06-07 (on `master`); every commit after the rename landed with
+# no CI at all. A rename silently disabling CI is the same "green light that
+# checks nothing" the comment above warns about.
 on:
   push:
-    branches: [master]
+    branches: [main]
   pull_request:
-    branches: [master]
+    branches: [main]
 
 jobs:
   test:

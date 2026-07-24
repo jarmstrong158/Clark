@@ -7,10 +7,9 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-import pytest
-
-pytest.importorskip("ortools")
-
+# No importorskip: ortools is a hard test dependency (the `dev` extra
+# pulls in `clark[optimizer]`). A missing dep must fail loudly here, not
+# quietly delete the CP-SAT bound's coverage. See tests/test_optional_deps.py.
 from clark.inference.optimizer import plan_day
 
 

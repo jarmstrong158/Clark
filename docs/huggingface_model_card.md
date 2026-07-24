@@ -1,7 +1,7 @@
 ---
 license: other
 license_name: polyform-noncommercial-1.0.0
-license_link: https://github.com/jarmstrong158/Clark/blob/master/LICENSE
+license_link: https://github.com/jarmstrong158/Clark/blob/main/LICENSE
 tags:
   - reinforcement-learning
   - ppo
@@ -53,7 +53,7 @@ Validated on the predecessor "[Jack](https://github.com/jarmstrong158/Jack)" sin
 | F-grade days | 15.0% | 4.2% |
 | Per-facility training | none | ~50 episodes (~0.2 sim years) vs Jack's ~9.4 |
 
-v2.11 additionally makes the per-worker schedule realistic — task switching drops from ~29/worker/day (a flip every ~10 min) to ~14 (every ~38 min) via a structural minimum-dwell mask, with grades held (A+B ~90%, 100% completion on the validation facility). Full methodology, the honest F-rate read, and the v2.5→v2.11 iteration log are in the [repo README](https://github.com/jarmstrong158/Clark#readme) and [CHANGELOG](https://github.com/jarmstrong158/Clark/blob/master/CHANGELOG.md).
+v2.11 additionally makes the per-worker schedule realistic — task switching drops from ~29/worker/day (a flip every ~10 min) to ~14 (every ~38 min) via a structural minimum-dwell mask, with grades held (A+B ~90%, 100% completion on the validation facility). Full methodology, the honest F-rate read, and the v2.5→v2.11 iteration log are in the [repo README](https://github.com/jarmstrong158/Clark#readme) and [CHANGELOG](https://github.com/jarmstrong158/Clark/blob/main/CHANGELOG.md).
 
 ### Held-out generalization
 
@@ -73,7 +73,7 @@ Clark is benchmarked against a deliberately *strong* rule-based **heuristic sche
 
 A well-engineered heuristic **ties Clark on throughput** (A+B, completion). Clark's edge is specific: it finishes **without overtime ~33 pp more often** (less paid OT), has **~3× fewer catastrophic days**, and generalizes across facilities with **zero per-site tuning** (the heuristic's constants are hand-fit to one distribution). A separate CP-SAT (constraint-programming) bound confirms throughput is never the binding constraint — the difference is in balancing the *soft* quality objectives.
 
-Is an 18M-param model a heavy hammer for a problem a heuristic ties on the headline? Yes — and a deliberate one. The tie is on *aggregate pass/fail*; the heuristic buys it by spending overtime and by running on hand-fit per-facility constants. Clark hits the same pass rate *without* the overtime, blows up ~3× less, and ports to unseen facilities with no re-tuning. For one well-understood site, use the heuristic. The foundation model earns its weight when you need lower operating cost + higher reliability + portability across many sites at once — the axes the headline hides. Write-up: [ENGINEERING_NOTES §9–§10](https://github.com/jarmstrong158/Clark/blob/master/docs/ENGINEERING_NOTES.md).
+Is an 18M-param model a heavy hammer for a problem a heuristic ties on the headline? Yes — and a deliberate one. The tie is on *aggregate pass/fail*; the heuristic buys it by spending overtime and by running on hand-fit per-facility constants. Clark hits the same pass rate *without* the overtime, blows up ~3× less, and ports to unseen facilities with no re-tuning. For one well-understood site, use the heuristic. The foundation model earns its weight when you need lower operating cost + higher reliability + portability across many sites at once — the axes the headline hides. Write-up: [ENGINEERING_NOTES §9–§10](https://github.com/jarmstrong158/Clark/blob/main/docs/ENGINEERING_NOTES.md).
 
 ## Limitations
 
@@ -83,7 +83,7 @@ Is an 18M-param model a heavy hammer for a problem a heuristic ties on the headl
 
 ## License
 
-Released under **[PolyForm Noncommercial 1.0.0](https://github.com/jarmstrong158/Clark/blob/master/LICENSE)** — the same license as the source. Free to download, run, study, evaluate, and fine-tune for any **noncommercial** purpose (research, personal, educational, journalism). Running Clark in production for a for-profit operation, or selling a product/service built on it, requires a separate commercial agreement — open a `commercial-access` issue on the [GitHub repo](https://github.com/jarmstrong158/Clark).
+Released under **[PolyForm Noncommercial 1.0.0](https://github.com/jarmstrong158/Clark/blob/main/LICENSE)** — the same license as the source. Free to download, run, study, evaluate, and fine-tune for any **noncommercial** purpose (research, personal, educational, journalism). Running Clark in production for a for-profit operation, or selling a product/service built on it, requires a separate commercial agreement — open a `commercial-access` issue on the [GitHub repo](https://github.com/jarmstrong158/Clark).
 
 ## Citation
 

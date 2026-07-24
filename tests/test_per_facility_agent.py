@@ -21,9 +21,9 @@ from pathlib import Path
 
 import pytest
 
-pytest.importorskip("fastapi")
-pytest.importorskip("httpx")
-
+# No importorskip: fastapi/httpx are hard test dependencies (the `dev`
+# extra pulls in `clark[serve]`). A missing dep must fail loudly here, not
+# quietly delete the serve layer's coverage. See tests/test_optional_deps.py.
 from fastapi.testclient import TestClient
 
 from clark.agent.ppo import ClarkAgent
