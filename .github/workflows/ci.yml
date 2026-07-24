@@ -5,11 +5,15 @@ name: CI
 # 5-tuple-vs-4-unpack bug (which shipped to master because nothing enforced
 # the tests) fails in CI instead of in someone's `clark plan`.
 
+# The gate below said `master` from day one, but this repo's default branch
+# has always been `main` and no `master` ref has ever existed — so this
+# workflow never triggered a single time. A CI that cannot fire is exactly
+# the "green light that checks nothing" the comment above warns about.
 on:
   push:
-    branches: [master]
+    branches: [main]
   pull_request:
-    branches: [master]
+    branches: [main]
 
 jobs:
   test:
