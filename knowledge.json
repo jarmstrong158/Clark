@@ -359,7 +359,7 @@
       "type": "memory",
       "kind": "decision",
       "content": "Pivot from observation-feature interventions (v2.1 dvc projection, v2.2 queue_pressure) to structural action-mask interventions (v2.4 → v2.5 → v2.6) after both obs attempts FAILED head-to-head A/B vs v2 baseline.",
-      "why": "Structural masking removes invalid actions from the policy's action space entirely (set to âˆ’1e9 logits before softmax), so the policy cannot subvert the constraint regardless of how its weights are pointed. Compared to gradient-pressure interventions: (a) takes effect from tick 1 of episode 1, no PPO updates needed; (b) cannot be over-ridden by clip-capped policy update; (c) doesn't depend on the value head learning a new reward landscape; (d) is testable in isolation with the existing test framework. The pretrain weights stay loadable since obs_feat_dim and arch are unchanged.",
+      "why": "Structural masking removes invalid actions from the policy's action space entirely (set to −1e9 logits before softmax), so the policy cannot subvert the constraint regardless of how its weights are pointed. Compared to gradient-pressure interventions: (a) takes effect from tick 1 of episode 1, no PPO updates needed; (b) cannot be over-ridden by clip-capped policy update; (c) doesn't depend on the value head learning a new reward landscape; (d) is testable in isolation with the existing test framework. The pretrain weights stay loadable since obs_feat_dim and arch are unchanged.",
       "tags": [
         "action-mask",
         "filler-vs-orders",
